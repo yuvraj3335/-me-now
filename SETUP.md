@@ -47,9 +47,13 @@ claude mcp add --transport http slack https://mcp.slack.com/mcp && claude mcp lo
 
 Wake picks the token up on its next poll — nothing to restart.
 
-> Use `claude mcp add --transport http`, **not** a claude.ai connector. Connectors
-> are proxied through an Anthropic session URL that dies with the session; a
-> directly-added HTTP server stores a real Slack bearer token that Wake can use.
+> **This must be a directly-added HTTP server, not a claude.ai connector**, and
+> the distinction is easy to get wrong because both show up as "Connected" in
+> `claude mcp list`. Connector tokens live in your claude.ai account and are
+> never written to disk — all 23 `mcpOAuth` entries on this box have an empty
+> `accessToken` — so Wake has nothing to read. A directly-added server does its
+> OAuth locally and stores a real Slack bearer token. Once added, leave it: if
+> you remove the direct entry and keep only the connector, Wake goes dark again.
 
 **The durable way — your own Slack app.** Slack publishes no dynamic client
 registration, so Wake needs an app's credentials. Create one at
@@ -70,8 +74,10 @@ on every poll.
 
 ## Sentry
 
-Sentry's MCP supports dynamic client registration, so Settings → Sentry →
-Connect is all it takes. Or the same CLI route:
+Sentry's MCP supports dynamic client registration, so **Settings → Sentry →
+Connect is all it takes** — Wake registers itself, no app and no CLI. Verified:
+it self-registered as `client_id: _aYRoHwcPeWDVo-v` with a correct PKCE
+authorize URL. Or the same CLI route:
 
 ```bash
 claude mcp add --transport http sentry https://mcp.sentry.dev/mcp && claude mcp login sentry

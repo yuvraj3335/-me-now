@@ -6,59 +6,72 @@ gospel — this is where I disagree in writing.
 
 ---
 
-## 1. The brief's first premise is wrong: there is no Slack MCP on the DevBox
+## 1. Slack on the DevBox — I was wrong, then right for a different reason
 
-> "Slack — the Slack MCP is already configured on the DevBox. Use it."
-
-It is not. `claude mcp list` on `yuvraj-devbox` returns:
+**Corrected 2026-08-30.** My first reading said there was no Slack MCP on the
+DevBox. That was true when I checked and stale within the hour: Slack, Sentry and
+Notion were all connected while I was building. `claude mcp list` there now shows:
 
 ```
-claude.ai Gmail           https://gmailmcp.googleapis.com/mcp/v1     ✔ Connected
-claude.ai Google Drive    https://drivemcp.googleapis.com/mcp/v1     ✔ Connected
-claude.ai Google Calendar https://calendarmcp.googleapis.com/mcp/v1  ✔ Connected
-plugin:figma:figma        https://mcp.figma.com/mcp                  ! Needs auth
-plugin:woz:code           (stdio)                                    ✔ Connected
-playwright                (stdio)                                    ✔ Connected
+claude.ai Sentry   https://mcp.sentry.dev/mcp                 ✔ Connected
+claude.ai Notion   https://mcp.notion.com/mcp                 ✔ Connected
+claude.ai Slack    https://mcp.slack.com/mcp                  ✔ Connected
+claude.ai Gmail    https://gmailmcp.googleapis.com/mcp/v1     ✔ Connected
 ```
 
-No Slack. What *does* exist is a half-finished OAuth record in
-`~/.claude/.credentials.json` under the key `slack|38801a7d845718b3`, pointing at
-`https://mcp.slack.com/mcp` with an **empty** access token — someone started
-`claude mcp login slack` on this box and never finished it. The Slack MCP you're
-thinking of is configured in your **claude.ai account** (it shows up in Claude
-Code sessions on your laptop), not on the DevBox.
-
-This mattered enough to change the architecture, so it is decision #2.
+So Slack *is* on the box. Wake still cannot use it, and the reason is not the one
+I originally gave — see the next decision.
 
 ## 2. Wake is a real MCP client, not a passenger on Claude Code's connections
 
-The tempting shortcut was to have Wake piggyback on Claude Code's existing MCP
-connections on the box. I rejected it. Look at how Claude actually reaches Gmail:
+**The reasoning here was wrong the first time and is worth showing corrected,
+because the wrong version was more convenient.**
+
+I originally argued that Claude reaches these connectors through a per-session
+Anthropic proxy that "dies with the session":
 
 ```
-https://api.anthropic.com/v2/ccr-sessions/cse_01PpFjQczsTCKHmG9h8V8Fuc/mcp
+https://api.anthropic.com/v2/ccr-sessions/cse_01PpFj…/mcp
   ?mcp_server_id=…&mcp_url=https%3A%2F%2Fgmailmcp.googleapis.com%2Fmcp%2Fv1
 ```
 
-That is an **Anthropic session proxy**, scoped to a Claude Code session id. It is
-not a stable integration point: it dies with the session, it is undocumented, and
-it would make a 24/7 website depend on a chat client's login state. A command
-center that goes dark because a CLI session expired is not a command center.
+That claim is false. I tested it: POSTing `tools/list` to that URL with the
+account's OAuth token returns **200 and the real tool list**, for a session id
+that has long since ended. The session id in the path is not what gates access —
+the bearer token is.
+
+The conclusion survives on better evidence:
+
+1. **claude.ai connector tokens are never written to disk.** There are 23
+   `mcpOAuth` entries in `~/.claude/.credentials.json` and **every single one has
+   an empty `accessToken`** — Gmail, Drive, Calendar, figma, all of them. These
+   connections are held in the claude.ai account and materialised per session, so
+   Wake's credential bridge has nothing to read.
+2. **The proxy is per-connector and validates it.** Swapping `mcp_url` to Slack
+   while keeping Gmail's ids returns `403 MCP server not allowed`; dropping the
+   ids returns `400 toolbox_mcp_server_id query parameter is required`. Those ids
+   come from a connector registry I could not find on any endpoint
+   (`/v2/mcp_servers`, `/api/mcp/servers`, … all 404) or in any local cache —
+   `.claude.json` records only the connector's *name* in
+   `claudeAiMcpEverConnected`.
+3. Even if I could enumerate them, this is an **undocumented internal endpoint**.
+   A personal command center whose only data path is a reverse-engineered API is
+   one silent deploy away from showing an empty screen at 7am.
 
 So Wake speaks MCP itself — `initialize` / `tools/list` / `tools/call` over
 Streamable HTTP and stdio (`src/server/mcp/client.ts`), with its own OAuth 2.1 +
-PKCE implementation (`src/server/mcp/oauth.ts`), including RFC 7591 dynamic client
-registration where a server offers it.
+PKCE (`src/server/mcp/oauth.ts`) including RFC 7591 dynamic client registration
+where a server offers it. Verified live: Wake self-registered with Sentry
+(`client_id: _aYRoHwcPeWDVo-v`) and produced a correct S256 authorize URL with no
+setup at all.
 
 Credentials resolve in a chain, best-available-wins (`src/server/mcp/creds.ts`):
 
 1. Wake's own OAuth tokens (SQLite, auto-refreshed) — the durable path
-2. Claude Code's `~/.claude/.credentials.json` `mcpOAuth` entry — the bridge, so
-   `claude mcp login slack` on the box is enough to light Slack up with no Slack
-   app of your own
+2. Claude Code's `~/.claude/.credentials.json` `mcpOAuth` entry — which works
+   only for a server added **directly** (`claude mcp add --transport http`), not
+   for a claude.ai connector, per the evidence above
 3. A static token from the environment — the escape hatch
-
-You get whichever is available without changing any code.
 
 ## 3. No Claude model anywhere in the data path — enforced, not just intended
 
