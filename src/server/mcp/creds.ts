@@ -8,7 +8,7 @@
  *   3. A static token from the environment — the escape hatch
  */
 import { readFileSync } from 'node:fs'
-import { CLAUDE_CREDENTIALS, MCP_SERVERS, STATIC_TOKENS } from '../env'
+import { claudeCredentialsPath, MCP_SERVERS, STATIC_TOKENS } from '../env'
 import { discover, getStored, putStored, refresh } from './oauth'
 
 export type CredSource = 'wake-oauth' | 'claude-bridge' | 'env' | 'none'
@@ -30,7 +30,7 @@ type ClaudeMcpEntry = {
 export function claudeBridgeToken(server: string): string | null {
   let raw: string
   try {
-    raw = readFileSync(CLAUDE_CREDENTIALS, 'utf8')
+    raw = readFileSync(claudeCredentialsPath(), 'utf8')
   } catch {
     return null
   }

@@ -16,7 +16,16 @@ export const PUBLIC_URL = str('WAKE_PUBLIC_URL', `http://${HOST}:${PORT}`).repla
 /** Where Claude Code keeps its own MCP OAuth tokens — credential-chain step 2. */
 export const CLAUDE_HOME = str('WAKE_CLAUDE_HOME', `${homedir()}/.claude`)
 export const CLAUDE_PROJECTS_DIR = `${CLAUDE_HOME}/projects`
-export const CLAUDE_CREDENTIALS = `${CLAUDE_HOME}/.credentials.json`
+
+/**
+ * Resolved per call rather than captured at import. The file is read on a timer
+ * for the lifetime of the process, so where it lives is an I/O concern, not a
+ * startup constant — and reading it late means a token that appears after boot
+ * (someone runs `claude mcp login` while Wake is up) is picked up without a
+ * restart.
+ */
+export const claudeCredentialsPath = () =>
+  `${str('WAKE_CLAUDE_HOME', `${homedir()}/.claude`)}/.credentials.json`
 
 /** Who I am, so "is this addressed to me?" is answerable without a model. */
 export const ME = {
