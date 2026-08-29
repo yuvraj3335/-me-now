@@ -190,11 +190,30 @@ export function TaskSheet({
                   background: `color-mix(in oklab, ${n.color ?? '#e9a23b'} 12%, var(--color-ink-800))`,
                   boxShadow: `inset 2px 0 0 ${n.color ?? '#e9a23b'}`,
                 }}>
-                <span className="whitespace-pre-wrap text-fg-dim">{n.body}</span>
+                {/* Editable in place: click the text, type, blur to save. A note
+                    you cannot correct is a note you stop trusting. */}
+                <div
+                  contentEditable suppressContentEditableWarning
+                  className="whitespace-pre-wrap text-fg-dim outline-none pr-5"
+                  onBlur={async e => {
+                    const body = e.currentTarget.textContent?.trim() ?? ''
+                    if (!body || body === n.body) {
+                      e.currentTarget.textContent = n.body
+                      return
+                    }
+                    await actions.updateNote(n.id, { body })
+                    await reload()
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur() }
+                    if (e.key === 'Escape') { e.currentTarget.textContent = n.body; e.currentTarget.blur() }
+                  }}
+                >{n.body}</div>
                 <button
                   onClick={async () => { await actions.deleteNote(n.id); await reload() }}
                   className="absolute top-1.5 right-1.5 p-1 text-fg-mute opacity-0
-                             group-hover:opacity-100 hover:text-bad transition-opacity"
+                             group-hover:opacity-100 focus:opacity-100 hover:text-bad transition-opacity"
+                  aria-label="Delete note"
                 >
                   <Trash2 size={12} />
                 </button>

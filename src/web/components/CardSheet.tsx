@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
-  ArrowUpRight, Check, Clock, Copy, ListPlus, MessageSquare, Pin, PinOff, UserMinus,
+  ArrowUpRight, Check, Clock, Copy, Inbox, ListPlus, MessageSquare, Pin, PinOff,
+  SquareCheck, UserMinus,
 } from 'lucide-react'
 import type { Card as CardT } from '../lib/types'
 import { actions, reload } from '../lib/api'
@@ -122,6 +123,23 @@ export function CardSheet({
             )}
           </div>
         )}
+
+        <div className="mt-5">
+          <SectionLabel>Move to</SectionLabel>
+          <div className="flex flex-wrap gap-1.5">
+            <Button variant="solid" onClick={() => run(() => actions.move(card.group_key, 'now'))}>
+              <Inbox size={14} /> Now
+            </Button>
+            <Button variant="solid" onClick={() => run(() => actions.move(card.group_key, 'open'))}>
+              <SquareCheck size={14} /> Open
+            </Button>
+            {card.state?.pile_override && (
+              <Button variant="ghost" onClick={() => run(() => actions.move(card.group_key, null))}>
+                Let Wake decide
+              </Button>
+            )}
+          </div>
+        </div>
 
         <div className="mt-5">
           <SectionLabel>Snooze until</SectionLabel>
