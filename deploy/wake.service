@@ -1,0 +1,39 @@
+[Unit]
+Description=Wake — personal command center (Bun on 127.0.0.1:8585)
+Documentation=file:///home/yuvraj/work/wake/deploy/DEPLOY.md
+# No After=network-online.target on purpose: this is a *user* unit and cannot
+# order against a system target, and it binds loopback only. Its outbound calls
+# (Slack, GitHub, Gmail, Sentry) happen on the poll timer, long after boot.
+#
+# A bad .env should be a refusal to boot rather than a crash loop: five attempts
+# in five minutes and systemd stops, so `systemctl --user status wake` shows the
+# real error instead of the tenth copy of it.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/work/wake
+# Bun reads ./.env from WorkingDirectory itself and strips inline `# comments`,
+# which systemd's own EnvironmentFile= does not — that difference silently turns
+# `TOKEN=abc # note` into the literal token "abc # note". Same reasoning as the
+# truto-monitoring unit on this box.
+#
+# Absolute path to bun: this box has it at ~/.bun/bin, and a missing login-shell
+# PATH would otherwise leave the unit dead on boot.
+ExecStart=/home/yuvraj/.bun/bin/bun src/server/index.ts
+Restart=on-failure
+RestartSec=5s
+
+# One line per request plus the poll summary land here:
+#   journalctl --user -u wake -f
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+# Nothing further on purpose. A user unit is already unprivileged, and
+# ProtectSystem= / PrivateTmp= need unprivileged user namespaces this box does
+# not guarantee — a sandbox that stops the unit from starting protects nothing.
+
+[Install]
+WantedBy=default.target
