@@ -128,3 +128,12 @@ describe('piles', () => {
     expect(pile(c, { not_mine: 1, pile_override: 'now' })).toBe('hidden')
   })
 })
+
+describe('titles built from raw prompts', () => {
+  // Regression: real session titles were cut mid-word and began with list
+  // markers, e.g. "- PR This is the PR" and "…+ \"retryable\" — permanent invalid_".
+  test('a prompt pasting a PR URL yields that PR as a hard reference', () => {
+    const prompt = 'Riya can you please approve - * Backend: github.com/trutohq/truto/pull/2008 * Frontend next'
+    expect(extractRefs(prompt)).toContainEqual({ t: 'gh', v: 'trutohq/truto#2008' })
+  })
+})

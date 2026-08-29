@@ -8,7 +8,7 @@
 import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
-import { subjectRef } from '../dedup'
+import { extractRefs, subjectRef } from '../dedup'
 import type { RawCard, SourceAdapter } from './types'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
@@ -103,6 +103,25 @@ function cleanPrompt(s: string | null): string | null {
   return cleaned.length > 2 ? cleaned : null
 }
 
+/**
+ * Turn a raw prompt into a title. A blunt slice(0, 80) produced things like
+ * "…HTTP 500 + \"retryable\" — permanent invalid_" — cut mid-word, and leading
+ * list markers left titles starting with "- ". Cut on a word boundary instead,
+ * and prefer the first sentence when there is a short one.
+ */
+function titleFromPrompt(prompt: string, limit = 72): string {
+  let t = prompt.replace(/^[\s*\-–—•>#.]+/, '').trim()
+
+  const firstSentence = t.match(/^(.{16,}?[.!?])(\s|$)/)?.[1]
+  if (firstSentence && firstSentence.length <= limit) return firstSentence.replace(/[.!?]$/, '')
+
+  if (t.length <= limit) return t
+  const cut = t.slice(0, limit)
+  const lastSpace = cut.lastIndexOf(' ')
+  // Only honour the word boundary if it is not absurdly early.
+  return (lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
+}
+
 export const claudeSessions: SourceAdapter = {
   name: 'claude',
   label: 'Claude Code',
@@ -148,7 +167,7 @@ export const claudeSessions: SourceAdapter = {
       const cwd = s.cwd ?? f.project.replace(/^-/, '/').replace(/-/g, '/')
       const projectName = basename(cwd) || f.project
       const prompt = cleanPrompt(s.lastPrompt)
-      const title = s.title ?? prompt?.slice(0, 80) ?? `Session in ${projectName}`
+      const title = s.title ?? (prompt ? titleFromPrompt(prompt) : null) ?? `Session in ${projectName}`
 
       const ageDays = (Date.now() - s.lastTs) / 864e5
       cards.push({
@@ -172,6 +191,11 @@ export const claudeSessions: SourceAdapter = {
             ? [{ t: 'gh' as const, v: `${s.pr.repo}#${s.pr.number}`.toLowerCase() }]
             : []),
           ...(subjectRef(title) ? [subjectRef(title)!] : []),
+          // Prompts routinely paste the PR they are about
+          // ("approve — Backend: github.com/trutohq/truto/pull/2008"), which is
+          // a hard reference to that PR whether or not the session recorded a
+          // pr-link.
+          ...extractRefs(`${title}\n${prompt ?? ''}`),
         ],
         meta: {
           project: projectName,
