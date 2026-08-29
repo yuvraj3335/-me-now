@@ -8,6 +8,7 @@
 import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
+import { subjectRef } from '../dedup'
 import type { RawCard, SourceAdapter } from './types'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
@@ -162,10 +163,16 @@ export const claudeSessions: SourceAdapter = {
         url: s.pr?.url ?? `wake:claude/${s.id}`,
         ts: s.lastTs,
         pile: 'open',
-        // A session that opened a PR is the same thing as that PR's card.
-        refs: s.pr?.repo && s.pr.number
-          ? [{ t: 'gh', v: `${s.pr.repo}#${s.pr.number}`.toLowerCase() }]
-          : [],
+        // A session that opened a PR is the same thing as that PR's card. The
+        // title is included as a second route to the same merge, because only
+        // some sessions record a pr-link — without it, two sessions on one PR
+        // showed up as two cards.
+        refs: [
+          ...(s.pr?.repo && s.pr.number
+            ? [{ t: 'gh' as const, v: `${s.pr.repo}#${s.pr.number}`.toLowerCase() }]
+            : []),
+          ...(subjectRef(title) ? [subjectRef(title)!] : []),
+        ],
         meta: {
           project: projectName,
           cwd,

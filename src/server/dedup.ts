@@ -27,6 +27,22 @@ export function normalizeSubject(s: string): string {
     .toLowerCase()
 }
 
+/**
+ * A title is the weakest signal Wake will merge on, so it is fenced in: only
+ * distinctive titles qualify. Without the guard, generic fallbacks ("Session in
+ * truto") would collapse unrelated work into one card — the exact failure mode
+ * that hides something real.
+ */
+const GENERIC_TITLE = /^(session in |untitled|new session|no subject|\(no subject\))/i
+
+export function subjectRef(title: string): Ref | null {
+  const norm = normalizeSubject(title)
+  if (norm.length < 24) return null          // too short to be distinctive
+  if (GENERIC_TITLE.test(norm)) return null
+  if (!/\s/.test(norm)) return null          // a single token is an id, not a subject
+  return { t: 'subject', v: norm }
+}
+
 /** Pull every hard reference out of arbitrary text (body, title, permalink). */
 export function extractRefs(text: string, contextRepo?: string): Ref[] {
   const out: Ref[] = []
@@ -38,7 +54,7 @@ export function extractRefs(text: string, contextRepo?: string): Ref[] {
 
   for (const m of text.matchAll(GH_URL)) push({ t: 'gh', v: `${m[1]}/${m[2]}#${m[3]}`.toLowerCase() })
   for (const m of text.matchAll(GH_SHORT)) push({ t: 'gh', v: `${m[1]}#${m[2]}`.toLowerCase() })
-  for (const m of text.matchAll(SENTRY_URL)) push({ t: 'sentry', v: m[1] })
+  for (const m of text.matchAll(SENTRY_URL)) if (m[1]) push({ t: 'sentry', v: m[1] })
   for (const m of text.matchAll(SLACK_ARCHIVE)) push({ t: 'slackthread', v: `${m[1]}:${m[2]}.${m[3]}` })
 
   if (contextRepo) {

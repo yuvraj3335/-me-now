@@ -3,7 +3,7 @@
  * why this source has real data from the first boot.
  */
 import { ME, LOOKBACK_DAYS } from '../env'
-import { extractRefs } from '../dedup'
+import { extractRefs, subjectRef } from '../dedup'
 import type { RawCard, SourceAdapter } from './types'
 
 let cachedToken: { value: string | null; at: number } | null = null
@@ -123,6 +123,9 @@ export const github: SourceAdapter = {
           // email about this same PR collapse into one card.
           refs: [
             { t: 'gh', v: num },
+            // The title too: a Claude session opened for this PR copies the PR
+            // title, and that is what collapses the two into one card.
+            ...(subjectRef(it.title) ? [subjectRef(it.title)!] : []),
             ...extractRefs(`${it.title}\n${it.body ?? ''}`, repo),
           ],
           meta: {

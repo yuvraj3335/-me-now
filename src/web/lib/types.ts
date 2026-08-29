@@ -1,0 +1,103 @@
+export type SourceName = 'slack' | 'gmail' | 'github' | 'sentry' | 'claude'
+export type Pile = 'now' | 'open' | 'parked'
+
+export type CardSource = {
+  source: SourceName
+  kind: string
+  url: string
+  ts: number
+  title: string
+  actor?: string | null
+  account?: string | null
+  why: string
+  meta: Record<string, any>
+}
+
+export type Card = {
+  group_key: string
+  pile: Pile
+  title: string
+  why: string
+  actor?: string | null
+  excerpt?: string | null
+  url: string
+  kind: string
+  ts: number
+  first_seen_at: number
+  meta: Record<string, any>
+  sources: CardSource[]
+  state: {
+    acked_at: number | null
+    snoozed_until: number | null
+    notified_at: number | null
+    pinned: boolean
+    pile_override: string | null
+  } | null
+  tasks: Array<{ id: string; title: string; status: string }>
+}
+
+export type Note = {
+  id: string; task_id: string | null; goal_id: string | null
+  body: string; color: string | null; sort: number
+  created_at: number; updated_at: number
+}
+
+export type Task = {
+  id: string; title: string; detail: string | null
+  status: 'todo' | 'doing' | 'done'
+  goal_id: string | null; source_card_group: string | null
+  due_at: number | null; color: string | null; sort: number
+  created_at: number; updated_at: number
+  started_at: number | null; completed_at: number | null
+  notes: Note[]
+}
+
+export type Goal = {
+  id: string; title: string; detail: string | null; color: string | null
+  target_date: number | null; archived: number; sort: number
+  created_at: number; updated_at: number; completed_at: number | null
+}
+
+export type Reminder = {
+  id: string; target_kind: 'task' | 'goal' | 'card'; target_id: string
+  fire_at: number; label: string | null; repeat_rule: string | null
+  fired_at: number | null; dismissed_at: number | null; created_at: number
+}
+
+export type Notification = {
+  id: string; dedup_key: string; title: string; body: string | null
+  url: string | null; kind: string | null; created_at: number; read_at: number | null
+}
+
+export type State = {
+  now: Card[]; open: Card[]; parked: Card[]
+  tasks: Task[]; goals: Goal[]; reminders: Reminder[]
+  notifications: Notification[]
+  lastSync: Array<{ source: string; at: number; ok: number; count: number; error: string | null }>
+  serverTime: number
+}
+
+export type SourceStatus = {
+  name: SourceName; label: string; ok: boolean; detail: string; via?: string
+  oauthable: boolean; hasWakeToken: boolean; hasClaudeBridge: boolean
+  hasClientId: boolean; needsClientId: boolean
+}
+
+export type Analytics = {
+  days: number
+  throughput: Record<'done' | 'created' | 'appeared' | 'cleared', Array<{ day: string; value: number }>>
+  responseTime: {
+    count: number; p50: number; p90: number
+    daily: Array<{ day: string; value: number | null; n: number }>
+  }
+  pace: { thisWeek: number; lastWeek: number; delta: number }
+  rhythm: {
+    byHour: Array<{ hour: number; value: number }>
+    byWeekday: Array<{ weekday: number; value: number }>
+    streak: number; bestStreak: number
+  }
+  aging: Array<{ source: string; buckets: Record<string, number> }>
+  agingBuckets: string[]
+  goals: Array<{ id: string; title: string; color: string | null; target_date: number | null; total: number; done: number }>
+  totals: { openNow: number; doneAllTime: number; tasksOpen: number }
+}

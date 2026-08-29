@@ -1,0 +1,126 @@
+@import 'tailwindcss';
+
+/*
+  Wake's design language, in one place.
+
+  The brief ruled out the admin-dashboard look: no heavy borders, no boxes
+  around everything, no clutter. So the system is deliberately thin — a near
+  black ground, two levels of text, hairline separators, and exactly one accent
+  that is allowed to appear rarely. Space and type carry the hierarchy.
+*/
+@theme {
+  /* Ground. Very slightly warm, so it reads as ink rather than as a switched-off
+     screen; pure #000 makes the accent look neon and the type look harsh. */
+  --color-ink-950: #08080a;
+  --color-ink-900: #0a0a0c;
+  --color-ink-850: #0e0e11;
+  --color-ink-800: #131317;
+  --color-ink-700: #1b1b20;
+  --color-ink-600: #26262d;
+
+  /* Type. Three stops is enough; more becomes mush at small sizes. */
+  --color-fg:      #ededf0;
+  --color-fg-dim:  #8f8f99;
+  --color-fg-mute: #5c5c66;
+
+  /* The one accent — dawn amber. Used for the Now count, focus, and the primary
+     action, and essentially nowhere else. */
+  --color-accent:      #e9a23b;
+  --color-accent-soft: #3a2a12;
+
+  /* Source hues. Muted on purpose: they identify, they do not decorate. */
+  --color-src-slack:  #b58ee0;
+  --color-src-github: #8fa4c4;
+  --color-src-gmail:  #d98a86;
+  --color-src-sentry: #d4869f;
+  --color-src-claude: #d0a07a;
+
+  --color-ok:   #6bd39a;
+  --color-warn: #e9a23b;
+  --color-bad:  #e08282;
+
+  --font-sans: 'InterVariable', 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --radius-card: 14px;
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  :root { color-scheme: dark; }
+
+  html {
+    background: var(--color-ink-900);
+    /* Stop the iOS rubber-band from revealing white behind the app. */
+    overscroll-behavior-y: none;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ink-900);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    /* Tight tracking at display sizes is most of what makes type feel designed. */
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior-y: none;
+  }
+
+  /* Touch targets stay comfortable without drawing boxes around everything. */
+  button, a { -webkit-tap-highlight-color: transparent; }
+
+  ::selection { background: color-mix(in oklab, var(--color-accent) 30%, transparent); }
+
+  /* Focus is visible but quiet — a ring, not a glow. */
+  :focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  input, textarea, select, button { font: inherit; letter-spacing: inherit; }
+
+  /* Scrollbars: present, not loud. */
+  * { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-600); border-radius: 99px;
+    border: 3px solid transparent; background-clip: content-box;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* The single separator style used app-wide, instead of borders on cards. */
+  .hairline { border-bottom: 1px solid color-mix(in oklab, var(--color-fg) 7%, transparent); }
+
+  /* Respect the notch and the home indicator on iOS. */
+  .pad-top    { padding-top: max(env(safe-area-inset-top), 0px); }
+  .pad-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0px); }
+
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* A single warm wash behind the whole page, not behind one section. Painting
+     it on the hero drew a visible rounded rectangle wherever the gradient was
+     still coloured at the container's edge — precisely the box this design
+     avoids. Anchored to the viewport, it has no edge to reveal. */
+  .dawn-light {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(58% 34% at 18% 0%,
+        color-mix(in oklab, var(--color-accent) 7%, transparent),
+        transparent 70%);
+  }
+}
