@@ -65,9 +65,10 @@ export type Task = {
    * Provenance, frozen at creation.
    *
    * A copy, not a reference: `source_card_group` points at a `cards` row the
-   * poller marks gone when its source stops returning it, so a task's "from
-   * GitHub" used to disappear exactly when the pull request merged. Written
-   * once and never updated. `origin_meta` is the card's `meta` as stored JSON.
+   * poller marks gone when its source stops returning it, so a task's line
+   * naming where it came from used to disappear at exactly the moment the pull
+   * request merged. Written once and never updated. `origin_meta` is the card's
+   * `meta` as stored JSON.
    */
   origin_source: string | null
   origin_title: string | null

@@ -22,8 +22,9 @@
  * the eye lands on first.
  *
  * **A pile with zero rows is not rendered.** No heading, no count, no sentence.
- * `Now 0` plus `Nothing waiting` cost 109px of the fold to report a zero, and
- * three of them stacked cost 331px on a filtered phone.
+ * A titled chapter with a zero beside it and an apology under it cost 109px of
+ * the fold to report that there was nothing in it, and three of them stacked
+ * cost 331px of a filtered phone to say nothing at all.
  *
  * **The 2px row stripe is gone.** It was an 855px vertical bracket painting the
  * identical colour on every visible row — brighter than the rules it crossed,
