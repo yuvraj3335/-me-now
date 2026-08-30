@@ -7,7 +7,9 @@
  */
 import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename } from 'node:path'
-import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
+import {
+  CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR, LOOKBACK_DAYS,
+} from '../env'
 import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
 import { titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
@@ -155,6 +157,40 @@ function clip(s: string | null | undefined, max: number): string | undefined {
   return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
 }
 
+/* ------------------------- Wake's own transcripts -------------------------- */
+
+/**
+ * Claude Code files a transcript by the directory the run started in, with every
+ * separator flattened to a dash: `/home/me/work/app` becomes `-home-me-work-app`
+ * and `.claude-worktrees` becomes `-claude-worktrees`.
+ */
+const projectDirOf = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')
+
+/**
+ * The directories Wake's own Fetch collections run in.
+ *
+ * Fetch spawns `claude` and that run writes a transcript like any other, so
+ * without this the desk read Wake's own collections back as "you left this
+ * open" — one new card per connector per press, and the two that were live on
+ * the deployed board were Wake quoting its own Slack question.
+ *
+ * The test is the directory, not the prompt. Prompt text is rewritten;
+ * `FETCH_RUN_DIR` is where the process is started from, and a card cannot be
+ * made from a transcript this never lists.
+ */
+const RUN_CWDS = [FETCH_RUN_DIR, FETCH_LEGACY_RUN_DIR]
+const RUN_PROJECTS = new Set(RUN_CWDS.map(projectDirOf))
+
+/**
+ * Whether a transcript is one of Wake's own runs.
+ *
+ * Two ways of asking the same question, because they fail differently: the
+ * project directory is free (a filename), and the recorded `cwd` is
+ * authoritative (the transcript's own word for where it ran).
+ */
+export const isWakeRun = (o: { project?: string; cwd?: string | null }): boolean =>
+  (!!o.project && RUN_PROJECTS.has(o.project)) || (!!o.cwd && RUN_CWDS.includes(o.cwd))
+
 /* --------------------------- shared session scan -------------------------- */
 
 export type SessionFile = { path: string; id: string; project: string; mtime: number }
@@ -181,6 +217,11 @@ export function sessionFiles(windowDays: number): SessionFile[] {
   const files: SessionFile[] = []
 
   for (const p of projects) {
+    // Wake's own collections, before a single file is opened. Every caller of
+    // this function — the card pile, the launcher's picker, the excerpt lookup —
+    // gets the exclusion, because none of them wants to offer you a transcript
+    // of Wake asking Slack a question on your behalf.
+    if (isWakeRun({ project: p })) continue
     let entries: string[]
     try { entries = readdirSync(`${CLAUDE_PROJECTS_DIR}/${p}`) } catch { continue }
     for (const f of entries) {
@@ -201,6 +242,13 @@ export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_D
   return sessionFiles(windowDays)
     .slice(0, limit)
     .map(file => ({ file, info: parseSession(file.path, file.id, file.project, file.mtime) }))
+    // The second half of the same exclusion, against the transcript's own record
+    // of where it ran rather than against the name of the directory it is filed
+    // under. The filename encoding is Claude Code's; `cwd` is the fact. It runs
+    // after the cap rather than before it because `sessionFiles` has already
+    // dropped these by path — parsing every transcript on the machine to keep
+    // the cap exact would undo what the cap is for.
+    .filter(({ info }) => !isWakeRun({ cwd: info.cwd }))
 }
 
 /** Session metadata in the shape the launcher's picker and tools want. */

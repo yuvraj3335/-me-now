@@ -108,6 +108,33 @@ export const IS_DEV = str('NODE_ENV') !== 'production'
  */
 export const CLAUDE_BIN = str('WAKE_CLAUDE_BIN')
 
+/**
+ * The directory one collection runs in, and the reason it is not `~`.
+ *
+ * Claude Code writes a transcript for every run it makes, filed under
+ * `~/.claude/projects/` by the directory the run started in. Fetch started in
+ * the home directory, so its own collections landed in the bucket a person gets
+ * when they open a session from `~` — and the Claude Code source read them
+ * straight back onto the desk as work left open. Two of nine session cards on a
+ * 7am desk were Wake quoting itself, and the count grew by one per connector per
+ * press.
+ *
+ * A directory of Wake's own makes that structural: the source skips this bucket
+ * by path, so a collection cannot become a card however the prompt is worded
+ * later. Matching the prompt text would rot on the next rewrite of it.
+ */
+export const FETCH_RUN_DIR = str('WAKE_FETCH_RUN_DIR', `${DATA_DIR}/fetch-runs`)
+
+/**
+ * Where Fetch ran before it had a directory of its own.
+ *
+ * Kept because the transcripts it wrote are still on disk and still readable,
+ * and a swept card that reappears three minutes later is not swept. Every
+ * transcript in this bucket on the deployed box was one of Wake's own
+ * collections; work that is actually yours happens in a repository.
+ */
+export const FETCH_LEGACY_RUN_DIR = homedir()
+
 /** Everything that bounds one Fetch. None of it is a hope; all of it is a flag. */
 export const FETCH_MODEL = str('WAKE_FETCH_MODEL', 'sonnet')
 /** Wall clock per connector. Whatever landed before this is kept. */

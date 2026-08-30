@@ -7,11 +7,13 @@
  * survives validation, and where `why` comes from.
  */
 
-import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { beforeEach, describe, expect, test } from 'bun:test'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { parseRows } from '../src/server/fetch/claude'
 import { whyFrom } from '../src/server/fetch'
 import { clean } from '../src/server/sources/slack'
+import { CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR } from '../src/server/env'
+import { claudeSessions, listSessions } from '../src/server/sources/claudeSessions'
 
 describe('only schema-valid objects are read', () => {
   test('a fenced array is unwrapped', () => {
@@ -113,5 +115,80 @@ describe('the two pipes land on one desk without fighting', () => {
     const ingest = readFileSync('src/server/ingest.ts', 'utf8')
     expect(ingest, "the sweep stopped scoping itself to the pipe that owns the sighting")
       .toMatch(/UPDATE cards SET gone = 1[\s\S]{0,200}found_by = 'poll'/)
+  })
+})
+
+describe("Fetch's own runs never land back on the desk", () => {
+  /**
+   * The failure this pins, one layer down from the handoff-pack dump.
+   *
+   * Fetch spawns `claude`, and Claude Code writes a transcript for every run it
+   * makes. Those transcripts used to land in the same bucket a person gets when
+   * they open a session from `~`, so the Claude Code source read them back and
+   * put them on the desk as work left open — two of nine session cards on the
+   * live board were Wake quoting its own Slack question, growing by one per
+   * connector per press.
+   *
+   * The fix is structural rather than textual: a collection runs in a directory
+   * of Wake's own and the source skips that directory. So this test writes a
+   * transcript that is Fetch-shaped in *every* way — the real prompt, the real
+   * turn count, the real recency — and asserts it is still not a card. A test
+   * that matched the prompt string would go green again the moment the question
+   * is reworded, which is exactly the rot being avoided.
+   */
+  const projects = `${CLAUDE_PROJECTS_DIR}`
+  const flatten = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')
+
+  const FETCH_PROMPT =
+    'Search Slack for two things in the last 14 days: (a) messages addressed to ' +
+    'Yuvraj Muley — direct messages to him, and messages that mention him by name.'
+
+  /** A transcript with a working directory, a prompt and two user turns. */
+  const transcript = (cwd: string, prompt: string) =>
+    [
+      { type: 'user', cwd, message: { role: 'user', content: prompt } },
+      { type: 'user', cwd, message: { role: 'user', content: 'continue' } },
+      { type: 'last-prompt', lastPrompt: prompt },
+    ].map(l => JSON.stringify(l)).join('\n')
+
+  const write = (cwd: string, id: string, prompt: string) => {
+    const dir = `${projects}/${flatten(cwd)}`
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(`${dir}/${id}.jsonl`, transcript(cwd, prompt))
+  }
+
+  beforeEach(() => {
+    rmSync(projects, { recursive: true, force: true })
+    mkdirSync(projects, { recursive: true })
+  })
+
+  test('a run in the Fetch directory is not a session card', async () => {
+    write(FETCH_RUN_DIR, 'aaaaaaaa-0000-0000-0000-000000000001', FETCH_PROMPT)
+    expect(await claudeSessions.fetch()).toEqual([])
+  })
+
+  test('a run from where Fetch used to live is not one either', async () => {
+    // The transcripts written before Fetch had a directory of its own are still
+    // on disk, and the poller runs every three minutes: a swept card that comes
+    // back before you have finished reading the sweep is not swept.
+    write(FETCH_LEGACY_RUN_DIR, 'aaaaaaaa-0000-0000-0000-000000000002', FETCH_PROMPT)
+    expect(await claudeSessions.fetch()).toEqual([])
+  })
+
+  test('a session you actually opened still becomes one', async () => {
+    // The control. Without it this suite would pass just as well if the source
+    // had stopped producing cards altogether.
+    write('/home/someone/work/app', 'aaaaaaaa-0000-0000-0000-000000000003', 'fix the login redirect')
+    const cards = await claudeSessions.fetch()
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.meta?.cwd).toBe('/home/someone/work/app')
+  })
+
+  test('the launcher is not offered one to resume either', () => {
+    // `listSessions` feeds the Open-in-Claude picker. A transcript of Wake
+    // asking Slack a question is not work to carry into a new session.
+    write(FETCH_RUN_DIR, 'aaaaaaaa-0000-0000-0000-000000000004', FETCH_PROMPT)
+    write('/home/someone/work/app', 'aaaaaaaa-0000-0000-0000-000000000005', 'fix the login redirect')
+    expect(listSessions().map(s => s.cwd)).toEqual(['/home/someone/work/app'])
   })
 })

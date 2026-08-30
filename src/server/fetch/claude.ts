@@ -26,10 +26,11 @@
  * fails validation is dropped, silently, and the row simply does not land.
  */
 
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, mkdirSync } from 'node:fs'
 import { audit } from '../db'
-import { CLAUDE_BIN, FETCH_MAX_ROWS, FETCH_MAX_TURNS, FETCH_MODEL, FETCH_TIMEOUT_MS } from '../env'
+import {
+  CLAUDE_BIN, FETCH_MAX_ROWS, FETCH_MAX_TURNS, FETCH_MODEL, FETCH_RUN_DIR, FETCH_TIMEOUT_MS,
+} from '../env'
 import { redact } from '../redact'
 
 /**
@@ -113,13 +114,18 @@ export async function askTheBox(connector: string, prompt: string): Promise<BoxR
     '--allowed-tools', tools.join(','),
   ]
 
+  // A directory of Wake's own, not the repository and not the home directory.
+  // Not the repository, because nothing here should be able to read the checkout
+  // it happens to be launched from. Not the home directory, because a run leaves
+  // a transcript behind and the Claude Code source reads that bucket — Fetch was
+  // filling the desk with its own collections, one row per connector per press.
+  mkdirSync(FETCH_RUN_DIR, { recursive: true })
+
   const proc = Bun.spawn(argv, {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
-    // The home directory, not the repository: nothing here should be able to
-    // read the checkout it happens to be launched from.
-    cwd: homedir(),
+    cwd: FETCH_RUN_DIR,
   })
   proc.stdin.write(prompt)
   await proc.stdin.end()
