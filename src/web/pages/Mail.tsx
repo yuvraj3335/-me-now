@@ -101,7 +101,10 @@ export function Mail() {
         <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule pad-x pt-4 pb-2">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-medium">Mail</h1>
-            <span className="tnum text-sm text-fg-mute">{list.threads.length}</span>
+            {/* A count is a fact, and this one is not known for the first three
+                or four seconds. Rendering `threads.length` unconditionally made
+                the header assert a zero it had not measured. */}
+            {list.answered && <span className="tnum text-sm text-fg-mute">{list.threads.length}</span>}
             <div className="ml-auto flex items-center gap-2">
               <Button size="sm" variant="ghost" title="Refresh" ariaLabel="Refresh"
                 onClick={() => { void reload(true); list.reload() }}>
@@ -165,7 +168,8 @@ export function Mail() {
             />
           ))}
 
-          {!list.loading && !list.threads.length && <Empty />}
+          {!list.answered && !list.threads.length && <ArrivingRows />}
+          {list.answered && !list.threads.length && <Empty />}
           {list.hasMore && !list.loading && (
             <button onClick={list.more}
               className="w-full h-11 text-left text-sm text-fg-mute hover:text-fg-dim transition-colors">
@@ -227,6 +231,17 @@ function useThreadList(opts: { box: string; account: string; q: string; nonce: n
   const [cursors, setCursors] = useState<Record<string, string | null>>({})
   const [errors, setErrors] = useState<Array<{ account: string; error: string }>>([])
   const [loading, setLoading] = useState(true)
+  /**
+   * Whether this list has an answer yet — not whether it is idle.
+   *
+   * `GET /api/mail/threads` was measured at 2834–4742ms on the box, and for
+   * every one of those milliseconds `threads` is `[]` because that is its
+   * initial value. A header that counts it says `0`, and a column that maps it
+   * paints nothing: the first thing the inbox told you was that there was no
+   * mail in it, four seconds before it knew. Nothing may claim the empty case
+   * until this is true.
+   */
+  const [answered, setAnswered] = useState(false)
 
   const load = useCallback(
     async (append: boolean, cursorsIn: Record<string, string | null>) => {
@@ -246,6 +261,7 @@ function useThreadList(opts: { box: string; account: string; q: string; nonce: n
         setErrors([{ account: 'mail', error: (e as Error).message }])
       } finally {
         setLoading(false)
+        setAnswered(true)
       }
     },
     // `nonce` is deliberately a dependency it never reads: re-submitting the
@@ -254,7 +270,12 @@ function useThreadList(opts: { box: string; account: string; q: string; nonce: n
     [opts.box, opts.account, opts.q, opts.nonce],
   )
 
-  useEffect(() => { void load(false, {}) }, [load])
+  // A new box or a new search is a new question, so its answer is unknown again
+  // and the count goes back to saying nothing rather than saying zero.
+  useEffect(() => {
+    setAnswered(false)
+    void load(false, {})
+  }, [load])
 
   // `reload` is handed to the command palette, which holds it in an effect. A
   // fresh closure on every render would either capture a stale box — refreshing
@@ -267,10 +288,39 @@ function useThreadList(opts: { box: string; account: string; q: string; nonce: n
     threads,
     errors,
     loading,
+    answered,
     hasMore: Object.values(cursors).some(Boolean),
     more: () => void load(true, cursors),
     reload,
   }
+}
+
+/**
+ * The rows that have been asked for and have not arrived.
+ *
+ * A mail list is the one surface in this product with a slow first read —
+ * measured at 2834–4742ms on the box, against `/api/state`'s tens — and for that
+ * whole time the column had nothing in it. An empty inbox and an inbox that has
+ * not answered look identical, and the first one is a claim.
+ *
+ * So the shape arrives before the content: the same 44px row, the same hairline,
+ * a bar where a name goes and a bar where a subject goes. No word, because a
+ * word here would be chrome that teaches, and nothing that moves, because the
+ * refresh glyph in the header is already spinning and a second animation on a
+ * document that may never be painted is a frame this page would then wait on.
+ */
+function ArrivingRows() {
+  const WIDTHS = ['w-1/2', 'w-3/4', 'w-2/3', 'w-1/2', 'w-3/5', 'w-3/4', 'w-2/5', 'w-2/3']
+  return (
+    <div aria-hidden>
+      {WIDTHS.map((w, i) => (
+        <div key={i} className="flex items-center gap-3 h-11 border-b border-rule">
+          <span className="h-2 w-20 rounded-chip bg-rule shrink-0 opacity-60" />
+          <span className={`h-2 rounded-chip bg-rule opacity-60 ${w}`} />
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function ThreadRow({
@@ -650,31 +700,15 @@ function Composer({
 /* ------------------------------ not connected ----------------------------- */
 
 /**
- * The honest empty state.
- *
- * Gmail on this deployment is a claude.ai connector, whose token lives in the
- * Claude account and is never written to disk — so there is nothing for Wake to
- * read. Saying that, with the exact fix, beats an inbox of invented mail.
- */
-/**
- * One honest error, and the button that fixes it.
- *
- * The screen where he notices the problem used to be the one screen that could
- * not fix it: it offered a shell command and a re-check button, while
- * Settings offered a one-click `Connect` for the same source. And `Check again`
- * re-checked and repainted an identical screen with no spinner, no toast and no
- * timestamp — indistinguishable from a dead button.
- */
-/**
  * Gmail, down.
  *
  * Two lines in the list column, on the same grid as everything else. What it
- * replaced was a whole page: a `text-lg` `<h1>` reading "Gmail is not
- * connected", a paragraph about claude.ai connectors, an amber `lg` primary
- * labelled Connect, a `Check again` button, and a `<details>` holding two shell
- * commands and a paragraph about directly-added HTTP servers — 590px of chrome
- * inside a 720px reading column on a full-bleed working surface, teaching a
- * terminal command as the fix.
+ * replaced was a whole page: a `text-lg` heading restating the source's name and
+ * its state, a paragraph about claude.ai connectors, an amber `lg` primary
+ * labelled Connect, a re-check button that repainted an identical screen with no
+ * spinner and no timestamp, and a `<details>` holding two shell commands and a
+ * paragraph of transport trivia — 590px of chrome inside a 720px reading column
+ * on a full-bleed working surface, teaching a terminal command as the fix.
  *
  * There is no Connect button, because there is nothing to press:
  * `gmailmcp.googleapis.com` publishes no OAuth metadata, so Wake cannot build an
