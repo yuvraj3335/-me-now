@@ -40,7 +40,7 @@ import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
 import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME } from './../env'
 import { readsLikeAsk } from './../sources/slack'
-import { searchGithub, searchSentry, type SearchHit } from './../sources/search'
+import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
 import { inspect } from './../untrusted'
 import { redact } from './../redact'
@@ -204,6 +204,22 @@ async function collect(name: Connector, reach: Set<string>) {
  * assigned to him; `subscribed:me` is the pile he is watching.
  */
 async function viaWake(name: Connector): Promise<RawCard[] | null> {
+  if (name === 'slack') {
+    /*
+     * Wake's own Slack credential works again — the app is entitled and the
+     * grant now carries Slack MCP's granular search scopes — so the cheap,
+     * free, deterministic route is the right one, and the box stays the
+     * fallback it exists to be. It still fires for Gmail today, and it fires
+     * for Slack again the moment this token stops being accepted.
+     *
+     * The question is not the poller's. The poll asks `to:me` and `<@me>`;
+     * this asks for his *name*, which is how people address someone in a
+     * channel without typing a handle — and is the half of "named on" that
+     * a mention search never sees.
+     */
+    const hits = await searchSlack(`"${ME.name}" after:${since()}`, FETCH_MAX_ROWS)
+    return hits.map(h => slackCard(h)).filter((c): c is RawCard => !!c)
+  }
   if (name === 'github') {
     const hits = await searchGithub(
       ['--owner', ME.githubOrg, '--involves', ME.githubLogin, '--state', 'open', '--updated', `>=${since()}`],
@@ -215,10 +231,44 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
     const hits = await searchSentry('is:unresolved subscribed:me', FETCH_MAX_ROWS)
     return hits.map(h => fromHit('sentry', h, 'open')).filter((c): c is RawCard => !!c)
   }
-  // Slack and Gmail have adapters, and on this deployment neither holds a
-  // credential that answers. Their poll path is the one already running every
-  // three minutes; repeating it here would make Fetch a refresh button.
+  // Gmail has an adapter and no credential Wake can obtain — Google publishes
+  // no OAuth metadata to start a flow against — so it is the box's, always.
   return null
+}
+
+/**
+ * A Slack search hit, as a card.
+ *
+ * Not through `fromHit`: `searchSlack` puts the channel in `title` and the
+ * message in `excerpt`, which is the right shape for a search result and the
+ * wrong one for a row. A row's title is what was said.
+ */
+function slackCard(h: SearchHit): RawCard | null {
+  const text = redact(h.excerpt ?? '').replace(/\s+/g, ' ').trim()
+  if (!h.ref || !text) return null
+  const channel = (h.title ?? '').replace(/^#/, '').replace(/^DM\s+/, '')
+  const isDm = /^DM\b/.test(h.title ?? '')
+  return {
+    source: 'slack',
+    source_id: h.ref,
+    kind: isDm ? 'dm' : 'mention',
+    title: text.slice(0, 200),
+    why: whyFrom(text, 'waiting'),
+    who: h.actor || undefined,
+    actor: h.actor,
+    excerpt: text.slice(0, 400),
+    url: h.url ?? `wake:fetch/slack/${encodeURIComponent(h.ref)}`,
+    ts: h.ts ?? Date.now(),
+    pile: 'now',
+    refs: [{ t: 'slackthread', v: h.ref }, ...extractRefs(`${text}\n${h.url ?? ''}`)],
+    meta: {
+      found_by: 'fetch',
+      channel,
+      is_dm: isDm,
+      channel_id: h.ref.split(':')[0],
+      thread_ts: h.ref.split(':')[1],
+    },
+  }
 }
 
 /* -------------------------------- prompts --------------------------------- */
