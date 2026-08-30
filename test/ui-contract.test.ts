@@ -711,6 +711,8 @@ describe('a page never scrolls sideways', () => {
    * out clean from being edited away by a plausible-looking change.
    */
 
+  const tsx = web.filter(f => f.endsWith('.tsx'))
+
   test('the page column clips its own horizontal overflow', () => {
     // `.hit` hangs a touch target 6px past a control's box on a coarse pointer,
     // and an absolutely positioned box is scrollable overflow whatever it is
@@ -733,6 +735,36 @@ describe('a page never scrolls sideways', () => {
     const css = read('src/web/styles.css')
     const hit = /@media \(any-pointer: coarse\) \{\s*\.hit::after \{/
     expect(css, '`.hit` left its coarse-pointer scope').toMatch(hit)
+  })
+
+  test('every touch target hangs off the control it belongs to', () => {
+    // The outset is `position: absolute; inset: -6px`, and that only means "6px
+    // around this control" if the control is itself a containing block. Without
+    // `relative` the box resolves against the nearest positioned ancestor —
+    // `<main>` — so what the control gets is not a collar but a transparent,
+    // tap-eating sheet the size of the whole page column. Later content paints
+    // over most of it, which is why it does not look like anything; it shows up
+    // as a phone that ignores taps in the empty parts of a page. The Due cell
+    // and the Work tabs both shipped that way.
+    const positioned = /(^|\s)relative(\s|$)/
+    const primitives = read('src/web/components/primitives.tsx')
+    const sizes = /const SIZE: Record<ButtonSize, string> = \{([^}]*)\}/.exec(primitives)?.[1] ?? ''
+    expect(sizes, 'the button size table moved').toContain('hit')
+
+    for (const f of tsx) {
+      for (const lit of read(f).match(/`[^`]*`|'[^'\n]*'|"[^"]*"/g) ?? []) {
+        const cls = lit.slice(1, -1)
+        if (!/(^|\s)hit(\s|$)/.test(cls)) continue
+        // `Button` is the one indirection: the size table hands `hit` to a base
+        // class list that carries the `relative`, which is checked below.
+        if (f.endsWith('primitives.tsx') && sizes.includes(lit)) continue
+        expect(cls, `${f}: \`hit\` on a control with no containing block\n  ${cls.split('\n')[0]}`)
+          .toMatch(positioned)
+      }
+    }
+
+    expect(primitives, '`Button` stopped positioning the box its sizes ask for')
+      .toMatch(/className=\{`relative[^`]*\$\{SIZE\[size\]\}/)
   })
 
   test('the phone bar keeps six destinations and its target', () => {
