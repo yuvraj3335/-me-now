@@ -120,6 +120,26 @@ describe('the range control moves what it says it moves', () => {
     expect(narrow.rhythm.bestStreak).toBe(wide.rhythm.bestStreak)
     expect(narrow.rhythm.bestStreak).toBeGreaterThanOrEqual(20)
   })
+
+  test('reading a card is not a day of work', async () => {
+    // The detail pane emits `card_acked` by itself, the instant a row with
+    // unread activity is opened. The clock is labelled "when I actually work"
+    // and the streak "consecutive local days with something finished", so a week
+    // of only reading has to report neither.
+    const now = Date.now()
+    for (let i = 0; i < 5; i++) logEvent('card_acked', { at: now - i * DAY })
+
+    const a = await get('?days=30')
+    expect(a.rhythm.streak).toBe(0)
+    expect(a.rhythm.byHour.reduce((n: number, h: any) => n + h.value, 0)).toBe(0)
+
+    // And the two writes that genuinely finish a card still do.
+    logEvent('card_done', { at: now })
+    logEvent('card_not_mine', { at: now - DAY })
+    const b = await get('?days=30')
+    expect(b.rhythm.byHour.reduce((n: number, h: any) => n + h.value, 0)).toBe(2)
+    expect(b.rhythm.streak).toBeGreaterThanOrEqual(1)
+  })
 })
 
 describe('the payload carries nothing the page does not draw', () => {

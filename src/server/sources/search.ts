@@ -10,7 +10,7 @@
  * All of it is read-only. Nothing in this file can post, reply or modify.
  */
 
-import { runSearch, discoverTools, readThread, readAlertChannel, clean } from './slack'
+import { runSearch, discoverTools, parentTs, readThread, readAlertChannel, clean } from './slack'
 import { sessionFor as gmailSession } from './gmail'
 import { gmailThreadUrl } from '../mail/gmail'
 import { getSession as sentrySession, findIssuesTool, orgSlug, parseSentryIssues } from './sentry'
@@ -43,9 +43,11 @@ export async function searchSlack(query: string, limit = 15): Promise<SearchHit[
     excerpt: clean(h.text),
     url: h.permalink,
     ts: h.epochMs,
-    // `channel:ts` is the same reference the dedup engine keys threads on, so a
-    // hit here can be handed straight to slack_thread.
-    ref: h.channelId && h.ts ? `${h.channelId}:${h.ts}` : undefined,
+    // `channel:<parent ts>` is the same reference the dedup engine keys threads
+    // on, so a hit here can be handed straight to slack_thread — and a hit that
+    // is a reply lands on the row its conversation already owns rather than
+    // opening a second one beside it.
+    ref: h.channelId && h.ts ? `${h.channelId}:${parentTs(h)}` : undefined,
   }))
 }
 

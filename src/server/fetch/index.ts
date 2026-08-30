@@ -273,8 +273,12 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
  * Not through `fromHit`: `searchSlack` puts the channel in `title` and the
  * message in `excerpt`, which is the right shape for a search result and the
  * wrong one for a row. A row's title is what was said.
+ *
+ * Exported for the same reason `buildThreadCard` is: what a Slack row is
+ * allowed to claim about its own identity is decided here, and pinning that
+ * needs no network.
  */
-function slackCard(h: SearchHit): RawCard | null {
+export function slackCard(h: SearchHit): RawCard | null {
   const text = redact(h.excerpt ?? '').replace(/\s+/g, ' ').trim()
   if (!h.ref || !text) return null
   // A conversation id beginning `D` is a direct message, and one of those is
@@ -295,7 +299,20 @@ function slackCard(h: SearchHit): RawCard | null {
     url: h.url ?? `wake:fetch/slack/${encodeURIComponent(h.ref)}`,
     ts: h.ts ?? Date.now(),
     pile: 'now',
-    refs: [{ t: 'slackthread', v: h.ref }, ...extractRefs(`${text}\n${h.url ?? ''}`)],
+    /*
+     * One thread identity, and it is `h.ref` — the same refusal `buildThreadCard`
+     * makes, in the other path that mints Slack cards.
+     *
+     * `h.ref` is already the *parent's* `channel:ts`, which is the whole point of
+     * keying a row on its thread. Scanning the body and the permalink for more
+     * gave the row two more: the hit's own permalink resolves to the reply's ts,
+     * and a permalink somebody pasted into the message resolves to a completely
+     * different conversation — so this card unioned with whatever row owned that
+     * conversation, and one desk row spoke for two of them with one Done button
+     * between. Everything else the body mentions still stands: a `TRUTO-38` in a
+     * Slack message is exactly what this scan is for.
+     */
+    refs: [{ t: 'slackthread', v: h.ref }, ...extractRefs(text).filter(r => r.t !== 'slackthread')],
     meta: {
       found_by: 'fetch',
       channel,

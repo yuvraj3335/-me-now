@@ -1,11 +1,41 @@
 export type SourceName = 'slack' | 'gmail' | 'github' | 'sentry' | 'claude'
 export type Pile = 'now' | 'open' | 'parked'
 
+/**
+ * One message on a thread, as the Slack adapter already cleaned it.
+ *
+ * `tagged` is decided on the raw Slack markup, before the ids became display
+ * names — so it survives somebody changing what they are called.
+ */
+export type ThreadEntry = {
+  /** A Slack ts string, e.g. `1787814333.427979`. Not epoch ms. */
+  ts: string
+  who: string
+  who_id: string
+  text: string
+  tagged: boolean
+  mine: boolean
+}
+
+/** One message in a Gmail thread. `ts` here IS epoch ms — Gmail is not Slack. */
+export type MailEntry = {
+  ts: number
+  who: string | null
+  snippet: string
+  mine: boolean
+}
+
 export type CardSource = {
   source: SourceName
   kind: string
   url: string
   ts: number
+  /**
+   * When this member landed on the group, which is not when the group appeared.
+   * The pane needs it to mark a message as new against the same floor the
+   * server counted `activity` against — see `isFreshLine` in `lib/thread.ts`.
+   */
+  first_seen_at?: number
   title: string
   actor?: string | null
   /** A person waiting on you, or null. See `src/server/sources/types.ts`. */
@@ -68,6 +98,19 @@ export type Card = {
   kind: string
   ts: number
   first_seen_at: number
+  /**
+   * What has landed on this since he last looked at it, computed once on the
+   * server. The `+N` renders iff `count > 0` and the amber edge appears iff
+   * `count > 0` — one expression, read twice, so they cannot disagree. Nothing
+   * in the browser recounts it.
+   */
+  activity: {
+    count: number
+    /** He was named in one of the counted messages. Changes the word, never the count. */
+    tagged: boolean
+    /** When the newest of them landed, or null when there were none. */
+    at: number | null
+  }
   meta: Record<string, any>
   sources: CardSource[]
   state: {

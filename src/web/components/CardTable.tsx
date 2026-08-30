@@ -24,6 +24,19 @@
  * page clamps the *pane* against this file's floors instead, which is the only
  * direction that can be correct.
  *
+ * Two marks ride on top of those four columns, and they are one fact told
+ * twice: a `+N` immediately after the title, and a 2px amber edge down the row's
+ * left side. Both render from `card.activity.count > 0` — one expression, read
+ * in two places — so the badge and the highlight can never disagree about how
+ * much has landed since he last looked. The edge is the 2px of state this file
+ * reserved when it deleted the old row stripe; that stripe painted the identical
+ * colour on all twenty rows and encoded nothing, and this paints two or three.
+ *
+ * And every row swipes left. `Done`, `Status` and `Delete` under a finger, a
+ * trackpad or a mouse drag, without opening anything — see `components/swipe.tsx`
+ * for why the drawer is a clip window pinned to the last cell rather than a
+ * translated row.
+ *
  * Below 1024px there is no table: four columns in 390px is not a table, it is a
  * diagram of one. The phone row is one 44px line.
  */
@@ -37,6 +50,7 @@ import { Button, Select } from './primitives'
 import { cardKind, KindGlyph } from './kinds'
 import { SOURCE_LABEL } from './sources'
 import { PriorityGlyph, StatusSlot, isSettled } from './status'
+import { SwipeDrawer, useSwipe } from './swipe'
 import { dueWords, ROW_META, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
 
 export type RowAction = {
@@ -47,6 +61,51 @@ export type RowAction = {
   /** A due date, or null to clear one. */
   onDue: (c: Card, at: number | null) => void
 }
+
+/** The five, as the drawer's picker wants them. Built once, not per row. */
+const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id: id as string, label: STATUS_LABEL[id] }))
+
+/**
+ * The count, and the edge, from one expression.
+ *
+ * `+2` renders iff there is something new and the row is marked iff there is
+ * something new, so the two can never tell different stories about the same
+ * thread. The server computes the number in `activityOf`; this decides nothing
+ * except where to put it.
+ *
+ * The edge is an `inset` box-shadow on the row's first cell rather than a border
+ * on the `<tr>`, because under `border-collapse` a row's own border does not
+ * paint at all.
+ */
+const EDGE = { boxShadow: 'inset 2px 0 0 var(--color-accent)' } as const
+const edgeIf = (card: Card) => (card.activity.count > 0 ? EDGE : undefined)
+
+function Count({ card }: { card: Card }) {
+  if (card.activity.count <= 0) return null
+  return (
+    <span className="text-accent-ink tnum text-sm shrink-0" title="new since you last looked">
+      +{card.activity.count}
+    </span>
+  )
+}
+
+/**
+ * The drawer's three actions, in the vocabulary the desk already has.
+ *
+ * `Delete` on a card is `Won't do` — the way Wake has always dismissed work —
+ * so nothing here invents a fourth verb or a second kind of removal. The row is
+ * still reachable through the Status filter afterwards, which is the whole
+ * reason `Won't do` and not a real delete.
+ */
+const drawerFor = (card: Card, actions: RowAction) => ({
+  onDone: () => actions.onStatus(card, 'done'),
+  onDelete: () => actions.onStatus(card, 'wont_do'),
+  status: {
+    current: card.status as string,
+    options: STATUS_CHOICES,
+    onPick: (id: string) => actions.onStatus(card, id as CardStatus),
+  },
+})
 
 /** The width at which a table stops being a diagram of one. */
 export const TABLE_MIN = 1024
@@ -148,7 +207,12 @@ export function TableHead({
   const word = sort === 'due' ? 'earliest first' : sort === '-due' ? 'latest first' : 'unsorted'
 
   return (
-    <thead className="sticky top-0 z-10 bg-ink-900">
+    /* `z-20`, above the drawer's `z-10`. Two positioned elements at one
+       z-index in one stacking context paint in tree order, and a `<tbody>`
+       comes after a `<thead>` — so an open drawer painted its solid 264px
+       block over Title / Status / Kind / Due as its row scrolled up under
+       the header. */
+    <thead className="sticky top-0 z-20 bg-ink-900">
       <tr className="border-b border-edge">
         <th className={HEAD} scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
@@ -212,6 +276,7 @@ export function CardRow({
 }) {
   const ref = useRef<HTMLTableRowElement>(null)
   const kind = cardKind(card)
+  const swipe = useSwipe(card.group_key, 3)
 
   // Keyboard focus scrolls the row into view; without this, `j` past the fold
   // moves a selection nobody can see.
@@ -219,7 +284,14 @@ export function CardRow({
 
   return (
     <tr
-      ref={ref}
+      ref={n => { ref.current = n; swipe.bind.ref(n) }}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      style={swipe.bind.style}
       onClick={() => actions.onOpen(card)}
       aria-selected={selected}
       className={`group cursor-pointer border-b border-rule transition-colors duration-100
@@ -227,10 +299,17 @@ export function CardRow({
     >
       {/* A settled card keeps its title legible and struck through rather than
           dimmed away: it is still the thing he is looking at, it is just no
-          longer waiting on him. */}
+          longer waiting on him.
+
+          The count sits immediately after the title, inside its cell, so it
+          costs the elastic column about 26px on the rows that have one and
+          nothing at all on the rows that do not. */}
       <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
-        title={card.title}>
-        {card.title}
+        style={edgeIf(card)} title={card.title}>
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="truncate">{card.title}</span>
+          <Count card={card} />
+        </span>
       </td>
 
       {/* Less vertical padding than a text cell, because the control inside it
@@ -260,7 +339,16 @@ export function CardRow({
         </span>
       </td>
 
-      <DueCell card={card} onDue={actions.onDue} />
+      {/* The drawer is anchored in the last cell and paints leftward over the
+          row. A `<tr>` cannot be a containing block for a panel that spans it —
+          and it cannot clip one either — so the cell at the row's right edge
+          holds it. */}
+      <DueCell card={card} onDue={actions.onDue}>
+        <SwipeDrawer
+          dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+          {...drawerFor(card, actions)}
+        />
+      </DueCell>
     </tr>
   )
 }
@@ -284,7 +372,12 @@ export function CardRow({
  * Overdue is the one place `bad` is spent on this page. A date that has passed
  * is the single fact on a row that is worse than it was yesterday.
  */
-function DueCell({ card, onDue }: { card: Card; onDue: (c: Card, at: number | null) => void }) {
+function DueCell({ card, onDue, children }: {
+  card: Card
+  onDue: (c: Card, at: number | null) => void
+  /** The row's swipe drawer, which needs the row's right-hand cell to live in. */
+  children?: React.ReactNode
+}) {
   const [editing, setEditing] = useState(false)
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
@@ -298,7 +391,8 @@ function DueCell({ card, onDue }: { card: Card; onDue: (c: Card, at: number | nu
     const day = card.due_at ? toLocalInput(card.due_at).slice(0, 10) : ''
     const clock = card.due_at ? toLocalInput(card.due_at).slice(11) : '18:00'
     return (
-      <td className="py-1 pr-0 align-middle" onClick={e => e.stopPropagation()}>
+      <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
+        {children}
         <input
           type="date"
           autoFocus
@@ -315,7 +409,8 @@ function DueCell({ card, onDue }: { card: Card; onDue: (c: Card, at: number | nu
   }
 
   return (
-    <td className="py-1 pr-0 align-middle" onClick={e => e.stopPropagation()}>
+    <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
+      {children}
       <button
         onClick={() => setEditing(true)}
         title={words ? 'Change the due date' : 'Set a due date'}
@@ -359,9 +454,25 @@ export function CardLine({
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
   const kind = cardKind(card)
+  const swipe = useSwipe(card.group_key, 3)
 
   return (
-    <li className={`flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}>
+    <li
+      ref={swipe.bind.ref}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      // The same 2px edge the table draws, through the same function, on the
+      // element that is the row here. An `<li>` takes a box-shadow directly, so
+      // there is no first-cell trick — but a second copy of the predicate is
+      // still a second copy, and the phone's edge and the desk's disagreeing
+      // about one thread is precisely the failure this shares a helper to avoid.
+      style={{ ...swipe.bind.style, ...edgeIf(card) }}
+      className={`relative flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}
+    >
       <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
         <div className="flex items-center h-full">
           {/* The same fixed slots the table uses, so every title on the page
@@ -379,6 +490,9 @@ export function CardLine({
                             ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
             {card.title}
           </span>
+          {card.activity.count > 0 && (
+            <span className="pl-2 flex items-center"><Count card={card} /></span>
+          )}
           {words && (
             <span className={`shrink-0 pl-3 ${overdue ? 'text-sm text-bad tnum' : ROW_META}`}>
               {words}
@@ -395,6 +509,10 @@ export function CardLine({
           <Check size={14} />
         </Button>
       </span>
+      <SwipeDrawer
+        dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+        {...drawerFor(card, actions)}
+      />
     </li>
   )
 }

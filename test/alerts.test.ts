@@ -11,7 +11,10 @@
  * is on the desk, once, and what fixed itself is not there at all.
  */
 import { describe, expect, test } from 'bun:test'
-import { alertCards, parseChannelMessages } from '../src/server/sources/slack'
+import {
+  alertCards, bucketHits, buildThreadCard, foldThreadIntoAlert, parseChannelMessages,
+  parseSlackResults,
+} from '../src/server/sources/slack'
 import { extractAlertRefs } from '../src/server/dedup'
 import { SLACK_ALERT_CHANNELS } from '../src/server/env'
 import type { RawCard } from '../src/server/sources/types'
@@ -344,5 +347,71 @@ describe('every alert card, whatever the channel', () => {
       expect((c.meta as any).thread_ts).toMatch(/^\d{10}\.\d{6}$/)
       expect(c.url).toContain(`/archives/${(c.meta as any).channel_id}/p`)
     }
+  })
+})
+
+/** The single entry of a one-thread bucket map, or a failure that says so. */
+function oneBucket<K, V>(m: Map<K, V>): [K, V] {
+  const all = [...m]
+  expect(all).toHaveLength(1)
+  return all[0]!
+}
+
+describe('a human triaging an alert in its thread does not delete the alert', () => {
+  /*
+   * A thread bucket's key and an alert card's `source_id` are both
+   * `<channel>:<ts>`, and they are equal exactly when the message a thread hangs
+   * off is itself an alert. That is the standard triage move — reply under the
+   * Sentry post and name whoever should take it — and one shared `seen` set
+   * meant the mention won the identity and the alert row was skipped. The poll
+   * is authoritative, so the sweep then marked the stored alert gone: the alert
+   * disappeared from the desk the moment a person touched it.
+   */
+  const MENTION_UNDER_ALERT = `# Search Results for: <@U09617LRRDF> after:2026-08-16
+
+## Messages (1 results)
+### Result 1 of 1
+Channel: #sentry-alerts (ID: C0BERTMS9K4)
+From: Nidhi <nidhi@truto.one> (ID: U0BBZV4HQHH)
+Time: 2026-08-30 18:41:02 IST
+Message_ts: 1788095462.114300
+Permalink: [link](https://truto.slack.com/archives/C0BERTMS9K4/p1788095462114300?thread_ts=1788094379.882969&cid=C0BERTMS9K4)
+Text:
+<@U09617LRRDF> can you take this one
+
+---
+
+`
+
+  const folded = () => {
+    const alert = cardsFrom(SENTRY_WIRE, SENTRY_CH)
+      .find(c => (c.meta as any).short_id === 'TRUTO-38')!
+    const [, bucket] = oneBucket(bucketHits(parseSlackResults(MENTION_UNDER_ALERT), 'U09617LRRDF'))
+    const thread = buildThreadCard(bucket, null, 'U09617LRRDF')!
+    // The collision the poll resolves: one string, two readers.
+    expect(thread.source_id).toBe(alert.source_id)
+    foldThreadIntoAlert(alert, thread)
+    return alert
+  }
+
+  test('the alert keeps everything only the alert reader knows', () => {
+    const c = folded()
+    expect((c.meta as any).alert).toBe(true)
+    expect((c.meta as any).short_id).toBe('TRUTO-38')
+    expect(c.kind).toBe('alert')
+    expect(c.refs.some(r => r.t === 'sentry' && r.v === 'TRUTO-38')).toBe(true)
+  })
+
+  test('and gains everything only the thread reader knows', () => {
+    const c = folded()
+    const thread = (c.meta as any).thread as Array<Record<string, any>>
+    // Both bots' posts and the human reply, oldest first.
+    expect(thread.map(e => e.ts)).toContain('1788095462.114300')
+    expect(thread.length).toBeGreaterThan(1)
+    expect(thread.map(e => e.ts)).toEqual([...thread.map(e => e.ts)].sort())
+    // Somebody genuinely is waiting now, and the row says who.
+    expect(c.who).toBe('Nidhi')
+    expect((c.meta as any).tagged_at).toBeGreaterThan(0)
+    expect(c.pile).toBe('now')
   })
 })

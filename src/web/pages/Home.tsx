@@ -46,6 +46,7 @@ import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { useStill } from '../lib/motion'
 import { overlayOpen, useOverlay } from '../lib/overlay'
+import { openSwipeKey } from '../lib/swipe'
 import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
 
 /**
@@ -405,6 +406,10 @@ export function Home() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (overlayOpen()) return
+      // A drawer open on some row owns the keyboard until it is shut. Without
+      // this, `e` on an open swipe finishes the *cursor* card rather than the
+      // one whose actions are showing under the thumb.
+      if (openSwipeKey()) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el as HTMLElement).isContentEditable)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
@@ -550,7 +555,7 @@ export function Home() {
    * handle on it.
    */
   const sheet = !hasPane && selectedKey && shown
-    ? <PushDetail card={shown} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
+    ? <PushDetail card={shown} resting={!selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
     : null
 
   return (
@@ -576,7 +581,24 @@ export function Home() {
           className="grabber absolute -left-[3px] top-0 h-full w-[6px] z-20 hover:bg-ink-600"
         />
         {shown && (
-          <CardDetail card={shown} onClose={closeDetail}
+          /*
+           * `resting` is the difference between "he opened this" and "something
+           * had to be in the pane". The pane falls back to the top row when
+           * nothing has been chosen, and a fallback that acknowledges what it
+           * happens to be showing would clear the `+N` on the newest thread
+           * every morning before he had read a word of it.
+           *
+           * `!selected`, not `!selectedKey`, and the gap between the two is a
+           * second way into that same failure. `shown` falls back to `rows[0]`
+           * whenever the key in the URL does not match a row on the desk — which
+           * is not only "nothing chosen": it is also a card he opened and then
+           * finished, or one a poll swept while the pane was still on it. In
+           * every one of those the pane silently swaps to the top row, and with
+           * `!selectedKey` it would then acknowledge it. `selected` is the row
+           * that was actually asked for, so this is exactly "the pane is showing
+           * what somebody asked for" and nothing else.
+           */
+          <CardDetail card={shown} onClose={closeDetail} resting={!selected}
             onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
         )}
       </aside>
@@ -600,8 +622,25 @@ export function Home() {
  * read, and the undo toast rendered under the `z-50` overlay.
  */
 function PushDetail({
-  card, taskFrom, onMakeTask,
-}: { card: CardT; taskFrom: CardT | null; onMakeTask: (c: CardT | null) => void }) {
+  card, resting, taskFrom, onMakeTask,
+}: {
+  card: CardT
+  /**
+   * The same word the pane uses, and for the same reason.
+   *
+   * `shown` falls back to the top row whenever the key in the URL names a row
+   * that is not on the desk — a card he finished, one a poll swept, one a source
+   * tab filtered away — and this sheet is gated on `selectedKey`, which is still
+   * set in every one of those. Without carrying `resting` through, the phone
+   * silently swapped to `rows[0]` and `CardDetail` acknowledged it: the `+N` and
+   * the amber edge on the newest unread thread destroyed by a card nobody
+   * opened. The desktop pane spends fifteen lines on this; the sheet is the same
+   * failure at the width he actually reads on.
+   */
+  resting: boolean
+  taskFrom: CardT | null
+  onMakeTask: (c: CardT | null) => void
+}) {
   useOverlay(true)
   const still = useStill()
   const [tall, setTall] = useState(() => readNumber(SHEET_KEY, 0) === 1)
@@ -711,7 +750,7 @@ function PushDetail({
       >
         <span className="block w-10 h-1 rounded-full bg-ink-600" />
       </button>
-      <CardDetail card={card} onClose={closeDetail}
+      <CardDetail card={card} onClose={closeDetail} resting={resting}
         onMakeTask={c => { closeDetail(); onMakeTask(c) }} />
       <TaskSheet open={!!taskFrom} onClose={() => onMakeTask(null)} fromCard={taskFrom} />
     </div>,

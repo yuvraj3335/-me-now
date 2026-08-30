@@ -28,7 +28,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, X } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
+import { STATUS_LABEL } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
+import { SwipeDrawer, useSwipe } from '../components/swipe'
+import { toast } from '../lib/toast'
 import {
   Button, Empty, Field, PageTitle, Pager, Sheet, inputClass, pageCount, pageSlice, spring,
 } from '../components/primitives'
@@ -40,6 +43,74 @@ import { openLaunch, taskContext, taskRepoHint } from '../lib/launch'
 import { setParam, useParam } from '../lib/route'
 
 type Tab = 'tasks' | 'goals'
+
+/**
+ * The three a task can be in, under the desk's own words.
+ *
+ * Tasks were not migrated to the card's five, and this is the seam. A task is
+ * his own work with a lifecycle this page already draws; a card is somebody
+ * else's system, and its status is a note he keeps about it. `In review` and
+ * `Won't do` have no home here — the first because a task of his own does not
+ * wait on a reviewer inside Wake, and the second because a task decided against
+ * is one that leaves, which is what `Delete` is for. The three that do map take
+ * the labels the desk prints, so the product has one vocabulary rather than two
+ * that happen to agree today.
+ */
+const TASK_CHOICES = [
+  { id: 'todo',  label: STATUS_LABEL.not_started },
+  { id: 'doing', label: STATUS_LABEL.in_progress },
+  { id: 'done',  label: STATUS_LABEL.done },
+]
+
+/** A goal is finished or it is not; there is no middle for it to be in. */
+const GOAL_CHOICES = [
+  { id: 'todo', label: STATUS_LABEL.not_started },
+  { id: 'done', label: STATUS_LABEL.done },
+]
+
+/**
+ * Put back a deleted task, field for field.
+ *
+ * The server has no soft delete for a task, so the undo is a re-creation: a new
+ * id carrying every field the old one had, including the frozen provenance that
+ * says where it came from. Its stickies are copied across too, because a note
+ * points at the id that was just removed and would otherwise be stranded on a
+ * row nothing renders. What genuinely does not survive is a reminder pointed at
+ * the old id, which the server deletes with the task — that is worth knowing and
+ * not worth a second table.
+ *
+ * `origin_meta` is stored as a JSON *string* and the create route stringifies
+ * whatever it is handed, so passing the string straight through would write a
+ * quoted blob and the provenance would come back as gibberish. It is parsed here
+ * and dropped if it will not parse, because a task with no origin line is a
+ * great deal better than one whose origin line is `"{\"repo\":…"`.
+ */
+async function recreateTask(t: Task) {
+  let originMeta: unknown = null
+  try {
+    originMeta = t.origin_meta ? JSON.parse(t.origin_meta) : null
+  } catch {
+    originMeta = null
+  }
+
+  const made = await actions.createTask({
+    title: t.title, detail: t.detail, status: t.status, goal_id: t.goal_id,
+    source_card_group: t.source_card_group, due_at: t.due_at, color: t.color, sort: t.sort,
+    // `started_at` and `completed_at` are normally derived from a status
+    // *transition*, and a restore is not one — so a finished task came back with
+    // no finish time and sorted to the bottom of a Done list ordered by exactly
+    // that column. `restore` also keeps the undo out of the throughput counts:
+    // an undo is not work that happened.
+    started_at: t.started_at, completed_at: t.completed_at, restore: true,
+    origin_source: t.origin_source, origin_title: t.origin_title, origin_why: t.origin_why,
+    origin_url: t.origin_url, origin_excerpt: t.origin_excerpt, origin_meta: originMeta,
+  }) as Task
+
+  for (const n of t.notes ?? []) {
+    await actions.createNote({ task_id: made.id, body: n.body, color: n.color, sort: n.sort })
+  }
+  await reload()
+}
 
 export function Work() {
   const { state } = useStore()
@@ -104,6 +175,77 @@ export function Work() {
     void reload()
   }
 
+  /**
+   * The swipe's Status, on a task.
+   *
+   * Undone by putting back the status it replaced rather than by a general
+   * "restore", because a task has no undo record on the server and does not need
+   * one: there is exactly one field in play and its previous value is in hand at
+   * the moment it changes.
+   */
+  const setTaskStatus = async (t: Task, status: Task['status']) => {
+    if (status === t.status) return
+    const was = t.status
+    optimistic(s => {
+      const x = s.tasks.find(i => i.id === t.id)
+      if (x) x.status = status
+      return s
+    })
+    await actions.updateTask(t.id, { status })
+    toast(`${TASK_CHOICES.find(c => c.id === status)?.label ?? 'Changed'}.`, {
+      label: 'Undo',
+      run: async () => { await actions.updateTask(t.id, { status: was }); await reload() },
+    })
+    void reload()
+  }
+
+  /** Delete, and a way back — see `recreateTask` for what a way back costs. */
+  const removeTask = async (t: Task) => {
+    optimistic(s => { s.tasks = s.tasks.filter(x => x.id !== t.id); return s })
+    await actions.deleteTask(t.id)
+    toast('Deleted.', { label: 'Undo', run: () => recreateTask(t) })
+    void reload()
+  }
+
+  /**
+   * Deleting a goal orphans the tasks that named it, so undoing has to adopt
+   * them back.
+   *
+   * The server drops the row and leaves every `tasks.goal_id` pointing at an id
+   * nothing resolves — which renders as the goal's chip simply vanishing from
+   * those rows. A re-created goal has a new id, so without this the undo would
+   * put the goal back and leave its work behind.
+   */
+  const removeGoal = async (g: Goal) => {
+    const orphans = tasks.filter(t => t.goal_id === g.id).map(t => t.id)
+    await actions.deleteGoal(g.id)
+    await reload()
+    toast('Deleted.', {
+      label: 'Undo',
+      run: async () => {
+        // Field for field, the same way `recreateTask` puts a task back. A goal
+        // restored without its `sort` jumps to the head of the list, and one
+        // restored without `completed_at` comes back unfinished — so undoing the
+        // delete of a goal he had marked Done would quietly un-do that too.
+        const made = await actions.createGoal({
+          title: g.title, detail: g.detail, color: g.color, target_date: g.target_date,
+          sort: g.sort, completed_at: g.completed_at, restore: true,
+        }) as Goal
+        for (const id of orphans) await actions.updateTask(id, { goal_id: made.id })
+        await reload()
+      },
+    })
+  }
+
+  const setGoalDone = async (g: Goal, done: boolean) => {
+    await actions.updateGoal(g.id, { completed: done })
+    await reload()
+    toast(done ? `${STATUS_LABEL.done}.` : `${STATUS_LABEL.not_started}.`, {
+      label: 'Undo',
+      run: async () => { await actions.updateGoal(g.id, { completed: !done }); await reload() },
+    })
+  }
+
   /** Persist the new order as sort keys after a drag. */
   const commitOrder = async (list: Task[]) => {
     optimistic(s => {
@@ -125,6 +267,7 @@ export function Work() {
     // pull request it was about.
     origin: cardByGroup.get(t.source_card_group ?? ''),
     onCycle: cycle, onEdit: setEditing,
+    onStatus: setTaskStatus, onDelete: removeTask,
   })
 
   const header = (
@@ -251,7 +394,8 @@ export function Work() {
             )}
           </>
         ) : (
-          <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
+          <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing}
+            onStatus={setGoalDone} onDelete={removeGoal} />
         )}
       </div>
 
@@ -276,12 +420,49 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function TaskRow({
-  task, goals, reminders, origin, onCycle, onEdit, static: isStatic,
+  task, goals, reminders, origin, onCycle, onEdit, onStatus, onDelete, static: isStatic,
 }: {
   task: Task; goals: Goal[]; reminders: any[]
   origin?: { title: string; url: string; sources: Array<{ source: keyof typeof SOURCE_LABEL }> }
-  onCycle: (t: Task) => void; onEdit: (t: Task) => void; static?: boolean
+  onCycle: (t: Task) => void; onEdit: (t: Task) => void
+  onStatus: (t: Task, s: Task['status']) => void
+  onDelete: (t: Task) => void
+  static?: boolean
 }) {
+  /*
+   * `'none'` on a draggable row, `'pan-y'` on a static one, and the difference
+   * is who owns the vertical axis.
+   *
+   * `Reorder.Item` writes `touch-action: pan-x` inline, which is how a vertical
+   * drag reaches its reorder handler instead of scrolling the page. `pan-x` also
+   * hands the browser the horizontal axis — the one this gesture is made of — so
+   * a thumb swipe on a draggable task row could be taken over as a pan and
+   * cancelled halfway through. `none` gives the row's whole gesture to the app,
+   * which is what framer's own drag wants anyway, and costs nothing there:
+   * vertical scrolling on those rows already belonged to framer.
+   *
+   * A static row is not a `Reorder.Item`. Nothing writes `pan-x` on it and
+   * nothing catches a vertical drag, so `none` would take the page's scroll away
+   * and hand it to no one — a thumb dragging up the Done list would move
+   * nothing, which is the "frozen app" failure `lib/swipe.ts` puts above this
+   * whole gesture. `pan-y` is the same split every other row in the product uses:
+   * vertical is the page's, horizontal is the drawer's.
+   */
+  const swipe = useSwipe(`task:${task.id}`, 3, isStatic ? 'pan-y' : 'none')
+  const drawer = (
+    <SwipeDrawer
+      dx={swipe.dx}
+      width={swipe.width}
+      onClose={swipe.close}
+      onDone={() => onStatus(task, 'done')}
+      onDelete={() => onDelete(task)}
+      status={{
+        current: task.status,
+        options: TASK_CHOICES,
+        onPick: id => onStatus(task, id as Task['status']),
+      }}
+    />
+  )
   const goal = goals.find(g => g.id === task.goal_id)
   const reminder = reminders.find(r => r.target_kind === 'task' && r.target_id === task.id && !r.fired_at && !r.dismissed_at)
   const overdue = task.due_at && task.due_at < Date.now() && task.status !== 'done'
@@ -369,7 +550,24 @@ function TaskRow({
     </div>
   )
 
-  if (isStatic) return <div className="border-b border-rule last:border-0">{body}</div>
+  if (isStatic) {
+    return (
+      <div
+        ref={swipe.bind.ref}
+        onPointerDown={swipe.bind.onPointerDown}
+        onPointerMove={swipe.bind.onPointerMove}
+        onPointerUp={swipe.bind.onPointerUp}
+        onPointerCancel={swipe.bind.onPointerCancel}
+        onClickCapture={swipe.bind.onClickCapture}
+        data-swipe={swipe.bind['data-swipe']}
+        style={swipe.bind.style}
+        className="relative border-b border-rule last:border-0"
+      >
+        {body}
+        {drawer}
+      </div>
+    )
+  }
 
   return (
     <Reorder.Item
@@ -377,46 +575,119 @@ function TaskRow({
       id={task.id}
       transition={spring}
       whileDrag={{ scale: 1.01, backgroundColor: 'var(--color-ink-850)', zIndex: 10 }}
-      className="border-b border-rule last:border-0"
+      ref={swipe.bind.ref}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      // Reorder.Item spreads whatever style it is given before adding its own
+      // `x`/`y`/`zIndex`, so the gesture's `user-select: none` survives here —
+      // and without it a mouse drag across a draggable task highlighted the
+      // title and detail blue under the open drawer, and left them highlighted
+      // after the button came up. The `removeAllRanges()` at engage only clears
+      // what the first twelve pixels selected.
+      style={swipe.bind.style}
+      className="relative border-b border-rule last:border-0"
     >
       {body}
+      {drawer}
     </Reorder.Item>
   )
 }
 
-function GoalList({ goals, tasks, onEdit }: { goals: Goal[]; tasks: Task[]; onEdit: (g: Goal) => void }) {
-  const reduce = useStill()
+function GoalList({
+  goals, tasks, onEdit, onStatus, onDelete,
+}: {
+  goals: Goal[]; tasks: Task[]
+  onEdit: (g: Goal) => void
+  onStatus: (g: Goal, done: boolean) => void
+  onDelete: (g: Goal) => void
+}) {
   if (!goals.length) return <Empty>No goals</Empty>
   return (
     <div>
-      {goals.map(g => {
-        const linked = tasks.filter(t => t.goal_id === g.id)
-        const done = linked.filter(t => t.status === 'done').length
-        const pct = linked.length ? done / linked.length : 0
-        const color = g.color ?? 'var(--color-fg-dim)'
-        return (
-          <button
-            key={g.id} onClick={() => onEdit(g)}
-            className="w-full text-left py-3 border-b border-rule last:border-0"
-          >
-            <div className="flex items-baseline gap-3">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-              <span className="text-base grow">{g.title}</span>
-              {g.target_date && <span className="text-sm text-fg-mute">by {shortDate(g.target_date)}</span>}
-              <span className="tnum text-sm text-fg-mute">{done}/{linked.length}</span>
-            </div>
-            <div className="mt-2 h-1 bg-ink-800 rounded-full overflow-hidden">
-              <motion.div
-                className="h-full rounded-full"
-                style={{ background: color }}
-                initial={reduce ? false : { width: 0 }}
-                animate={{ width: `${pct * 100}%` }}
-                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-              />
-            </div>
-          </button>
-        )
-      })}
+      {goals.map(g => (
+        <GoalRow
+          key={g.id} goal={g}
+          linked={tasks.filter(t => t.goal_id === g.id)}
+          onEdit={onEdit} onStatus={onStatus} onDelete={onDelete}
+        />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A goal is its own row so it can hold a gesture.
+ *
+ * The list was a `.map` returning a `<button>`, which is the one element the
+ * drawer cannot live inside: its three actions are buttons themselves, and a
+ * button inside a button is not a thing the platform renders. The press target
+ * stays a button; the swipe and its drawer are the block around it.
+ */
+function GoalRow({
+  goal: g, linked, onEdit, onStatus, onDelete,
+}: {
+  goal: Goal; linked: Task[]
+  onEdit: (g: Goal) => void
+  onStatus: (g: Goal, done: boolean) => void
+  onDelete: (g: Goal) => void
+}) {
+  const reduce = useStill()
+  const swipe = useSwipe(`goal:${g.id}`, 3)
+  const done = linked.filter(t => t.status === 'done').length
+  const pct = linked.length ? done / linked.length : 0
+  const color = g.color ?? 'var(--color-fg-dim)'
+  const finished = !!g.completed_at
+
+  return (
+    <div
+      ref={swipe.bind.ref}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      style={swipe.bind.style}
+      className="relative border-b border-rule last:border-0"
+    >
+      <button onClick={() => onEdit(g)} className="w-full text-left py-3">
+        <div className="flex items-baseline gap-3">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+          {/* A finished goal reads like a finished task. Without this the Done
+              action would write a column nothing on the page draws, which is a
+              control that does nothing you can see. */}
+          <span className={`text-base grow ${finished ? 'text-fg-mute line-through' : ''}`}>
+            {g.title}
+          </span>
+          {g.target_date && <span className="text-sm text-fg-mute">by {shortDate(g.target_date)}</span>}
+          <span className="tnum text-sm text-fg-mute">{done}/{linked.length}</span>
+        </div>
+        <div className="mt-2 h-1 bg-ink-800 rounded-full overflow-hidden">
+          <motion.div
+            className="h-full rounded-full"
+            style={{ background: color }}
+            initial={reduce ? false : { width: 0 }}
+            animate={{ width: `${pct * 100}%` }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          />
+        </div>
+      </button>
+      <SwipeDrawer
+        dx={swipe.dx}
+        width={swipe.width}
+        onClose={swipe.close}
+        onDone={() => onStatus(g, true)}
+        onDelete={() => onDelete(g)}
+        status={{
+          current: finished ? 'done' : 'todo',
+          options: GOAL_CHOICES,
+          onPick: id => onStatus(g, id === 'done'),
+        }}
+      />
     </div>
   )
 }

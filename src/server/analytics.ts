@@ -14,6 +14,25 @@ type Row = Record<string, any>
 const DAY = 864e5
 const offsetOf = (c: any) => Number(c.req.query('tzOffsetMinutes') ?? 0) || 0
 
+/**
+ * The kinds that mean a piece of work stopped being outstanding.
+ *
+ * Written once, because it is asked three times — the throughput chart's
+ * `cleared`, the rhythm clock and the streak — and the three drifted apart the
+ * moment one of them was corrected. `card_acked` is conspicuously not here: the
+ * detail pane emits one automatically now, the instant a card with unread
+ * activity is opened, so counting it would let a week of only *reading* report
+ * a seven-day streak and paint the "when I actually work" clock at the hours he
+ * was reading in bed.
+ *
+ * `card_status` is not here either, and for the opposite reason: `setStatus`
+ * emits `card_done` / `card_not_mine` alongside it from one place, whether the
+ * move came from the Done button, the swipe's picker or the pane's dropdown, so
+ * counting both would count every one of them twice.
+ */
+const FINISHED_KINDS = ['task_done', 'card_done', 'card_not_mine'] as const
+const FINISHED_SQL = FINISHED_KINDS.map(k => `'${k}'`).join(',')
+
 /** Local day key (YYYY-MM-DD) for an epoch, given the client's UTC offset. */
 const dayKey = (t: number, offMin: number) => new Date(t - offMin * 60_000).toISOString().slice(0, 10)
 
@@ -48,14 +67,16 @@ analytics.get('/', c => {
   const done = ev('task_done')
   const appeared = ev('card_appeared')
   /**
-   * What actually takes a card off the list.
+   * What actually takes a card off the list, and nothing that does not.
    *
-   * This counted `card_acked`, which nothing in the product emits any more — so
-   * "Cleared" was an empty chart at every range, and "The pile" was permanently
-   * half a panel. Done and Not-mine are the two events that remove a card, and
-   * an acknowledgement still counts because it is also a card he dealt with.
+   * `FINISHED_KINDS` minus `task_done`, because this series is the card half of
+   * the picture and `done` above is the task half — the chart draws them as two
+   * lines. `card_acked` was counted here once, on the grounds that an
+   * acknowledgement is also a card he dealt with, which was harmless back when
+   * the only thing that emitted one was a notification being dismissed. Reading
+   * is not clearing.
    */
-  const cleared = [...ev('card_done'), ...ev('card_not_mine'), ...ev('card_acked')]
+  const cleared = [...ev('card_done'), ...ev('card_not_mine')]
     .sort((a, b) => a.at - b.at)
 
   /* --- throughput ------------------------------------------------------- */
@@ -126,7 +147,7 @@ analytics.get('/', c => {
   // panel the range control could not move: 7d, 30d and 90d drew a
   // character-identical clock, which reads as a control that does nothing.
   const windowDone = db.query<{ at: number }, [number]>(
-    `SELECT at FROM events WHERE kind IN ('task_done','card_acked') AND at >= ?`,
+    `SELECT at FROM events WHERE kind IN (${FINISHED_SQL}) AND at >= ?`,
   ).all(since)
   const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, value: 0 }))
   const byWeekday = Array.from({ length: 7 }, (_, d) => ({ weekday: d, value: 0 }))
@@ -142,7 +163,7 @@ analytics.get('/', c => {
   // at the range and make "best 14" become "best 7" for no reason the reader can
   // see.
   const everDone = db.query<{ at: number }, []>(
-    `SELECT at FROM events WHERE kind IN ('task_done','card_acked')`,
+    `SELECT at FROM events WHERE kind IN (${FINISHED_SQL})`,
   ).all()
   const doneDays = new Set(everDone.map(r => dayKey(r.at, off)))
   // Count back from today. An empty *today* does not break the streak — the day

@@ -112,7 +112,8 @@ export const gmail: SourceAdapter = {
         const id = th.threadId ?? th.id
         if (!id) continue
 
-        const last = th.messages?.[th.messages.length - 1]
+        const msgs = th.messages ?? []
+        const last = msgs[msgs.length - 1]
         // Through the mail normaliser's own decode, not raw. Google returns
         // HTML-escaped text and marketing mail pads it with invisible joiners,
         // and a card's title and excerpt are rendered as text on four surfaces:
@@ -157,7 +158,36 @@ export const gmail: SourceAdapter = {
           ts,
           pile: direct ? 'now' : 'open',
           refs,
-          meta: { account, thread_id: id, direct, labels: th.labelIds ?? th.labels ?? [] },
+          meta: {
+            account, thread_id: id, direct,
+            labels: th.labelIds ?? th.labels ?? [],
+            /*
+             * A later message in a thread is activity on this card, not a
+             * second card.
+             *
+             * The identity was never the problem — a Gmail row has been keyed on
+             * `account:threadId` since the first commit — but the *arrival* of a
+             * reply was invisible: the card's `ts` moved and nothing said why,
+             * so a thread that had been answered twice looked exactly like one
+             * nobody had touched. `search_threads` already returns the whole
+             * `messages` array, so the fact was in hand and thrown away. This is
+             * the list `activity` in `api.ts` counts, under the same rule it
+             * counts a Slack thread's replies by.
+             */
+            replies: Math.max(msgs.length - 1, 0),
+            messages: msgs.slice(-20).map(m => {
+              const from = m.sender ?? m.from ?? ''
+              return {
+                ts: Date.parse(m.date ?? '') || ts,
+                who: plainText(nameOf(from)) || null,
+                snippet: plainText(m.snippet ?? '').slice(0, 280),
+                // Replying to a thread is not the thread demanding something of
+                // him. Carried on the message because the desk computes activity
+                // long after the address that decided this is out of scope.
+                mine: ME.emails.includes(addrOf(from)),
+              }
+            }),
+          },
         })
       }
     }

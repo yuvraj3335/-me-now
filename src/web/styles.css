@@ -74,6 +74,17 @@
   --color-ok:   #6bd39a;
   --color-warn: #ee8b45;
   --color-bad:  #e08282;
+  /*
+    The ink that goes ON a solid `ok` or `bad` fill.
+
+    Both invert between the themes — the green is light on a dark page and dark
+    on a light one — so a single hard-coded ink on top of them is illegible in
+    exactly one theme, which is the failure `--color-on-accent` was introduced
+    to prevent. `on-bad` was already here for the danger button; the swipe
+    drawer's Done is the first solid `ok` fill in the product and is why its
+    partner exists now.
+  */
+  --color-on-ok:  #14141a;
   --color-on-bad: #14141a;
 
   /*
@@ -206,6 +217,7 @@
     /* Ink on a filled `bad` surface — the danger button. `bad` is a text colour
        everywhere else, and a destructive control that is only red *text* is
        indistinguishable from a disabled one. */
+    --color-on-ok:  #14141a;    /* 12.4:1 on ok */
     --color-on-bad: #14141a;    /*  7.6:1 on bad */
   }
 
@@ -246,6 +258,7 @@
     --color-ok:   #0d6038;      /* 7.1:1 — was #157f4d at 4.7:1, under this file's own floor */
     --color-warn: #8f3300;      /* 7.4:1 — and a different hue from accent-ink #8a5300 */
     --color-bad:  #b3261e;      /* 6.5:1 */
+    --color-on-ok:  #ffffff;    /* 7.4:1 on ok */
     --color-on-bad: #ffffff;    /* 6.7:1 on bad */
   }
 
@@ -285,6 +298,7 @@
       --color-ok:   #0d6038;
       --color-warn: #8f3300;
       --color-bad:  #b3261e;
+      --color-on-ok:  #ffffff;
       --color-on-bad: #ffffff;
     }
   }
@@ -375,6 +389,36 @@
 }
 
 @layer utilities {
+  /*
+    Which axes the browser may claim on a swipeable row.
+
+    This is a stylesheet rule rather than an inline style because neither of the
+    two facts it has to state can be written inline.
+
+    `touch-action` does not apply to a table row. The property's own "applies to"
+    list excludes table rows, row groups, table columns and column groups — so
+    `style={{ touchAction: 'pan-y' }}` on the desk's `<tr>` is dropped by every
+    browser and the row falls back to `auto`, on an iPad in landscape, which is
+    the one device the declaration is written for. It goes on the cells, which
+    are ordinary block containers and do take it; the used value is the
+    intersection down the tree, so `pan-y` on a `<td>` covers everything inside
+    it. The `<li>` on the phone takes it directly.
+
+    And framer-motion writes `touch-action: pan-x` *inline* on a `Reorder.Item`,
+    which is how a vertical drag reaches its reorder handler instead of scrolling
+    the page. `pan-x` also hands the browser the horizontal axis — the one this
+    gesture is made of — so a thumb swipe on a task row can be taken over as a
+    pan and cancelled halfway. An inline declaration is not something another
+    inline declaration can outrank, so this is the one `!important` in the
+    product, and it is here rather than anywhere else because the alternative was
+    a wrapper element between the row and its own drawer. `none` costs nothing
+    that `pan-x` was providing: vertical scrolling on those rows already belonged
+    to framer.
+  */
+  [data-swipe='pan-y'],
+  [data-swipe='pan-y'] > td { touch-action: pan-y; }
+  [data-swipe='none'] { touch-action: none !important; }
+
   /*
     The page pad, once, as one value.
 

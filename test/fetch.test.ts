@@ -10,10 +10,47 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { parseRows } from '../src/server/fetch/claude'
-import { FETCH_SCOPES, isFetchScope, whyFrom } from '../src/server/fetch'
+import { FETCH_SCOPES, isFetchScope, slackCard, whyFrom } from '../src/server/fetch'
 import { clean } from '../src/server/sources/slack'
 import { CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR } from '../src/server/env'
 import { claudeSessions, listSessions } from '../src/server/sources/claudeSessions'
+
+describe('a Fetch Slack row has exactly one thread identity', () => {
+  /** The hit `searchSlack` mints: `ref` is already the thread's parent. */
+  const hit = (text: string) => ({
+    source: 'slack' as const,
+    title: '#truto',
+    actor: 'Riya',
+    excerpt: text,
+    url: 'https://truto.slack.com/archives/C04D9HKDWAV/p1787814249215859?thread_ts=1787812499.720579',
+    ts: 1_787_814_249_215,
+    ref: 'C04D9HKDWAV:1787812499.720579',
+  })
+
+  const threadRefs = (text: string) =>
+    (slackCard(hit(text))!.refs ?? []).filter(r => r.t === 'slackthread').map(r => r.v)
+
+  test('a permalink pasted into the message is not a second conversation', () => {
+    // The exact failure `buildThreadCard` names: reading a quoted permalink as a
+    // thread reference unions this row with whatever row owns that conversation,
+    // and one desk row then speaks for two with one Done button between them.
+    expect(threadRefs(
+      'see <https://truto.slack.com/archives/C0AHHQMF08L/p1787777335863559|this> — same thing',
+    )).toEqual(['C04D9HKDWAV:1787812499.720579'])
+  })
+
+  test("the hit's own permalink does not re-add the reply's ts", () => {
+    // `url` points at the reply. Keying on it is the three-rows-per-thread bug
+    // arriving through the other door.
+    expect(threadRefs('ptal when you get a minute')).toEqual(['C04D9HKDWAV:1787812499.720579'])
+  })
+
+  test('everything else the message mentions still counts', () => {
+    const refs = slackCard(hit('TRUTO-38 is back, see trutohq/truto#2034'))!.refs ?? []
+    expect(refs.some(r => r.t === 'sentry' && r.v === 'TRUTO-38')).toBe(true)
+    expect(refs.some(r => r.t === 'gh')).toBe(true)
+  })
+})
 
 describe('only schema-valid objects are read', () => {
   test('a fenced array is unwrapped', () => {

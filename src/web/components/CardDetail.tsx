@@ -25,9 +25,22 @@
  *
  * `Open` prefers the native application. See `lib/appLinks.ts` for why the
  * browser link beside it is a visible link rather than a fallback timer.
+ *
+ * **The conversation is here now.** A Slack card carries its parent and the
+ * newest twenty replies, and a Gmail card carries its messages; this drew none
+ * of them, so a thread's row said "you were mentioned" and then showed a
+ * 400-character excerpt of the same text. Parent first, replies oldest to
+ * newest, three lines each — a Cursor root-cause post is 1,400 characters and
+ * does not get to own a 400px pane.
+ *
+ * **And opening a row acknowledges it.** The `+N` and the amber edge are the
+ * answer to "what have I not seen", so reading a row is what makes them go
+ * away. The subtlety, and it is the whole of it: the pane's *resting* state —
+ * the top row it shows before anything has been clicked — must not acknowledge
+ * anything, or the feature silently destroys itself every morning at 7am.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpRight, Check, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
@@ -35,6 +48,7 @@ import type { Card, CardPriority, CardStatus } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { actions, reload } from '../lib/api'
 import { ago, wallClock } from '../lib/time'
+import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } from '../lib/thread'
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, DateField, Select } from './primitives'
 import { cardKind, cleanChannel, KindGlyph } from './kinds'
@@ -46,12 +60,86 @@ import { cardContext, cardTitle, repoHintFor, templatesFor } from '../lib/cardCo
 import { toast } from '../lib/toast'
 
 export function CardDetail({
-  card, onClose, onMakeTask,
-}: { card: Card; onClose: () => void; onMakeTask: (c: Card) => void }) {
+  card, onClose, onMakeTask, resting,
+}: {
+  card: Card
+  onClose: () => void
+  onMakeTask: (c: Card) => void
+  /**
+   * True when this is the pane's resting state — the top row, shown because
+   * something has to be, not because anybody asked for it. A resting pane reads
+   * nothing and acknowledges nothing.
+   */
+  resting?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
 
   useEffect(() => { setCopied(false); setExpanded(false) }, [card.group_key])
+
+  /**
+   * The baseline this card was opened at, held still while it is open.
+   *
+   * The ack below moves `acked_at` to now and reloads, and `baselineOf` reads
+   * exactly that — so within one round trip every line the thread had just
+   * marked as new was older than the baseline again and went back to the muted
+   * ink. The `+3` on the row and the three brighter lines in here are supposed
+   * to be the same three messages; without freezing this, the second half of
+   * that sentence was true for about twenty milliseconds. Captured during render
+   * rather than in an effect, because the first paint is the one that has to be
+   * right, and re-derived only when the pane changes card.
+   */
+  const opened = useRef({ key: card.group_key, baseline: baselineOf(card) })
+  if (opened.current.key !== card.group_key) {
+    opened.current = { key: card.group_key, baseline: baselineOf(card) }
+  }
+
+  /**
+   * Reading a row is what clears its count.
+   *
+   * Only for a card somebody actually opened, and only when there is something
+   * to clear — a POST per row per render is not free, and an `acked_at` moved
+   * forward by merely rendering the desk is the same bug as acknowledging the
+   * resting pane, arriving by a different route.
+   */
+  useEffect(() => {
+    if (resting) return
+    if (card.activity.count <= 0) return
+    let live = true
+    void actions.ack(card.group_key).then(() => { if (live) void reload() })
+    return () => { live = false }
+  }, [card.group_key, resting, card.activity.count])
+
+  const lines = useMemo(() => threadLines(card), [card])
+
+  /**
+   * One message is an excerpt. Two is a conversation.
+   *
+   * The thread list replaces the excerpt where it draws, which is right for a
+   * thread and wrong for everything else — and everything else is most of the
+   * desk. A Datadog row, a Grafana row and the Truto Notifications digest each
+   * carry exactly one message, and each has an `excerpt` its own family built on
+   * purpose: Datadog's drops the `Attachment:` and `Notified:` lines, Grafana's
+   * drops the attachment, the digest's drops its four-line preamble, and a
+   * Sentry row's is the `_Root cause:_ / _Classification:_ / _Fix:_` triple
+   * pulled out of a wall of prose. The thread entry beside it is the raw body,
+   * clipped to 280 — so drawing a one-line "Thread" here quoted the transport
+   * back at him and threw away the curation that made the row readable.
+   *
+   * A Slack thread whose parent stands alone loses nothing either: its excerpt
+   * *is* that parent, at 400 characters with a `Show all` under it rather than
+   * 280 with no way to see the rest.
+   */
+  const conversation = lines.length > 1 ? lines : []
+
+  /**
+   * The thread read failed for this row, so what it holds is what the search
+   * returned rather than the conversation. It is said next to whichever of the
+   * two is drawing — a short thread and a thread that would not load look
+   * identical otherwise, and the shape a degraded row most often takes is one
+   * message, which is the shape the list declines to draw.
+   */
+  const partial = card.sources.some(s => s.meta?.thread_partial)
 
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload() }
 
@@ -146,8 +234,18 @@ export function CardDetail({
 
         <Facts card={card} />
 
-        {card.excerpt && (
+        <Thread card={card} lines={conversation} baseline={opened.current.baseline}
+          partial={partial} />
+
+        {/*
+          The excerpt is what a card shows when there is no conversation to show.
+          Where there is one it is the same text a second time: a Slack card's
+          excerpt is built from the thread it belongs to, and a Gmail card's is
+          the newest message's own snippet.
+        */}
+        {!conversation.length && card.excerpt && (
           <div className="mt-6">
+            {partial && <p className={`${EYEBROW} mb-1`}>partial</p>}
             <p className={`${DETAIL_BODY} whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
               {card.excerpt}
             </p>
@@ -231,6 +329,68 @@ export function CardDetail({
         )}
       </div>
     </div>
+  )
+}
+
+/* -------------------------------- thread ---------------------------------- */
+
+/**
+ * The conversation, parent first and then oldest to newest.
+ *
+ * One order, and it is the one a conversation is written in: the answer goes
+ * under the question, and after a scroll the new material is where the eye
+ * already is. Every body clips to three lines — the pane is 320–720px wide and
+ * one Cursor root-cause post is 1,400 characters, so an unclipped list is a
+ * single message and a scrollbar.
+ *
+ * Two marks, and no more. A reply that names him carries a 2px amber rule and
+ * the word `@you`, which is the answer to "why did this row light up". A reply
+ * the server counted is drawn in the brighter ink, under `isFreshLine` — the
+ * count's own two clamps, in one expression both halves read — so the `+3` on
+ * the row and the brighter lines in here cannot disagree about a message.
+ */
+function Thread({
+  card, lines, baseline, partial,
+}: { card: Card; lines: ThreadLine[]; baseline: number; partial: boolean }) {
+  if (!lines.length) return null
+  const total = replyTotal(card)
+
+  return (
+    <section className="mt-6">
+      <div className="flex items-baseline gap-2 mb-1">
+        <h3 className={EYEBROW}>Thread</h3>
+        {total > 0 && <span className={`${EYEBROW} tnum`}>{total}</span>}
+        {partial && <span className={EYEBROW}>partial</span>}
+      </div>
+      <ol>
+        {lines.map(l => (
+          <ThreadRow key={l.key} line={l} fresh={isFreshLine(l, baseline)} />
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
+  return (
+    <li
+      className={`py-2 border-b border-rule last:border-0
+        ${line.tagged ? 'border-l-2 border-l-accent pl-3' : ''}`}
+    >
+      <div className="flex items-baseline gap-2 text-sm text-fg-mute">
+        <span className="text-fg-dim truncate">{line.who ?? 'someone'}</span>
+        {line.tagged && <span className="text-accent-ink shrink-0">@you</span>}
+        <span className="ml-auto tnum shrink-0">{line.at ? ago(line.at) : ''}</span>
+      </div>
+      {/* `text-sm`, not the pane's body size, and not `DETAIL_BODY` — which
+          carries a colour of its own that would fight the one below it. A body
+          size is right for one excerpt and wrong for a list of twenty messages
+          in a 400px column. */}
+      <p className={`text-sm whitespace-pre-wrap line-clamp-3
+                     ${fresh ? 'text-fg-dim' : 'text-fg-mute'}`}>
+        {line.text}
+      </p>
+    </li>
   )
 }
 

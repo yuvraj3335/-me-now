@@ -102,6 +102,18 @@ export const SLACK_ALERT_CHANNELS: AlertChannel[] = [
   { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
 ]
 
+/**
+ * How many threads one poll is allowed to read in full.
+ *
+ * Each read is a round trip, and a fortnight of mentions is a bounded but not
+ * tiny number of distinct conversations. The ones that need it most go first —
+ * a thread whose parent the search did not return cannot be titled without one
+ * — so the cap degrades reply counts on the oldest threads rather than titles
+ * on the newest. Twenty covers every measured poll on this deployment with room
+ * over.
+ */
+export const SLACK_THREAD_READS = num('WAKE_SLACK_THREAD_READS', 20)
+
 /** Preferred over `find_organizations`, which costs a round trip to learn one word. */
 export const SENTRY_ORG = str('WAKE_SENTRY_ORG', 'truto')
 

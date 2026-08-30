@@ -5,7 +5,7 @@ import { ADAPTERS, ingest } from './ingest'
 import { fetchStatus, startFetch, isFetchScope } from './fetch'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { CARD_PRIORITIES, CARD_STATUSES, type CardPriority, type CardStatus } from './sources/types'
-import { readThread } from './sources/slack'
+import { readThread, slackTsToMs } from './sources/slack'
 import { sessionExcerpt } from './sources/claudeSessions'
 import { getThread } from './mail/service'
 import { analytics } from './analytics'
@@ -22,7 +22,121 @@ export const api = new Hono()
 const j = (v: string | null) => { try { return v ? JSON.parse(v) : {} } catch { return {} } }
 const bad = (m: string) => ({ error: m })
 
+/** An epoch a client sent, or null. A timestamp that is not a number is not one. */
+const num = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null
+
 type Row = Record<string, any>
+
+/* -------------------------------- activity ------------------------------- */
+
+/**
+ * What has landed on a thing since he last looked at it.
+ *
+ * One rule, computed here and nowhere else, because the badge and the highlight
+ * are the same fact: `+N` renders iff `count > 0` and a row is marked iff
+ * `count > 0`, so `+2` and the amber edge can never disagree about how much is
+ * new. A second implementation in the browser is how they would.
+ */
+export type Activity = {
+  /** Messages on this thing newer than the baseline, excluding his own. */
+  count: number
+  /** He was named in one of them. */
+  tagged: boolean
+  /** When the newest of them landed. */
+  at: number | null
+}
+
+/** One thing that happened, from whichever member of the group carries it. */
+type Event = { at: number; tagged: boolean; mine: boolean }
+
+/**
+ * Slack stamps a ts string ("1787812499.720579"); Gmail stamps epoch ms. Both
+ * answer in ms, because the desk has one clock.
+ */
+function eventMs(ts: unknown): number | null {
+  if (typeof ts === 'number') return Number.isFinite(ts) ? ts : null
+  if (typeof ts !== 'string' || !/^\d+(\.\d+)?$/.test(ts)) return null
+  return ts.includes('.') ? slackTsToMs(ts) : Number(ts)
+}
+
+/**
+ * Everything that happened on a group, from every member of it.
+ *
+ * Three sources of events, and the union really is a union: a Slack card's own
+ * `ts` is its newest message, which is also an entry in `meta.thread`, and
+ * counting both would double every fresh reply. So events are keyed by *when*,
+ * and one marked as his own wins the key — a card timestamp carries no author,
+ * and "he replied at 14:32" must not become "something arrived at 14:32".
+ *
+ * Two things bound what a member is allowed to contribute, and both of them are
+ * the same sentence said twice: **nothing a card brought with it when it arrived
+ * is something he has missed.**
+ *
+ *   * A member's own history counts only from the moment *that member* landed,
+ *     not from the moment the group did. A Slack thread that merges into a pull
+ *     request's group inherits a `first_seen_at` from weeks ago, and without
+ *     this every one of its twelve replies counted at once, in a single poll,
+ *     for a conversation he had never been shown.
+ *   * A member's own `ts` is an event only on the poll it *arrived* on. It is
+ *     there to say "a second source landed on this", and a landing happens once.
+ *     Left ungated it also fired every time a timestamp merely moved forward —
+ *     and a Claude session's `ts` is the transcript's mtime and a `author:me`
+ *     pull request's is its `updated_at`, so his own work came back to him as an
+ *     amber edge and a `+1` reading "new since you last looked".
+ */
+function eventsOf(members: Row[], baseline: number): Event[] {
+  const byAt = new Map<number, Event>()
+  const add = (e: Event) => {
+    const prev = byAt.get(e.at)
+    if (!prev) { byAt.set(e.at, e); return }
+    byAt.set(e.at, { at: e.at, tagged: prev.tagged || e.tagged, mine: prev.mine || e.mine })
+  }
+
+  for (const m of members) {
+    const arrived = typeof m.first_seen_at === 'number' ? m.first_seen_at : baseline
+    /*
+     * A second source landing on a thing already on the desk is activity too.
+     *
+     * Stamped at the member's own `ts` while that is newer than the baseline,
+     * because that timestamp is usually also an entry in the member's `thread`
+     * and the two must collapse to one event rather than count the same reply
+     * twice. When it is older, the landing is stamped at the moment it *landed*
+     * instead — `activityOf` drops everything at or before the baseline, so a
+     * Sentry issue whose `ts` is a last-seen from two days ago merged into
+     * today's Slack thread contributed nothing at all: no `+1`, no amber edge,
+     * and nothing anywhere saying a second system now points at that row.
+     */
+    if (arrived > baseline) add({ at: m.ts > baseline ? m.ts : arrived, tagged: false, mine: false })
+
+    const since = Math.max(baseline, arrived)
+    const meta = j(m.meta)
+    for (const key of ['thread', 'messages'] as const) {
+      const list = meta[key]
+      if (!Array.isArray(list)) continue
+      for (const e of list) {
+        const at = eventMs(e?.ts)
+        if (at === null || at <= since) continue
+        add({ at, tagged: !!e?.tagged, mine: !!e?.mine })
+      }
+    }
+  }
+  return [...byAt.values()]
+}
+
+/**
+ * The baseline is when he last acknowledged this, or when it first appeared —
+ * so a thread that already had ten replies on it the moment it arrived is not
+ * ten things he has missed.
+ */
+function activityOf(members: Row[], baseline: number): Activity {
+  const fresh = eventsOf(members, baseline).filter(e => !e.mine && e.at > baseline)
+  return {
+    count: fresh.length,
+    tagged: fresh.some(e => e.tagged),
+    at: fresh.length ? Math.max(...fresh.map(e => e.at)) : null,
+  }
+}
 
 /**
  * Cards grouped into the dedup unit the UI actually renders.
@@ -74,11 +188,13 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
      * it is still the right tiebreak. It just no longer overrides the pile.
      */
     const voice = sorted.find(m => m.pile === natural) ?? sorted[0]!
+    const firstSeen = state?.first_seen_at ?? Math.min(...members.map(m => m.first_seen_at))
 
     out.push({
       group_key,
       pile: computed,
       status: statusOf(state),
+      activity: activityOf(members, state?.acked_at ?? firstSeen),
       priority: (state?.priority ?? PRIORITY_NORMAL) as CardPriority,
       due_at: state?.due_at ?? null,
       title: voice.title,
@@ -90,11 +206,18 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
       url: voice.url,
       kind: voice.kind,
       ts: Math.max(...members.map(m => m.ts)),
-      first_seen_at: state?.first_seen_at ?? Math.min(...members.map(m => m.first_seen_at)),
+      first_seen_at: firstSeen,
       meta: j(voice.meta),
       sources: sorted.map(m => ({
         source: m.source, kind: m.kind, url: m.url, ts: m.ts, title: m.title,
         actor: m.actor, who: m.who ?? null, account: m.account, why: m.why, meta: j(m.meta),
+        // When *this* member landed, which is not when the group did. The pane
+        // marks a message as new against the same floor `activityOf` counts
+        // against, and that floor is per-member: a Slack thread merging into a
+        // pull request's group inherits a `first_seen_at` from weeks ago, and
+        // without this the pane drew all twelve of its pre-existing replies as
+        // new beside a row saying `+0`.
+        first_seen_at: m.first_seen_at,
       })),
       state: state
         ? {
@@ -328,17 +451,31 @@ function setStatus(group: string, next: CardStatus, undoAs?: string): CardStatus
 /**
  * Acknowledge: I have seen this, stop telling me about it.
  *
- * It promotes a card that had not been started, and only that one. An ack on
- * something already in review must not demote it — the ack is about the
- * notification, and the status is about the work.
+ * It moves the baseline `activity` is counted from, and nothing else. It used to
+ * also promote a card nobody had started to `in_progress`, which was a fair
+ * reading while an ack was something he pressed: pressing "I have seen this" on
+ * a notification is close enough to saying he is on it.
+ *
+ * The detail pane acknowledges automatically now — that is what makes the `+N`
+ * and the amber edge go away when a row is opened — and the promotion did not
+ * survive the change of who is doing the acknowledging. `db.ts`'s migration 9
+ * refuses to read a historical `acked_at` as `in_progress` in exactly these
+ * words: an ack "was never a claim that work had begun", and `in_progress` and
+ * `in_review` "are facts only he can assert". A pane that promoted whatever it
+ * displayed would assert one of them on his behalf every time he read a reply —
+ * so a Slack thread he glanced at and left alone would drop out of the
+ * Not-started filter he uses to find the work he has not touched.
+ *
+ * This is the same correction `analytics.ts` makes one field over, and it is the
+ * same sentence: reading is not clearing, and reading is not starting either.
+ * `card_acked` is still emitted, because he did read it — it is what both
+ * response-time percentiles measure — and the Status control remains the only
+ * thing in the product that writes a status.
  */
 api.post('/cards/:group/ack', c => {
   const g = decodeURIComponent(c.req.param('group'))
-  const from = statusOf(stateRow(g))
-  const to: CardStatus = from === 'not_started' ? 'in_progress' : from
-  touchState(g, to === from ? { acked_at: now() } : { acked_at: now(), status: to })
+  touchState(g, { acked_at: now() })
   logEvent('card_acked', { group_key: g })
-  if (to !== from) logEvent('card_status', { group_key: g, meta: { from, to } })
   return c.json({ ok: true })
 })
 
@@ -579,18 +716,34 @@ api.get('/cards/:group/mail', async c => {
  */
 const ORIGIN_FIELDS = ['origin_source', 'origin_title', 'origin_why', 'origin_url', 'origin_excerpt', 'origin_meta'] as const
 
+/**
+ * `restore` is an undo putting something back, not somebody making a new thing.
+ *
+ * The swipe's Delete is a real delete — there is no soft-delete column on a task
+ * or a goal — so its undo has to re-create the row, and two things follow from
+ * that, both of them honesty rather than convenience. `started_at` and
+ * `completed_at` are normally *derived*, by `PATCH`, from a status transition,
+ * so a restore that could only say `status: 'done'` came back finished with no
+ * finish time and sorted below tasks completed weeks earlier in a list ordered
+ * by exactly that column. And `task_created` is a throughput measurement:
+ * counting an undo as a creation makes the product report work that never
+ * happened.
+ */
+const restoring = (b: Row) => b.restore === true
+
 api.post('/tasks', async c => {
   const b = await c.req.json<Row>()
   if (!b.title?.trim()) return c.json(bad('title required'), 400)
   const id = uid()
   db.query(
     `INSERT INTO tasks (id, title, detail, status, goal_id, source_card_group, due_at, color, sort,
-                        created_at, updated_at, ${ORIGIN_FIELDS.join(', ')})
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+                        created_at, updated_at, started_at, completed_at, ${ORIGIN_FIELDS.join(', ')})
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id, b.title.trim(), b.detail ?? null, b.status ?? 'todo', b.goal_id ?? null,
     b.source_card_group ?? null, b.due_at ?? null, b.color ?? null,
     b.sort ?? -now(), now(), now(),
+    num(b.started_at), num(b.completed_at),
     b.origin_source ?? null, b.origin_title ?? null, b.origin_why ?? null,
     b.origin_url ?? null,
     // Clipped here rather than trusted: it is provider text on its way into a
@@ -598,7 +751,7 @@ api.post('/tasks', async c => {
     typeof b.origin_excerpt === 'string' ? b.origin_excerpt.slice(0, 600) : null,
     b.origin_meta ? JSON.stringify(b.origin_meta).slice(0, 2_000) : null,
   )
-  logEvent('task_created', { task_id: id, group_key: b.source_card_group ?? null })
+  if (!restoring(b)) logEvent('task_created', { task_id: id, group_key: b.source_card_group ?? null })
   return c.json(db.query(`SELECT * FROM tasks WHERE id = ?`).get(id))
 })
 
@@ -667,10 +820,16 @@ api.post('/goals', async c => {
   const b = await c.req.json<Row>()
   if (!b.title?.trim()) return c.json(bad('title required'), 400)
   const id = uid()
-  db.query(`INSERT INTO goals (id, title, detail, color, target_date, sort, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?)`)
-    .run(id, b.title.trim(), b.detail ?? null, b.color ?? null, b.target_date ?? null, b.sort ?? -now(), now(), now())
-  logEvent('goal_created', { meta: { id } })
+  db.query(`INSERT INTO goals (id, title, detail, color, target_date, sort, created_at, updated_at, completed_at)
+            VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(
+      id, b.title.trim(), b.detail ?? null, b.color ?? null, b.target_date ?? null,
+      // A restore keeps its place in the list. Defaulting to `-now()` put an
+      // undone delete at the head of `ORDER BY sort`, above goals it had sat
+      // under for weeks — which is the undo moving something it did not touch.
+      b.sort ?? -now(), now(), now(), num(b.completed_at),
+    )
+  if (!restoring(b)) logEvent('goal_created', { meta: { id } })
   return c.json(db.query(`SELECT * FROM goals WHERE id = ?`).get(id))
 })
 

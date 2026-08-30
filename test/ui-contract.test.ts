@@ -1075,3 +1075,398 @@ describe('the desk shows four columns and the alert channels are really read', (
     expect(true).toBe(true)
   })
 })
+
+/* ------------------------ one row per thread, and the swipe ---------------- */
+
+describe('the count and the highlight are one fact', () => {
+  const table = read('src/web/components/CardTable.tsx')
+
+  test('both are keyed on the same expression', () => {
+    // `+2` and the amber edge answer the same question, so they are drawn from
+    // the same predicate. Two predicates is how they come to disagree, and a
+    // row wearing an edge with no number on it is unreadable.
+    const uses = [...table.matchAll(/card\.activity\.count\s*(?:>|<=)\s*0/g)]
+    expect(uses.length, 'the badge and the edge stopped sharing a predicate')
+      .toBeGreaterThanOrEqual(3)
+    expect(table, 'the edge is no longer the 2px inset the docblock reserved')
+      .toMatch(/inset 2px 0 0 var\(--color-accent\)/)
+  })
+
+  test('the browser never recomputes what the server counted', () => {
+    // The whole reason the number is computed server-side is that a second
+    // implementation would drift. Arithmetic on it here is that second
+    // implementation arriving one operator at a time.
+    for (const f of web) {
+      expect(read(f), `${f}: the activity count is being recomputed`)
+        .not.toMatch(/activity\.count\s*[+\-*/]/)
+      expect(read(f), `${f}: the activity count is being assigned`)
+        .not.toMatch(/activity\.count\s*=[^=]/)
+    }
+  })
+
+  test('being named changes the word and not the number', () => {
+    expect(table, 'the tagged flag started deciding whether the edge is drawn')
+      .not.toMatch(/activity\.tagged[^\n]*inset 2px/)
+  })
+
+  test("the reply total is the source's, not the array's length", () => {
+    // Only the newest twenty replies are stored and Slack's own header carries
+    // the real total, so counting the array would report a long thread as short.
+    const thread = read('src/web/lib/thread.ts')
+    expect(thread.slice(thread.indexOf('export function replyTotal')),
+      'the reply total went back to counting what was kept').not.toMatch(/\.length/)
+  })
+})
+
+describe('reading a row is what clears it', () => {
+  const detail = read('src/web/components/CardDetail.tsx')
+  const home = read('src/web/pages/Home.tsx')
+
+  test('the pane acknowledges a card somebody opened', () => {
+    expect(detail, 'the detail stopped acknowledging anything').toContain('actions.ack(')
+  })
+
+  test('the resting pane acknowledges nothing', () => {
+    // This is the subtlety the whole feature turns on. The pane shows the top
+    // row before anything is clicked, every morning — if that counts as reading
+    // it, the `+N` and the edge are cleared by the desk loading, and the feature
+    // silently destroys itself at 7am with nothing to see.
+    const effect = detail.slice(detail.indexOf('if (resting) return'))
+    expect(effect.slice(0, 400), 'the resting guard is gone from the acknowledgement')
+      .toContain('actions.ack(')
+    expect(detail, 'the pane no longer knows whether it was asked for')
+      .toMatch(/resting\?: boolean/)
+    // `!selected`, not `!selectedKey`: `shown` also falls back to the top row
+    // when the key in the URL names a card that is no longer on the desk — one
+    // he finished, or one a poll swept out from under the open pane — and the
+    // key alone cannot tell that apart from a card he is actually reading.
+    expect(home, 'the desk stopped telling the pane it is resting')
+      .toMatch(/resting=\{!selected\}/)
+    expect(home, 'the resting flag went back to reading the URL rather than the row')
+      .not.toMatch(/resting=\{!selectedKey\}/)
+  })
+
+  test('and the phone sheet says it too', () => {
+    // The sheet is gated on `selectedKey`, which is still set in every case
+    // `shown` falls back to the top row — so a `CardDetail` rendered here
+    // without `resting` acknowledges a card nobody opened, at the width he
+    // actually reads on. Every viewport below the pane width takes this path.
+    const sheet = home.slice(home.indexOf('function PushDetail('))
+    expect(sheet, 'the sheet stopped passing the flag through to the detail')
+      .toMatch(/<CardDetail[^>]*resting=\{resting\}/)
+    expect(home, 'the desk stopped telling the sheet it is resting')
+      .toMatch(/<PushDetail card=\{shown\} resting=\{!selected\}/)
+  })
+
+  test('nothing else on the desk acknowledges anything', () => {
+    // A row rendering is not a row being read, and neither is a list scrolling
+    // past one.
+    expect(home, 'the desk page acknowledges cards by itself').not.toContain('actions.ack(')
+    expect(read('src/web/components/CardTable.tsx'), 'a row acknowledges itself')
+      .not.toContain('actions.ack(')
+  })
+
+  test('an ack is not a card cleared', () => {
+    // The pane acknowledges automatically now, so counting one as throughput
+    // reports a thread still sitting on the desk as work that left it.
+    const analytics = read('src/server/analytics.ts')
+    const cleared = analytics.slice(analytics.indexOf('const cleared ='))
+    expect(cleared.slice(0, 200), 'reading a row went back to counting as clearing it')
+      .not.toContain('card_acked')
+  })
+})
+
+describe('a row can be acted on without being opened', () => {
+  const swipe = read('src/web/components/swipe.tsx')
+  const css = read('src/web/styles.css')
+
+  test('every row with a status has the same three actions', () => {
+    for (const f of ['src/web/components/CardTable.tsx', 'src/web/pages/Work.tsx']) {
+      expect(read(f), `${f}: rows here have no drawer`).toContain('<SwipeDrawer')
+    }
+    // Words, not glyphs. A thumb-sized box with a picture in it is a guess.
+    expect(swipe).toMatch(/label="Done"/)
+    expect(swipe).toMatch(/label="Status"/)
+    expect(swipe).toMatch(/label="Delete"/)
+  })
+
+  test('the drawer is not rendered while it is shut', () => {
+    // Not at `opacity: 0` and not at `width: 0` with live buttons inside it:
+    // `group-hover` never fires on touch, so that shape is a control which is
+    // permanently invisible and permanently tappable.
+    expect(swipe, 'the drawer renders while the row is closed')
+      .toMatch(/if \(dx === 0\) return null/)
+    for (const f of web) {
+      expect(read(f), `${f}: a swipe action is hidden behind opacity`)
+        .not.toMatch(/opacity-0\s+group-hover:opacity-100/)
+    }
+  })
+
+  test('the gesture works with a trackpad as well as a thumb', () => {
+    // React attaches wheel listeners passively and a passive listener cannot
+    // `preventDefault`, so without the manual binding the same two fingers that
+    // open the drawer also trigger the browser's back gesture and the reader
+    // leaves Wake.
+    expect(swipe, 'the horizontal wheel binding is gone')
+      .toMatch(/addEventListener\('wheel',[^)]*\{ passive: false \}/)
+    expect(swipe, 'the pointer binding stopped being pointer-type agnostic')
+      .toMatch(/onPointerDown/)
+
+    /*
+     * And its settle timer does not get to overrule a row that opened after it.
+     *
+     * A wheel has no `pointerup`, so the end of one is a 120ms gap — extended by
+     * every frame of macOS momentum. The wheel path publishes on its *first*
+     * engaged frame, so by the time the timer lands another row may legitimately
+     * own the store: flick one row half-open, flick the next, and the first
+     * row's timer would shut the drawer under the thumb, or steal back the key
+     * the desk hands the keyboard to.
+     */
+    const settle = swipe.slice(swipe.indexOf('const end = () => {'))
+    expect(settle.slice(0, 1200), 'the wheel settle timer publishes over whatever is open now')
+      .toMatch(/if \(openSwipeKey\(\) !== key\)/)
+  })
+
+  test('a swipe is not a tap, and the page still scrolls', () => {
+    expect(swipe, 'a gesture no longer suppresses the click it produced')
+      .toMatch(/onClickCapture/)
+    expect(swipe, 'the swipe layer stopped yielding the vertical axis')
+      .toMatch(/touch: SwipeTouch = 'pan-y'/)
+
+    /*
+     * And the declaration has to reach an element that can take it.
+     *
+     * `touch-action` does not apply to a table row — rows, row groups, columns
+     * and column groups are excluded by the property itself — so an inline
+     * `touchAction` on the desk's `<tr>` is dropped by every browser while a
+     * test happily pins the string. It lives in the stylesheet, on the cells,
+     * and the rows carry the attribute that selects it.
+     */
+    expect(
+      swipe.slice(swipe.indexOf('const bind: SwipeBind')),
+      'the touch policy went back to an inline style on a <tr>',
+    ).not.toMatch(/touchAction/)
+    expect(css, 'the swipe rows lost their touch-action rule')
+      .toMatch(/\[data-swipe='pan-y'\],\s*\n\s*\[data-swipe='pan-y'\] > td \{ touch-action: pan-y; \}/)
+    // Every element that takes the gesture, not one per file: the attribute is
+    // what selects the rule, so an element bound to the pointer handlers without
+    // it is an element whose touch policy is silently `auto`.
+    for (const f of ['src/web/components/CardTable.tsx', 'src/web/pages/Work.tsx']) {
+      const src = read(f)
+      const bound = src.split("data-swipe={swipe.bind['data-swipe']}").length - 1
+      const rows = src.split('swipe.bind.onPointerDown').length - 1
+      expect(bound, `${f}: ${rows - bound} swipeable element(s) declare no touch policy`).toBe(rows)
+      /*
+       * And the same totality for the gesture's own style, which is where
+       * `user-select: none` lives while the drawer is moving. The single
+       * `removeAllRanges()` at engage clears only what the first twelve pixels
+       * selected; without the style the rest of a mouse drag highlights the
+       * row's title and detail blue under the open drawer, and leaves them
+       * highlighted after the button comes up. `Reorder.Item` spreads a given
+       * style before adding its own `x`/`y`/`zIndex`, so it takes this too.
+       */
+      // Counted on the reference rather than on one spelling: the desk's phone
+      // row spreads it beside the amber edge, which is still the gesture's style
+      // reaching the element.
+      const styled = src.split('swipe.bind.style').length - 1
+      expect(styled, `${f}: ${rows - styled} swipeable element(s) can be text-selected mid-drag`)
+        .toBe(rows)
+    }
+
+    /*
+     * The Work page's draggable rows are the exception, and it has to stay
+     * deliberate — as does the fact that it applies to those rows only.
+     *
+     * framer owns a `Reorder.Item`'s vertical axis for drag-to-reorder and
+     * writes `pan-x` inline to get it, so writing `pan-y` over that would kill
+     * reordering while still looking like it works. But `pan-x` also hands the
+     * browser the horizontal axis — the one the swipe is made of — so the row
+     * asks for `none`, and the rule needs `!important` to outrank an inline
+     * style.
+     *
+     * A static row — the Done list — is not a `Reorder.Item`. Nothing writes
+     * `pan-x` on it and nothing catches a vertical drag, so `none` there takes
+     * the page's scroll away and hands it to nobody: a thumb dragging up the
+     * Done list moves nothing at all. `none` is conditional on being draggable
+     * for exactly that reason.
+     */
+    expect(read('src/web/pages/Work.tsx'), 'the task row gave an axis back to the browser')
+      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3, isStatic \? 'pan-y' : 'none'\)/)
+    expect(css, "the task row's touch policy stopped outranking framer's inline one")
+      .toMatch(/\[data-swipe='none'\] \{ touch-action: none !important; \}/)
+  })
+
+  test('exactly one row is open, whichever input opened it', () => {
+    /*
+     * Two ways for the store to fall out of step with what is on screen, and
+     * both of them were live.
+     *
+     * The wheel path moved a row's drawer on the first event and only published
+     * to the store after a 120ms idle timer, so two rows sat fully open beside
+     * each other for the length of a trackpad gesture plus all of macOS's
+     * momentum. And nothing released the key when the row holding it unmounted —
+     * so opening a drawer on Work with a trackpad (no `pointerdown` anywhere)
+     * and then navigating away left `openKey` set for the rest of the session,
+     * which is what the desk checks before every keyboard shortcut: j, k, Enter,
+     * e and Escape dead, with no drawer on screen to explain it.
+     */
+    const wheel = swipe.slice(swipe.indexOf('const onWheel'), swipe.indexOf('const bind'))
+    expect(wheel, 'the wheel path went back to publishing only when the fingers stop')
+      .toMatch(/setOpenSwipe\(key\)\s*\n\s*put\(next\)/)
+    expect(swipe, 'a row that unmounts no longer releases the drawer it was holding')
+      .toMatch(/if \(openSwipeKey\(\) === key\) setOpenSwipe\(null\)/)
+    expect(read('src/web/pages/Home.tsx'), 'the desk keyboard stopped yielding to an open drawer')
+      .toContain('if (openSwipeKey()) return')
+
+    // And the wheel engages on the same 12px the finger does. A trackpad's
+    // vertical scroll decelerates through frames where `deltaY` has decayed to
+    // zero and a pixel of horizontal residue is left; without a threshold each
+    // one opened whichever row the cursor was over by a pixel.
+    expect(wheel, 'the wheel path opens a drawer on a pixel of scroll drift')
+      .toMatch(/travelled < SWIPE_ENGAGE_PX/)
+  })
+
+  test('every option in the status picker is a target, not a word', () => {
+    // Sized by its label alone, `Done` is four characters — a 36px box, the
+    // narrowest interactive thing in the product, sitting immediately left of
+    // `Won't do`, which takes the card off the desk.
+    expect(swipe.slice(swipe.indexOf('if (picking && status)')).slice(0, 1400),
+      'the picker went back to label-width targets on a phone').toContain('min-w-11')
+  })
+
+  test('the drawer paints under the header it scrolls past', () => {
+    // Two positioned elements at one z-index in one stacking context paint in
+    // tree order, and a `<tbody>` comes after a `<thead>` — so an open drawer
+    // painted its solid 264px block over Title / Status / Kind / Due as its row
+    // scrolled up under the sticky header.
+    expect(read('src/web/components/CardTable.tsx'),
+      "the sticky header dropped back to the drawer's own layer").toMatch(/sticky top-0 z-20/)
+    expect(swipe, 'the drawer climbed above the header').toMatch(/right-0 z-10/)
+  })
+
+  test('the picker offers what the row can actually be', () => {
+    // Five for a card, three for a task, two for a goal — and all of them from
+    // the one label table, so the product cannot grow a second vocabulary and a
+    // picker cannot offer a value the route refuses.
+    expect(read('src/web/components/CardTable.tsx'), 'the card picker stopped using the shared five')
+      .toMatch(/STATUS_ORDER\.map/)
+    const work = read('src/web/pages/Work.tsx')
+    expect(work, 'the task picker invented its own labels').toContain('STATUS_LABEL.not_started')
+    expect(work, 'the task picker offered a state a task cannot be in')
+      .toMatch(/const TASK_CHOICES = \[\s*\n\s*\{ id: 'todo'/)
+  })
+
+  test("delete on a card is the dismissal Wake already had", () => {
+    // A red button that irreversibly destroyed a card would be the only
+    // irreversible action in the product. On a card `Delete` sets `Won't do`,
+    // which takes it off the desk, keeps it reachable through the Status filter,
+    // and undoes through the same record every other status write uses.
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'the swipe grew a destructive delete for cards')
+      .toMatch(/onDelete: \(\) => actions\.onStatus\(card, 'wont_do'\)/)
+  })
+})
+
+describe('the thread is legible in a 320px pane', () => {
+  const detail = read('src/web/components/CardDetail.tsx')
+  const row = detail.slice(detail.indexOf('function ThreadRow('))
+
+  test('every body clips to three lines', () => {
+    // One Cursor root-cause post is 1,400 characters. Unclipped, the pane is one
+    // message and a scrollbar.
+    expect(row, 'a reply body can own the whole pane again').toContain('line-clamp-3')
+  })
+
+  test('a reply that names him says so', () => {
+    expect(row, 'the mark that explains why a row lit up is gone').toContain('@you')
+    expect(row, 'the amber rule on a naming reply is gone').toContain('border-l-2 border-l-accent')
+  })
+
+  test('the fresh marks survive the ack that clears the count', () => {
+    /*
+     * Opening a card posts `/ack` and reloads, and `baselineOf` reads exactly
+     * the `acked_at` that write moves — so within one round trip every line the
+     * thread had just drawn in the brighter ink was older than the baseline
+     * again and went back to muted. The pane's own promise is that the `+3` on
+     * the row and the three brighter lines in here are the same three messages;
+     * unfrozen, the second half of it was true for about twenty milliseconds.
+     */
+    expect(detail, 'the thread baseline moved with the ack again')
+      .toMatch(/const opened = useRef\(\{ key: card\.group_key, baseline: baselineOf\(card\) \}\)/)
+    expect(detail, 'the thread went back to reading the live baseline')
+      .toMatch(/<Thread card=\{card\} lines=\{conversation\} baseline=\{opened\.current\.baseline\}/)
+    const thread = detail.slice(detail.indexOf('function Thread('), detail.indexOf('function ThreadRow('))
+    expect(thread, 'the thread recomputed a baseline of its own').not.toMatch(/baselineOf\(/)
+  })
+
+  test('a degraded row says so wherever it draws', () => {
+    /*
+     * The mark used to live only inside the thread list, and the list only draws
+     * at two messages or more — while the shape a degraded row most often takes
+     * is exactly one: he is named in a reply, the read failed, and the search
+     * returned that one hit. So the one case the mark was written for was the
+     * one case it could not render in, and a thread that would not load looked
+     * identical to a short one.
+     */
+    expect(detail, 'the partial mark went back inside the thread list')
+      .toMatch(/const partial = card\.sources\.some/)
+    const excerpt = detail.slice(detail.indexOf('{!conversation.length && card.excerpt'))
+    expect(excerpt.slice(0, 400), 'an excerpt-only row stopped saying its thread would not load')
+      .toContain('{partial && ')
+  })
+
+  test('the conversation is not printed twice', () => {
+    // A Slack card's excerpt is built from the thread it belongs to and a Gmail
+    // card's is its newest message's snippet, so drawing both is the same text
+    // above itself.
+    expect(detail, 'the excerpt came back on a card that already shows its thread')
+      .toMatch(/\{!conversation\.length && card\.excerpt && \(/)
+  })
+
+  test('but one message is an excerpt, not a thread of one', () => {
+    // Every single-message alert row — Datadog, Grafana, the digest — carries an
+    // `excerpt` its own family curated: the transport lines dropped, or the
+    // triage triple lifted out of the prose. The thread entry beside it is the
+    // raw body at 280 characters. Drawing the list for one line threw the
+    // curation away and quoted `Attachment:` back at him.
+    expect(detail, 'a one-message card draws a thread again')
+      .toMatch(/const conversation = lines\.length > 1 \? lines : \[\]/)
+    expect(detail, 'the thread stopped reading the gated list')
+      .toMatch(/<Thread card=\{card\} lines=\{conversation\}/)
+  })
+})
+
+describe('a thread is one row, all the way down', () => {
+  test('the card is keyed on the parent the permalink names', () => {
+    const slack = read('src/server/sources/slack.ts')
+    // The one line the whole thing turned on: `thread_ts: hit.ts` made every
+    // message its own thread.
+    expect(slack, 'the bucket went back to keying on the message rather than the thread')
+      .toMatch(/const parent = parentTs\(h\)\s*\n\s*const key = `\$\{h\.channelId\}:\$\{parent\}`/)
+    expect(slack, 'a thread card stopped storing its parent')
+      .toMatch(/thread_ts: b\.parent/)
+  })
+
+  test('the whole conversation is read for references, not just the parent', () => {
+    // A `TRUTO-38` posted in a reply is what unions the row with the Sentry
+    // issue, and it is the reason collapsing a thread has to read all of it.
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack.slice(slack.indexOf('export function buildThreadCard')),
+      'references went back to being read off the parent alone')
+      .toMatch(/extractRefs\(said\.join\('\\n'\)\)/)
+  })
+
+  test('a pasted permalink is not a second identity for the row', () => {
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack.slice(slack.indexOf('export function buildThreadCard')),
+      'a quoted Slack link can union two unrelated conversations again')
+      .toMatch(/\.filter\(r => r\.t !== 'slackthread'\)/)
+  })
+
+  test('and the state he set follows the thread rather than being stranded', () => {
+    // The identity changed under the data, so a Done pressed on what turned out
+    // to be a reply has to move with it.
+    expect(read('src/server/db.ts'), 'the rekey migration is gone')
+      .toContain('export function rekeySlackThreadGroups')
+  })
+})

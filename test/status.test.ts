@@ -92,7 +92,20 @@ describe('the events Pulse is made of survive the move to a column', () => {
     expect(kinds()).toEqual([])
   })
 
-  test('an ack promotes a card nobody started, and demotes nothing', async () => {
+  test('an ack moves the baseline and no status at all', async () => {
+    // The ack used to promote a card nobody had started, which was fair while
+    // he was the one pressing it. The detail pane acknowledges automatically now
+    // — it is what clears the `+N` — so a promotion here would have the product
+    // asserting "work has begun" every time he read a reply, about a card he had
+    // done nothing to. `db.ts`'s migration 9 refuses to read an `acked_at` that
+    // way in so many words; the live route must not either.
+    await post(`/cards/${encodeURIComponent(GROUP)}/ack`)
+    expect(state().status, 'reading a card started it').toBe('not_started')
+    expect(state().acked_at, 'the ack did not move the baseline').toBeGreaterThan(0)
+    expect(kinds(), 'the ack invented a status move').toEqual(['card_acked'])
+  })
+
+  test('and it demotes nothing either', async () => {
     await setStatus('in_review')
     await post(`/cards/${encodeURIComponent(GROUP)}/ack`)
     expect(state().status, 'the ack demoted work already in review').toBe('in_review')

@@ -63,6 +63,7 @@ describe('Open launches the app, and says where the browser link is', () => {
     group_key: 'g', pile: 'now', status: 'not_started', priority: 2, due_at: null,
     title: 't', why: 'w', url: 'https://truto.slack.com/archives/C0BERTMS9K4/p1788094379882969',
     kind: 'alert', ts: 0, first_seen_at: 0, meta: {}, state: null, tasks: [],
+    activity: { count: 0, tagged: false, at: null },
     sources: [{ source: 'slack', kind: 'alert', url: '', ts: 0, title: 't', why: 'w', meta }],
   })
 

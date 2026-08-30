@@ -1049,3 +1049,182 @@ The page lives in the URL, like every other axis, so reload and Back both work.
 Mail is the exception, and it is a real one rather than an oversight: it already
 pages server-side, against a mailbox that is far too large to hold, and it
 stays that way.
+
+## 38. A thread is one row, and a swipe acts without opening it
+
+Two halves, one release, because they are the same complaint: the desk was
+showing him *messages* when what is on him is *conversations*, and the only way
+to act on one was to open it.
+
+### The desk was counting replies as work
+
+Measured on the deployed database, not inferred:
+
+| | |
+|---|---|
+| `#truto` thread `1787812499.720579` | **3 rows** |
+| `#truto` thread `1787900782.835249` | **3 rows** |
+| `#spendflo-truto` thread `1784530611.515999` | **2 rows**, parent not on the desk at all |
+
+A question and the two answers under it were three separate rows, in three
+separate places in the sort, each with its own Done button, and finishing one of
+them did nothing to the other two.
+
+The cause is one line. A Slack permalink carries the conversation it belongs to —
+
+```
+…/archives/C04D9HKDWAV/p1787812499720579?thread_ts=1787812499.720579   the parent
+…/archives/C04D9HKDWAV/p1787812964247529?thread_ts=1787812499.720579   a reply
+…/archives/C04D9HKDWAV/p1787814249215859?thread_ts=1787812499.720579   a reply
+```
+
+— and the poller was storing `meta.thread_ts` as the *message's own* ts. Every
+message was therefore its own thread. A standalone message carries a `thread_ts`
+equal to its own ts, so the rule is uniform and there is no second case:
+`parentTs = permalink.thread_ts ?? hit.ts`. Verified against all forty live rows.
+
+Cards are keyed on the parent now, so replies land on the row that already
+exists. The old rows stop being returned and are swept — but the *state* on them
+would be orphaned, and a card he marked done a week ago would come back the
+morning this shipped. Migration 12 recovers the parent from each stored card's
+own permalink and merges the state forward under the same "already handled wins"
+rule `migrateState` has always used.
+
+This is about the *mention* path only. An alert row is keyed on a monitor or a
+Sentry short id (#34), which is a different and already-correct identity, and its
+`thread_ts` still points at the newest message rather than the oldest — the row's
+identity comes from the oldest so it does not churn when Cursor follows up, and
+everything a reader sees, `Open` included, comes from the newest.
+
+The two identities do collide in exactly one place, and it is the most ordinary
+thing anyone does in an alert channel: reply under the Sentry post with
+"`@yuvraj` can you take this". A thread bucket's key and an alert card's
+`source_id` are the same string, `<channel>:<ts>`, so the mention search and the
+channel read describe one message from two sides. The alert keeps the row — it
+is the side carrying `alert`, `short_id`, `paged`, `alert_state` and the
+`sentry:TRUTO-38` reference that merges it with the Sentry API's own row — and
+the thread is folded into it, bringing the human replies, who is waiting, and
+the `@you` mark. Skipping either side instead is not neutral: skipping the alert
+made it vanish from the desk the moment a person triaged it, because the poll is
+authoritative and the sweep then marked the stored row gone.
+
+### The parent is read, not guessed
+
+He is usually named in a reply rather than in the question, so the search that
+finds a thread frequently does not contain the thing the row has to be titled
+with. One `slack_read_thread` per distinct thread answers all of it at once: the
+parent's text, `=== THREAD REPLIES (10 total) ===` as an authoritative count, and
+every reply's author and timestamp. Capped at twenty threads a poll, spent first
+on the ones whose parent we do not already hold — a thread we can title loses
+only its count, and a thread we cannot title loses the row.
+
+The read needed a parser of its own. `readThread` was handing thread markdown to
+`parseSlackResults`, which splits on `### Result N of M` — a separator that
+appears nowhere in that payload — so it had been returning an empty array for
+every thread ever read, silently. That is now three parsers for three formats,
+each written against a capture (see `FIXTURES.md`), and there is a test that
+feeds the thread payload to the search parser to prove they are not
+interchangeable.
+
+A thread read that fails degrades **one row** and says so on it with
+`meta.thread_partial`. A failed search or alert-channel read is still a failed
+poll, because a channel that did not answer is a channel whose alerts are
+missing. Those are different facts and they must not share a fate, which is why
+the thread reads are deliberately outside the settled array.
+
+"Degrades" has to mean something, though: the hits become the conversation. The
+search already returned the message that named him — that is why the row exists —
+so reading the replies off the failed read alone left the pane showing the
+question with nothing under it and no `@you` anywhere. The two sources union by
+`ts`, which also recovers a hit that fell outside a truncated read, and the mark
+is drawn beside the excerpt as well as beside the list, because one message is
+the shape a degraded row most often takes and the list declines to draw at one.
+
+### `+2`, and the amber edge, are one fact
+
+A row wears a count of the messages that landed since he last opened it —
+excluding his own, because ten of the eleven messages on that `#truto` thread
+were his and none of them are news. The badge appears when the count is above
+zero and the row's left edge goes amber under exactly the same expression, so
+they can never disagree. It is computed once, in `activityOf`, and the browser
+does no arithmetic on it at all.
+
+The browser does no arithmetic, but it does have to *draw* the same set, and
+that is one expression — `isFreshLine` — rather than a second, shorter rule at
+the one place that paints it. The pane once compared a line's timestamp to the
+baseline and nothing else, so his own replies came out in the brighter "new" ink
+beside a row reading `+0`, and a thread merging into a week-old group lit all
+twelve of its pre-existing replies. Both clamps live on the line now, which is
+why a card's `sources` carry their own `first_seen_at`.
+
+Three things bound what counts, and all three are the same sentence: nothing a
+card brought with it when it arrived is something he has missed. A member's
+history counts from when *that member* landed, not from when the group did — a
+Slack thread merging into a pull request's group inherits a `first_seen_at` from
+weeks ago. A card's own `ts` is an event only on the poll it arrived on, because
+a Claude session's `ts` is its transcript's mtime and his own work would
+otherwise come back to him as an amber edge. And events are keyed by *when*, so a
+Slack card's `ts` and the newest entry in its own thread are one event rather
+than two.
+
+Opening the row clears it. The pane's resting state — the top row it shows before
+anything is clicked — deliberately does not, and that is the whole subtlety: a
+pane that acknowledged what it happened to be displaying would clear every count
+on the desk every morning, with nothing to see.
+
+Gmail counts under the same rule from the other end. A mail thread was already
+one card, but the later messages in it were thrown away, so a conversation that
+had moved on looked exactly like one that had not. `search_threads` was already
+returning them.
+
+One consequence worth stating: an ack is no longer counted as work. That was
+harmless while nothing emitted one; now the pane emits one every time a thread
+with a reply on it is read, and a thread that gets answered on twelve different
+days would have reported twelve clears while still sitting on the desk. Pulse
+asked the same question in three places — the throughput chart's `cleared`, the
+"when I actually work" clock and the streak — so the answer is written once, as
+`FINISHED_KINDS`, or a week of only reading reports a seven-day streak with
+nothing finished.
+
+The 2px left edge is the one `CardTable`'s own docblock deleted, back for exactly
+the reason it was deleted: it used to paint every visible row, which encoded
+nothing. It paints two or three.
+
+### A swipe, because a thumb has no hover
+
+Every row that has a status slides left under a finger, a trackpad or a mouse
+drag to reveal three solid, labelled actions: `Done`, `Status`, `Delete`. Words,
+not glyphs, because a thumb-sized box with a picture in it is a guess.
+
+Two things about the implementation are not incidental. The drawer is a
+right-anchored clip window whose *width* tracks the pointer, rather than a
+translated row: a desk row is a `<tr>`, and translating its cells takes the title
+out from under the table and grows a horizontal scrollbar on a page that is
+required not to have one. And the gesture locks to whichever axis wins first, so
+the page still scrolls under a finger that is not swiping and a task can still be
+dragged up and down to reorder.
+
+`touch-action` is in the stylesheet rather than inline, and that is not taste
+either. The property does not apply to a table row at all — rows, row groups,
+columns and column groups are excluded by the property's own definition — so an
+inline `touchAction` on the desk's `<tr>` is dropped by every browser while
+looking entirely correct in the source. It goes on the cells. And a
+`Reorder.Item` writes `touch-action: pan-x` inline, which no other inline style
+can outrank, so the task row carries the one `!important` in the product.
+
+`Status` opens the five-way picker in place, from `STATUS_ORDER` (#32), so the
+control cannot offer a value the route refuses. A task gets the three it has and
+a goal the two it has, both labelled from the same table, so the product does not
+grow a second vocabulary that happens to agree today.
+
+`Delete` removes a task or a goal outright, with an undo — which, since there is
+no soft delete for either, is a re-creation carrying every field including the
+frozen provenance and the stickies. That is why `POST /tasks` and `POST /goals`
+take a `restore` flag: an undo is not work that happened, and a restored task
+that lost its `completed_at` would come back finished with no finish time and
+sort below work completed weeks earlier.
+
+On a card `Delete` sets `Won't do`, which is how Wake already dismisses work — it
+leaves the desk, stays reachable through the Status filter, and undoes. A red
+button that irreversibly destroyed a card would be the only irreversible action
+in the product, and inventing a fourth word for it would have been a fourth word.
