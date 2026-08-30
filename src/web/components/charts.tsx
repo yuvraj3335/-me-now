@@ -23,8 +23,15 @@ import { useId, useState } from 'react'
 const MARK = 'var(--color-fg-dim)'
 
 /** How few days a sparse series is allowed to compact to, and how wide one bar
- *  may be drawn in the 720-unit canvas the chart is stretched from. */
-const MIN_SLOTS = 7
+ *  may be drawn in the 720-unit canvas the chart is stretched from.
+ *
+ *  The floor was 7, which is a week, which is a number about calendars and not
+ *  about this series. A two-day extent was padded back out to seven slots and
+ *  printed `08-24 … 08-30` over two marks — the same long empty axis the
+ *  compaction exists to remove, five sevenths of the way. `compacts to its own
+ *  extent` is the rule; the floor is only here so a span of one or two still
+ *  reads as a chart rather than as a slab, and four slots does that. */
+const MIN_SLOTS = 4
 const MAX_BAR = 26
 
 /* ------------------------------ bar chart -------------------------------- */

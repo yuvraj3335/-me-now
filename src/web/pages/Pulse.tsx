@@ -72,6 +72,32 @@ export function Pulse() {
   const cleared = a.throughput.cleared.reduce((n, d) => n + d.value, 0)
 
   /**
+   * One bar is not a chart.
+   *
+   * An axis exists to put a value next to the values around it. With a single
+   * day in the window there is nothing to put it next to, so the axis is six
+   * empty slots and a label pair spanning days that hold nothing —
+   * `THROUGHPUT 08-24 … 08-30` over one 12px mark was 95% ruled paper. A series
+   * that thin is a number, and the row form the empty series already uses is
+   * where a number goes. Two days is the first window with a shape in it, and
+   * it draws.
+   *
+   * `days` reports the days that carry a value; `only` is that day when there
+   * is exactly one, so the row can say what it has rather than an em dash it
+   * would be lying with.
+   */
+  const shape = (series: Array<{ day: string; value: number }>) => {
+    const marked = series.filter(d => d.value > 0)
+    return {
+      thin: marked.length < 2,
+      value: marked.length === 1 ? `${marked[0]!.value} on ${marked[0]!.day.slice(5)}` : undefined,
+    }
+  }
+  const done = shape(a.throughput.done)
+  const appeared = shape(a.throughput.appeared)
+  const clearedShape = shape(a.throughput.cleared)
+
+  /**
    * Every series this page can draw, and whether it has anything in it.
    *
    * Built as data rather than as JSX so the two answers can be laid out
@@ -80,10 +106,11 @@ export function Pulse() {
    * full cell to print an em dash — `RESPONSE TIME —` sat beside a full-height
    * `THROUGHPUT` with 210px of nothing under it.
    */
-  const panels: Array<{ title: string; empty: boolean; node: React.ReactNode }> = [
+  const panels: Array<{ title: string; empty: boolean; value?: string; node: React.ReactNode }> = [
     {
       title: 'Throughput',
-      empty: a.throughput.done.every(d => !d.value),
+      empty: done.thin,
+      value: done.value,
       node: <Bars data={a.throughput.done} label={d => `${d.day.slice(5)} · ${d.value} done`} />,
     },
     {
@@ -91,8 +118,18 @@ export function Pulse() {
       empty: !hasTrend,
       node: <Trend data={a.responseTime.daily} format={v => duration(v)} />,
     },
-    { title: 'Arrived', empty: !arrived, node: <Bars data={a.throughput.appeared} height={96} /> },
-    { title: 'Cleared', empty: !cleared, node: <Bars data={a.throughput.cleared} height={96} /> },
+    {
+      title: 'Arrived',
+      empty: appeared.thin,
+      value: appeared.value,
+      node: <Bars data={a.throughput.appeared} height={96} />,
+    },
+    {
+      title: 'Cleared',
+      empty: clearedShape.thin,
+      value: clearedShape.value,
+      node: <Bars data={a.throughput.cleared} height={96} />,
+    },
     {
       title: 'Your rhythm',
       empty: a.rhythm.byHour.every(h => !h.value),
@@ -203,13 +240,15 @@ export function Pulse() {
 
       {/* And the ones with nothing to draw, one row each. The series is still
           named — its absence is a fact about the window — but a name and an em
-          dash is one line, not a cell. */}
+          dash is one line, not a cell. A series with a single marked day lands
+          here too, and says that day's number: it has a value, so an em dash
+          would be the one thing on this page that is not true. */}
       {quiet.length > 0 && (
         <section className="mt-8">
           {quiet.map(p => (
             <div key={p.title} className="flex items-baseline gap-2 h-11 border-b border-rule last:border-0">
               <h2 className="text-eyebrow uppercase text-fg-mute">{p.title}</h2>
-              <span className="text-sm text-fg-mute">—</span>
+              <span className="text-sm text-fg-mute">{p.value ?? '—'}</span>
             </div>
           ))}
         </section>

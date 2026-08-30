@@ -721,3 +721,33 @@ describe('a page never scrolls sideways', () => {
     expect(app, 'the Now badge lost its accent').toMatch(/bg-accent text-on-accent/)
   })
 })
+
+describe('a chart is drawn only when there is a chart to draw', () => {
+  test('a series with one marked day is a row, not an axis', () => {
+    // `THROUGHPUT`, `ARRIVED` and `CLEARED` each drew seven day-slots across
+    // 572px and painted one 12px bar at the far right. An axis exists to put a
+    // value beside the values around it; with one day there is nothing to put
+    // it beside, so it takes the same one-line row an empty series takes.
+    const pulse = read('src/web/pages/Pulse.tsx')
+    expect(pulse, 'the sparse test is gone').toMatch(/marked\.length < 2/)
+    for (const series of ['done', 'appeared', 'clearedShape']) {
+      expect(pulse, `${series} stopped asking whether it has a shape`)
+        .toMatch(new RegExp(`empty: ${series}\\.thin`))
+    }
+    // And it says its number rather than an em dash it would be lying with.
+    expect(pulse, 'a series with a value went back to printing an em dash')
+      .toMatch(/\{p\.value \?\? '—'\}/)
+  })
+
+  test('a sparse series compacts to its own extent', () => {
+    // The floor was 7 — a week, which is a fact about calendars and not about
+    // this series. A two-day extent was padded back out to seven slots and
+    // labelled `08-24 … 08-30` over two marks: the same long empty axis the
+    // compaction exists to remove, five sevenths of the way.
+    const charts = read('src/web/components/charts.tsx')
+    const m = /const MIN_SLOTS = (\d+)/.exec(charts)
+    expect(m, 'MIN_SLOTS is gone').not.toBeNull()
+    expect(Number(m![1]), 'the slot floor grew back past a short extent')
+      .toBeLessThanOrEqual(4)
+  })
+})
