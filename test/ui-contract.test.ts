@@ -487,14 +487,39 @@ describe('the hand-off has to be a real link', () => {
 
   test('Fetch takes no text from anywhere', () => {
     // The property that keeps it a collector rather than a chat box: the
-    // question is a constant. Nothing a person can type reaches the prompt, and
-    // the route takes no body at all.
+    // question is a constant. Nothing a person can type reaches the prompt.
+    //
+    // This used to be pinned as "the route reads no body at all", which was the
+    // right invariant wearing the wrong clothes. Fetch can now be scoped to one
+    // source, so the route does read a body — and the guarantee has to be
+    // stated as what it always meant: whatever comes off the wire is checked
+    // against a closed set before it reaches anything, and the prompt itself is
+    // still a constant chosen by connector. A free string would fail the second
+    // assertion below even though it passes the first.
     const orchestrator = read('src/server/fetch/index.ts')
     expect(orchestrator, 'promptFor started taking an argument other than the connector')
       .toMatch(/function promptFor\(name: Connector\)/)
+
     const api = read('src/server/api.ts')
-    const route = /api\.post\('\/fetch'[\s\S]{0,200}/.exec(api)?.[0] ?? ''
-    expect(route, 'the fetch route started reading a request body').not.toMatch(/req\.json|req\.query|req\.param/)
+    const route = /api\.post\('\/fetch'[\s\S]{0,400}?\n\}\)/.exec(api)?.[0] ?? ''
+    expect(route, 'the fetch route vanished or changed shape').toContain('startFetch')
+    expect(route, 'fetch started reading the query string, which nothing validates')
+      .not.toMatch(/req\.query|req\.param/)
+
+    // The one value it accepts is checked against the closed scope list, and
+    // checked FIRST. Asserting only that the guard is present would pass a
+    // route that ran it after the collection had already started, so this is an
+    // ordering claim rather than a presence one.
+    const guard = route.indexOf('isFetchScope(only)')
+    const start = route.indexOf('startFetch')
+    expect(guard, 'the fetch route stopped validating its body against the scope list')
+      .toBeGreaterThan(-1)
+    expect(guard, 'the scope guard runs after the collection it was meant to gate')
+      .toBeLessThan(start)
+
+    const scopes = /export const FETCH_SCOPES = \[([^\]]*)\]/.exec(orchestrator)?.[1] ?? ''
+    expect(scopes.split(',').filter(Boolean), 'the scope list is no longer a closed set of sources')
+      .toHaveLength(5)
   })
 })
 

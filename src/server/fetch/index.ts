@@ -51,6 +51,25 @@ import { reachableConnectors } from './reach'
 const CONNECTORS = ['slack', 'gmail', 'sentry', 'github'] as const
 type Connector = (typeof CONNECTORS)[number]
 
+/**
+ * One source, or all of them.
+ *
+ * Fetch collects what you are looking at. The desk's source tab already says
+ * which that is, so pressing Fetch while filtered to Slack asks Slack and
+ * nothing else -- there is no second control to find, and the button's own
+ * label names what it is about to do.
+ *
+ * `claude` is deliberately in this union although it is not a `Connector`. The
+ * Claude Code source has no pipe-2 collector at all: its cards come off this
+ * machine's own transcripts, through `ingest`. Scoping to it therefore runs
+ * pipe 1 alone and reports no connector rows, which is the honest answer rather
+ * than a fabricated empty one.
+ */
+export const FETCH_SCOPES = ['slack', 'gmail', 'sentry', 'github', 'claude'] as const
+export type FetchScope = (typeof FETCH_SCOPES)[number]
+export const isFetchScope = (v: unknown): v is FetchScope =>
+  typeof v === 'string' && (FETCH_SCOPES as readonly string[]).includes(v)
+
 export type ConnectorResult = {
   name: Connector
   /** Which route answered: Wake's own credential, the box's, or neither. */
@@ -81,9 +100,9 @@ let last: FetchReport | null = null
  * The same guard `ingest()` has. A second press is never disabled and never
  * scolded — it re-runs, dedups, and answers `0 new`, which is a useful answer.
  */
-export function fetchNow(): Promise<FetchReport> {
+export function fetchNow(only?: FetchScope): Promise<FetchReport> {
   if (running) return running
-  running = doFetch()
+  running = doFetch(only)
     .then(r => { last = r; return r })
     .finally(() => { running = null })
   return running
@@ -99,9 +118,9 @@ export function fetchNow(): Promise<FetchReport> {
  * what happened, which also means a phone that locks its screen mid-run still
  * sees the result.
  */
-export function startFetch(): { running: true } {
+export function startFetch(only?: FetchScope): { running: true } {
   // The report carries the failure; there is nothing for a rejection to reach.
-  void fetchNow().catch(() => {})
+  void fetchNow(only).catch(() => {})
   return { running: true }
 }
 
@@ -109,27 +128,36 @@ export function startFetch(): { running: true } {
 export const fetchStatus = (): { running: boolean; report: FetchReport | null } =>
   ({ running: !!running, report: last })
 
-async function doFetch(): Promise<FetchReport> {
+/** The connectors one scope asks. An unscoped Fetch asks all of them. */
+const askedBy = (only?: FetchScope): readonly Connector[] =>
+  only ? CONNECTORS.filter(c => c === only) : CONNECTORS
+
+async function doFetch(only?: FetchScope): Promise<FetchReport> {
   const t0 = Date.now()
   try {
-    return await collectAll(t0)
+    return await collectAll(t0, only)
   } catch (e) {
     // A failure is a report, not a rejection: the browser reads the report.
+    // Only the connectors this run actually meant to ask carry the error; a
+    // scoped run that blames three sources it never intended to touch is the
+    // same lie as a green sync over a channel nobody read.
     return {
       at: now(), ms: Date.now() - t0, found: 0, fresh: 0,
-      connectors: CONNECTORS.map(name => ({
+      connectors: askedBy(only).map(name => ({
         name, via: 'none' as const, ok: false, count: 0, ms: 0, error: (e as Error).message,
       })),
     }
   }
 }
 
-async function collectAll(t0: number): Promise<FetchReport> {
+async function collectAll(t0: number, only?: FetchScope): Promise<FetchReport> {
   // Pipe 1 first, so Fetch is never a worse refresh than the button it replaced.
-  await ingest().catch(() => {})
+  // Scoped too: pressing Fetch on the Slack tab must not quietly re-poll the
+  // inbox, or "fetch just this source" is only true of the half you can see.
+  await ingest(only).catch(() => {})
 
   const reach = reachableConnectors()
-  const results = await Promise.all(CONNECTORS.map(c => collect(c, reach)))
+  const results = await Promise.all(askedBy(only).map(c => collect(c, reach)))
 
   const cards = results.flatMap(r => r.cards)
   const landed = land(cards)

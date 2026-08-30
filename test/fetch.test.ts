@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { parseRows } from '../src/server/fetch/claude'
-import { whyFrom } from '../src/server/fetch'
+import { FETCH_SCOPES, isFetchScope, whyFrom } from '../src/server/fetch'
 import { clean } from '../src/server/sources/slack'
 import { CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR } from '../src/server/env'
 import { claudeSessions, listSessions } from '../src/server/sources/claudeSessions'
@@ -205,5 +205,66 @@ describe("Fetch's own runs never land back on the desk", () => {
     write(FETCH_RUN_DIR, 'aaaaaaaa-0000-0000-0000-000000000004', FETCH_PROMPT)
     write('/home/someone/work/app', 'aaaaaaaa-0000-0000-0000-000000000005', 'fix the login redirect')
     expect(listSessions().map(s => s.cwd)).toEqual(['/home/someone/work/app'])
+  })
+})
+
+/**
+ * Fetching one source rather than all of them.
+ *
+ * This shipped late, and it shipped late because nothing anywhere asserted it —
+ * the requirement was in the brief, absent from every prompt written from that
+ * brief, and therefore invisible to the review that followed. These are the
+ * assertions that would have caught its absence.
+ */
+describe('Fetch can be scoped to one source', () => {
+  test('the scope list is exactly the five sources the desk offers', () => {
+    // Not the four Fetch connectors: `claude` has no pipe-2 collector, and
+    // scoping to it is still a meaningful thing to ask for — it re-reads this
+    // machine's transcripts through pipe 1 alone.
+    expect([...FETCH_SCOPES].sort()).toEqual(['claude', 'github', 'gmail', 'sentry', 'slack'])
+  })
+
+  test('only a real source name passes the guard', () => {
+    for (const ok of FETCH_SCOPES) expect(isFetchScope(ok), ok).toBe(true)
+    for (const no of ['all', 'Slack', 'notion', '', 'slack ', '__proto__']) {
+      expect(isFetchScope(no), `${no} was accepted as a source`).toBe(false)
+    }
+    for (const no of [null, undefined, 1, {}, ['slack']]) {
+      expect(isFetchScope(no), `${JSON.stringify(no)} was accepted as a source`).toBe(false)
+    }
+  })
+
+  test('a scoped run narrows pipe 1 as well as pipe 2', () => {
+    // The half that is easy to get wrong. Scoping only the connectors would
+    // leave `ingest()` re-polling every source, so "fetch just Slack" would be
+    // true of the collector and false of the poll underneath it — and the
+    // inbox would refill on a press that said Slack.
+    const src = readFileSync('src/server/fetch/index.ts', 'utf8')
+    const body = /async function collectAll\([\s\S]*?\n\}/.exec(src)?.[0] ?? ''
+    expect(body, 'collectAll no longer exists in a readable shape').toContain('askedBy')
+    expect(body, 'a scoped Fetch still re-polls every source through ingest()')
+      .toMatch(/ingest\(only\)/)
+  })
+
+  test('a scoped run that fails blames only what it meant to ask', () => {
+    // A scoped run reporting an error against three connectors it never
+    // intended to touch is the same lie as a green sync over a channel nobody
+    // read: it makes a claim about a source that was not asked.
+    const src = readFileSync('src/server/fetch/index.ts', 'utf8')
+    const body = /async function doFetch\([\s\S]*?\n\}\n/.exec(src)?.[0] ?? ''
+    expect(body, 'doFetch vanished').toContain('connectors:')
+    expect(body, 'the failure report still names every connector, scoped or not')
+      .not.toMatch(/connectors:\s*CONNECTORS\.map/)
+  })
+
+  test('the desk scopes Fetch by the source tab, and says so on the button', () => {
+    // The affordance is the label. A control that silently changed what it did
+    // based on a filter elsewhere on the page would be a trap.
+    const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
+    const fn = /function Fetch\(\{[\s\S]*?\n\}\n/.exec(home)?.[0] ?? ''
+    expect(fn, 'Fetch stopped taking the current source').toMatch(/source:\s*SourceName\s*\|\s*'all'/)
+    expect(fn, 'Fetch stopped passing the source to the collector').toMatch(/fetchNow\(only\)/)
+    expect(fn, 'the All tab stopped meaning "everything"').toMatch(/source === 'all' \? undefined : source/)
+    expect(fn, 'the button no longer names the source it is about to ask').toContain('SOURCE_LABEL[only]')
   })
 })

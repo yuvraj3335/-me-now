@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import type { Analytics, CardPriority, CardStatus, SourceStatus, State } from './types'
+import type { Analytics, CardPriority, CardStatus, SourceStatus, State, SourceName } from './types'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
 export type ConnectStart = {
@@ -77,9 +77,9 @@ export function reload(): Promise<void> {
  */
 type FetchStatus = { running: boolean; report: import('./types').FetchReport | null }
 
-export async function fetchNow(): Promise<import('./types').FetchReport> {
+export async function fetchNow(only?: SourceName): Promise<import('./types').FetchReport> {
   const before = (await req<FetchStatus>('/fetch').catch(() => null))?.report?.at ?? 0
-  await post('/fetch')
+  await post('/fetch', only ? { only } : undefined)
   // Two minutes is past the server's own per-connector wall clock, so a run
   // that is still going at the end of it is a run that has stopped answering.
   for (let i = 0; i < 60; i++) {

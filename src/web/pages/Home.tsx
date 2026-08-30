@@ -480,7 +480,7 @@ export function Home() {
   // Nothing at all until the first read lands. A 200ms loader is worse than a
   // beat of nothing, and a sentence explaining that a page is loading is chrome
   // that teaches.
-  if (!state) return <div className="pad-x pt-4"><Header /></div>
+  if (!state) return <div className="pad-x pt-4"><Header source={filter} /></div>
 
   /**
    * A filter that matches nothing is one line.
@@ -491,7 +491,7 @@ export function Home() {
    */
   const list = (
     <div className="min-w-0 grow pad-x pb-24 lg:pb-8">
-      <Header count={rows.length} />
+      <Header count={rows.length} source={filter} />
       <SourceTabs value={filter} state={state} />
       <FilterRow query={query} due={due} pri={pri} status={status} />
 
@@ -733,12 +733,12 @@ function PushDetail({
  * The mark rides this row on a phone and nowhere else — `PageTitle` owns that
  * rule now, for all six routes rather than for the two that remembered it.
  */
-function Header({ count }: { count?: number }) {
+function Header({ count, source }: { count?: number; source: SourceName | 'all' }) {
   return (
     <header className="pt-4 pb-2 flex items-center gap-3">
       <PageTitle>Desk</PageTitle>
       {count !== undefined && <span className="tnum text-sm text-fg-mute">{count}</span>}
-      <span className="ml-auto shrink-0"><Fetch /></span>
+      <span className="ml-auto shrink-0"><Fetch source={source} /></span>
     </header>
   )
 }
@@ -891,14 +891,30 @@ function FilterRow({
  * chrome that teaches. The label swaps to `Fetching` and the control does not
  * change width, so nothing on the page moves.
  */
-function Fetch() {
+/**
+ * Collect now — from every source, or from the one you are looking at.
+ *
+ * The brief asked for a way to fetch a single source. This is that, and it is
+ * the tab strip rather than a second control: the desk already carries the
+ * question "which source" in the URL, and answering it twice — once to filter,
+ * once again inside a menu on the button — is two places to be out of step with
+ * each other. On the All tab the button reads `Fetch` and asks everything; on
+ * the Slack tab it reads `Fetch Slack` and asks Slack alone.
+ *
+ * The label is what makes it discoverable. A control that silently changed what
+ * it did based on a filter elsewhere on the page would be a trap; one that
+ * renames itself is a statement, and it is the only affordance needed.
+ */
+function Fetch({ source }: { source: SourceName | 'all' }) {
   const [busy, setBusy] = useState(false)
   const [line, setLine] = useState<{ text: string; title?: string } | null>(null)
+  const only = source === 'all' ? undefined : source
+  const word = only ? SOURCE_LABEL[only] : null
 
   const run = async () => {
     setBusy(true)
     try {
-      const r = await fetchNow()
+      const r = await fetchNow(only)
       const asked = r.connectors.filter(c => c.via !== 'none')
       const quiet = asked.filter(c => !c.ok).map(c => c.name)
       setLine({
@@ -926,7 +942,9 @@ function Fetch() {
         </span>
       )}
       <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
-        title="Ask every connector this machine can reach what is on you">
+        title={only
+          ? `Ask ${SOURCE_LABEL[only]} alone what is on you — the other sources are left as they are`
+          : 'Ask every connector this machine can reach what is on you'}>
         {/* The word is the control; the glyph is decoration, and on a phone it
             is 22px this row does not have to spend. It comes back at the width
             where the tabs get their names. The busy state is still legible
@@ -934,8 +952,16 @@ function Fetch() {
         <span className="hidden lg:inline-flex">
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
         </span>
-        {/* One width for both words, so the row does not shift under the finger. */}
-        <span className="w-14 text-left">{busy ? 'Fetching' : 'Fetch'}</span>
+        {/* Unscoped, the verb holds one width for both states so the button does
+            not resize under the finger mid-press. Scoped, it must not: a fixed
+            56px column against a 36px word opens a 20px hole and `Fetch  Slack`
+            reads as two controls rather than one label. The scoped button does
+            change width between its two states, and that is the better trade —
+            it is right-aligned so only its left edge moves, and it is disabled
+            for the whole of the state that moves it. */}
+        <span className={word ? '' : 'w-14 text-left'}>
+          {busy ? 'Fetching' : 'Fetch'}{word ? ` ${word}` : ''}
+        </span>
       </Button>
     </span>
   )

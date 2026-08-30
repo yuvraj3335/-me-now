@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { db, latestFinishedRuns, logEvent, now, uid } from './db'
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
-import { fetchStatus, startFetch } from './fetch'
+import { fetchStatus, startFetch, isFetchScope } from './fetch'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { CARD_PRIORITIES, CARD_STATUSES, type CardPriority, type CardStatus } from './sources/types'
 import { readThread } from './sources/slack'
@@ -208,7 +208,18 @@ api.post('/refresh', async c => c.json(await ingest()))
  * adds, so nothing on the page is blocked while it runs, and a second press is
  * neither refused nor rate-limited: it re-runs, dedups, and answers `0 new`.
  */
-api.post('/fetch', c => c.json(startFetch()))
+/**
+ * Collect now, optionally from one source only.
+ *
+ * `only` is validated against the scope list rather than passed through: it
+ * reaches `ingest()` and picks connectors, and a free string there would be a
+ * quiet no-op run reporting success over nothing asked.
+ */
+api.post('/fetch', async c => {
+  const { only } = await c.req.json<{ only?: unknown }>().catch(() => ({ only: undefined }))
+  if (only != null && !isFetchScope(only)) return c.json(bad('unknown source'), 400)
+  return c.json(startFetch(only ?? undefined))
+})
 
 /**
  * What the last press did, and whether one is still going.
