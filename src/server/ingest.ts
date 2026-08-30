@@ -11,7 +11,7 @@
  */
 import { db, logEvent, now } from './db'
 import { cardId, groupCards } from './dedup'
-import { NotConnected, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
+import { NotConnected, PartialPoll, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
 import { claudeSessions } from './sources/claudeSessions'
 import { slack } from './sources/slack'
@@ -32,6 +32,14 @@ export type IngestReport = {
      * Home page say "Slack now" about an account that does not exist.
      */
     connected: boolean
+    /**
+     * Whether this poll may speak for everything the source holds.
+     *
+     * Only an `authoritative` run gets to mark cards gone. A partial poll
+     * returns real rows and still cannot say what is missing, because it never
+     * asked all the questions.
+     */
+    authoritative: boolean
     count: number
     ms: number
     error?: string
@@ -64,7 +72,10 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
       try {
         const cards = await a.fetch()
         fetched.set(a.name, cards)
-        report.sources.push({ source: a.name, ok: true, connected: true, count: cards.length, ms: Date.now() - t0 })
+        report.sources.push({
+          source: a.name, ok: true, connected: true, authoritative: true,
+          count: cards.length, ms: Date.now() - t0,
+        })
         db.query(`UPDATE sync_runs SET finished_at = ?, ok = 1, connected = 1, count = ? WHERE id = ?`)
           .run(Date.now(), cards.length, runId?.id ?? 0)
       } catch (e) {
@@ -74,12 +85,18 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
         // reader has deliberately not set up.
         const disconnected = e instanceof NotConnected
         const error = (e as Error).message
+        // A partial poll keeps its rows and loses its authority. Both halves
+        // matter: without the rows a rate-limited source blanks the desk, and
+        // without dropping the authority the sweep below deletes everything it
+        // did not manage to ask about.
+        const partial = e instanceof PartialPoll ? e.cards : null
+        if (partial) fetched.set(a.name, partial)
         report.sources.push({
-          source: a.name, ok: false, connected: !disconnected,
-          count: 0, ms: Date.now() - t0, error,
+          source: a.name, ok: false, connected: !disconnected, authoritative: false,
+          count: partial?.length ?? 0, ms: Date.now() - t0, error,
         })
-        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 0, connected = ?, error = ? WHERE id = ?`)
-          .run(Date.now(), disconnected ? 0 : 1, error.slice(0, 500), runId?.id ?? 0)
+        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 0, connected = ?, count = ?, error = ? WHERE id = ?`)
+          .run(Date.now(), disconnected ? 0 : 1, partial?.length ?? null, error.slice(0, 500), runId?.id ?? 0)
       }
     }),
   )
@@ -89,20 +106,15 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
   const survivors: RawCard[] = []
   for (const [, cards] of fetched) survivors.push(...cards)
 
-  const keptSources = new Set(fetched.keys())
-  const existing = db.query<any, []>(`SELECT * FROM cards WHERE gone = 0`).all()
-  for (const row of existing) {
-    // A source that failed this round keeps its cards; one that succeeded is
-    // authoritative, and anything it no longer returns is gone.
-    if (keptSources.has(row.source) && report.sources.find(s => s.source === row.source)?.ok) continue
-    survivors.push({
-      source: row.source, source_id: row.source_id, account: row.account ?? undefined,
-      kind: row.kind, title: row.title, why: row.why, actor: row.actor ?? undefined,
-      actor_id: row.actor_id ?? undefined, who: row.who ?? undefined,
-      excerpt: row.excerpt ?? undefined, url: row.url,
-      ts: row.ts, pile: row.pile ?? 'open', refs: JSON.parse(row.refs || '[]'),
-      meta: JSON.parse(row.meta || '{}'),
-    })
+  for (const row of liveCards()) {
+    // A source that failed this round keeps its cards; one that succeeded and
+    // asked all of its questions is authoritative, and anything it no longer
+    // returns is gone. A card Fetch put there is never superseded by a poll that
+    // did not go looking for it.
+    const run = report.sources.find(s => s.source === row.source)
+    const supersededByPoll = fetched.has(row.source) && run?.ok && run.authoritative && row.found_by === 'poll'
+    if (supersededByPoll) continue
+    survivors.push(asRaw(row))
   }
 
   const groups = groupCards(survivors)
@@ -122,14 +134,18 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
 
         db.query(
           `INSERT INTO cards (id, source, source_id, account, group_key, kind, title, why, actor, actor_id,
-                              who, excerpt, url, ts, pile, refs, meta, first_seen_at, last_seen_at, gone)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+                              who, excerpt, url, ts, pile, refs, meta, first_seen_at, last_seen_at, gone, found_by)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'poll')
            ON CONFLICT(id) DO UPDATE SET
              group_key = excluded.group_key, kind = excluded.kind, title = excluded.title,
              why = excluded.why, actor = excluded.actor, who = excluded.who,
              excerpt = excluded.excerpt,
              url = excluded.url, ts = excluded.ts, pile = excluded.pile,
              refs = excluded.refs, meta = excluded.meta,
+             -- The poll claims a row Fetch found first: from here on the poller
+             -- returns it every three minutes, so the poller's sweep is the one
+             -- entitled to decide when it has gone.
+             found_by = 'poll',
              last_seen_at = excluded.last_seen_at, gone = 0`,
         ).run(
           id, c.source, c.source_id, c.account ?? null, gk, c.kind, c.title, c.why,
@@ -143,37 +159,79 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
       }
     }
 
-    // Cards a healthy source stopped returning are marked gone, not deleted:
-    // history is what the analytics page is made of.
+    /*
+     * Cards a healthy source stopped returning are marked gone, not deleted:
+     * history is what the analytics page is made of.
+     *
+     * Two conditions, and both of them are load-bearing.
+     *
+     * `authoritative` is what stops a partial poll from deleting the answers it
+     * never asked for. `found_by = 'poll'` is what stops the poller from
+     * deleting Fetch's rows: Fetch is manual and asks different questions, the
+     * poller runs every three minutes and asks its five fixed ones, so
+     * everything Fetch landed is by definition something this poll did not
+     * return. Without this line, a Fetch's rows survive for under three minutes
+     * and the feature looks like it does nothing.
+     */
     for (const s of report.sources) {
-      if (!s.ok) continue
+      if (!s.ok || !s.authoritative) continue
       const ids = [...fresh].filter(i => i.startsWith(`${s.source}:`))
       const ph = ids.length ? ids.map(() => '?').join(',') : "''"
-      db.query(`UPDATE cards SET gone = 1 WHERE source = ? AND gone = 0 AND id NOT IN (${ph})`)
-        .run(s.source, ...ids)
-    }
-
-    // Ensure a state row per live group, and count the genuinely new ones.
-    const liveGroups = db.query<{ group_key: string; ts: number }, []>(
-      `SELECT group_key, MAX(ts) AS ts FROM cards WHERE gone = 0 GROUP BY group_key`,
-    ).all()
-    report.groups = liveGroups.length
-
-    for (const g of liveGroups) {
-      const had = db.query<{ group_key: string }, [string]>(
-        `SELECT group_key FROM card_state WHERE group_key = ?`,
-      ).get(g.group_key)
-      if (had) continue
       db.query(
-        `INSERT INTO card_state (group_key, first_seen_at, updated_at) VALUES (?, ?, ?)`,
-      ).run(g.group_key, at, at)
-      logEvent('card_appeared', { group_key: g.group_key, at })
-      report.newGroups++
+        `UPDATE cards SET gone = 1
+          WHERE source = ? AND gone = 0 AND found_by = 'poll' AND id NOT IN (${ph})`,
+      ).run(s.source, ...ids)
     }
+
+    const seen = ensureGroupState(at)
+    report.groups = seen.groups
+    report.newGroups = seen.fresh
   })
 
   tx()
   return report
+}
+
+/* --------------------------- shared with Fetch ---------------------------- */
+
+/** Every card still on the desk, as stored. */
+export const liveCards = () =>
+  db.query<any, []>(`SELECT * FROM cards WHERE gone = 0`).all()
+
+/** A stored row, back in the shape the dedup engine reads. */
+export const asRaw = (row: any): RawCard => ({
+  source: row.source, source_id: row.source_id, account: row.account ?? undefined,
+  kind: row.kind, title: row.title, why: row.why, actor: row.actor ?? undefined,
+  actor_id: row.actor_id ?? undefined, who: row.who ?? undefined,
+  excerpt: row.excerpt ?? undefined, url: row.url,
+  ts: row.ts, pile: row.pile ?? 'open', refs: JSON.parse(row.refs || '[]'),
+  meta: JSON.parse(row.meta || '{}'),
+})
+
+/**
+ * A state row per live group, and a count of the genuinely new ones.
+ *
+ * Shared with Fetch so both pipes create state the same way: `card_state` is
+ * keyed by group, which is what makes a Fetch row for something already done or
+ * snoozed stay off the desk rather than resurface as new.
+ */
+export function ensureGroupState(at: number): { groups: number; fresh: number } {
+  const liveGroups = db.query<{ group_key: string }, []>(
+    `SELECT group_key FROM cards WHERE gone = 0 GROUP BY group_key`,
+  ).all()
+  let fresh = 0
+  for (const g of liveGroups) {
+    const had = db.query<{ group_key: string }, [string]>(
+      `SELECT group_key FROM card_state WHERE group_key = ?`,
+    ).get(g.group_key)
+    if (had) continue
+    db.query(
+      `INSERT INTO card_state (group_key, first_seen_at, updated_at) VALUES (?, ?, ?)`,
+    ).run(g.group_key, at, at)
+    logEvent('card_appeared', { group_key: g.group_key, at })
+    fresh++
+  }
+  return { groups: liveGroups.length, fresh }
 }
 
 /**
@@ -181,7 +239,7 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
  * "already handled" side of the merge: if either group was acknowledged or
  * notified, the merged group counts as acknowledged and notified.
  */
-function migrateState(from: string, to: string) {
+export function migrateState(from: string, to: string) {
   const src = db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(from)
   if (!src) return
   const dst = db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(to)

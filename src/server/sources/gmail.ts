@@ -7,11 +7,11 @@
  * Read-only: only search_threads / get_thread are ever called, and the client's
  * write-tool denylist blocks the rest regardless.
  */
-import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
+import { McpSession, HttpTransport } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
 import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
+import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
 const sessions = new Map<string, McpSession>()
 
@@ -95,6 +95,11 @@ export const gmail: SourceAdapter = {
   async fetch() {
     const cards: RawCard[] = []
     let anyConnected = false
+    // A rejected inbox is a failed poll, not an empty one. `if (e instanceof
+    // McpUnauthorized) continue` returned `[]` with `anyConnected` already true,
+    // so a dead Gmail token reported a healthy sync and the sweep then marked
+    // every Gmail card gone.
+    const settled: Array<PromiseSettledResult<unknown>> = []
 
     for (const account of GMAIL_ACCOUNTS) {
       const tok = (await resolveToken(`gmail:${account}`)).token ?? (await resolveToken('gmail')).token
@@ -109,9 +114,10 @@ export const gmail: SourceAdapter = {
       let payload: any
       try {
         payload = await s.callJson('search_threads', { query, pageSize: 30 })
+        settled.push({ status: 'fulfilled', value: payload })
       } catch (e) {
-        if (e instanceof McpUnauthorized) continue
-        throw e
+        settled.push({ status: 'rejected', reason: e })
+        continue
       }
 
       for (const th of threadsFrom(payload)) {
@@ -166,6 +172,6 @@ export const gmail: SourceAdapter = {
     // Every configured address came back without a token: nothing was polled,
     // which is a different answer from "polled and found nothing".
     if (!anyConnected) throw new NotConnected('gmail')
-    return cards
+    return settle('gmail', settled, cards)
   },
 }

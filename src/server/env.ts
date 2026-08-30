@@ -36,6 +36,11 @@ export const ME = {
   emails: str('WAKE_EMAILS', 'yuvraj@truto.one')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   slackUserId: str('WAKE_SLACK_USER_ID'), // discovered at runtime if unset
+  /** The organisation Fetch's second standing question is about. */
+  org: str('WAKE_ORG', 'TrutoEngineering'),
+  githubOrg: str('WAKE_GITHUB_ORG', 'trutohq'),
+  /** The display name people type when they mean him. */
+  name: str('WAKE_NAME', 'Yuvraj Muley'),
 }
 
 export const GMAIL_ACCOUNTS = str('WAKE_GMAIL_ACCOUNTS', ME.emails.join(','))
@@ -57,19 +62,58 @@ export const STATIC_TOKENS: Record<string, string> = {
   gmail: str('WAKE_GMAIL_TOKEN'),
 }
 
-/** MCP servers Wake knows how to speak to. */
-export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: string }> = {
+/**
+ * MCP servers Wake knows how to speak to.
+ *
+ * `oauth` is the honest half. It used to be inferred — "we know a URL" was read
+ * as "Connect can work" — so Gmail rendered a Connect button on two screens that
+ * could only ever answer 400, because `gmailmcp.googleapis.com` publishes no
+ * OAuth metadata at either well-known and there is no authorize URL to build. A
+ * button that cannot work is worse than no button, so the fact is written down
+ * here rather than discovered by pressing it.
+ *
+ *   dcr        — dynamic client registration; Connect really is one click
+ *   client-id  — you create an app and paste its id and secret first
+ *   none       — Wake cannot obtain a credential for this one at all
+ */
+export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: string; oauth: 'dcr' | 'client-id' | 'none' }> = {
   slack: {
     url: str('WAKE_SLACK_MCP_URL', 'https://mcp.slack.com/mcp'),
     label: 'Slack',
+    oauth: 'client-id',
     // Read-only by construction (DECISIONS.md #7).
     scopes: 'channels:history,channels:read,groups:history,groups:read,im:history,mpim:history,mpim:read,users:read,search:read,team:read',
   },
-  sentry: { url: str('WAKE_SENTRY_MCP_URL', 'https://mcp.sentry.dev/mcp'), label: 'Sentry' },
-  gmail: { url: str('WAKE_GMAIL_MCP_URL', 'https://gmailmcp.googleapis.com/mcp/v1'), label: 'Gmail' },
+  sentry: { url: str('WAKE_SENTRY_MCP_URL', 'https://mcp.sentry.dev/mcp'), label: 'Sentry', oauth: 'dcr' },
+  gmail: { url: str('WAKE_GMAIL_MCP_URL', 'https://gmailmcp.googleapis.com/mcp/v1'), label: 'Gmail', oauth: 'none' },
 }
 
 export const IS_DEV = str('NODE_ENV') !== 'production'
+
+/* -------------------------------------------------------------------------- */
+/* Fetch — pipe 2                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The `claude` binary on this machine, used by Fetch and by nothing else.
+ *
+ * Wake holds no model key and runs no model of its own. What it borrows here is
+ * the *box's* reach: the connectors the operator has already signed into from
+ * this machine, which is precisely the set Wake's own credentials cannot cover.
+ * One bounded, read-only, allowlisted collection per press. See DECISIONS.md #31
+ * for why this reopens #26, and `src/server/fetch/claude.ts` for the envelope.
+ */
+export const CLAUDE_BIN = str('WAKE_CLAUDE_BIN')
+
+/** Everything that bounds one Fetch. None of it is a hope; all of it is a flag. */
+export const FETCH_MODEL = str('WAKE_FETCH_MODEL', 'sonnet')
+/** Wall clock per connector. Whatever landed before this is kept. */
+export const FETCH_TIMEOUT_MS = num('WAKE_FETCH_TIMEOUT_MS', 150_000)
+/** Tool-call ceiling, so "let me look a bit deeper" cannot happen. */
+export const FETCH_MAX_TURNS = num('WAKE_FETCH_MAX_TURNS', 6)
+/** How far back Fetch looks, and how many rows one connector may land. */
+export const FETCH_LOOKBACK_DAYS = num('WAKE_FETCH_LOOKBACK_DAYS', 14)
+export const FETCH_MAX_ROWS = num('WAKE_FETCH_MAX_ROWS', 20)
 
 /* -------------------------------------------------------------------------- */
 /* Workspace                                                                  */

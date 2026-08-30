@@ -597,6 +597,33 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
       }
     },
   },
+  {
+    id: 7,
+    name: 'fetch-provenance-and-frozen-task-origin',
+    // Two ideas, one release.
+    //
+    // `cards.found_by` names which pipe put a row on the desk. The poller's
+    // sweep marks gone everything a healthy source did not return, and Fetch —
+    // which is manual, and asks questions the poller never asks — lands rows the
+    // next poll three minutes later would therefore delete. Scoping the sweep to
+    // `found_by = 'poll'` is the whole fix. Existing rows default to 'poll',
+    // which is what they are.
+    //
+    // `tasks.origin_*` freezes a task's provenance at creation instead of
+    // pointing at a `cards` row the poller garbage-collects. A task made from a
+    // pull request lost its "from GitHub" line the moment that PR merged —
+    // exactly when remembering what the task was about matters most. Copy, do
+    // not reference. `source_card_group` stays: it is still the live link while
+    // the card exists.
+    run() {
+      if (!hasColumn('cards', 'found_by')) {
+        db.exec(`ALTER TABLE cards ADD COLUMN found_by TEXT NOT NULL DEFAULT 'poll'`)
+      }
+      for (const col of ['origin_source', 'origin_title', 'origin_why', 'origin_url', 'origin_excerpt', 'origin_meta']) {
+        if (!hasColumn('tasks', col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`)
+      }
+    },
+  },
 ]
 
 const applied = new Set(

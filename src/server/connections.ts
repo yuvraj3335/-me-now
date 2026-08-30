@@ -32,7 +32,8 @@ connections.get('/', async c => {
   const runs = new Map<string, { ok: number; connected: number; at: number; count: number | null; error: string | null }>(
     db.query<{ source: string; at: number; ok: number; connected: number; count: number | null; error: string | null }, []>(
       `SELECT source, MAX(started_at) AS at, ok, connected, count, error
-         FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
+         FROM sync_runs WHERE finished_at IS NOT NULL AND source NOT LIKE 'fetch:%'
+        GROUP BY source`,
     ).all().map(r => [r.source, { ok: r.ok, connected: r.connected, at: r.at, count: r.count, error: r.error }]),
   )
 

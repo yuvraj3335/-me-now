@@ -7,7 +7,7 @@ import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import { MCP_SERVERS, LOOKBACK_DAYS } from '../env'
 import { extractRefs } from '../dedup'
-import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
+import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
 let session: McpSession | null = null
 export const getSession = () =>
@@ -23,6 +23,83 @@ export async function findIssuesTool(): Promise<string | undefined> {
     all.find(t => /issue/i.test(t.name) && /(find|search|list)/i.test(t.name))?.name
   toolCache = { at: Date.now(), find }
   return find
+}
+
+/**
+ * The organisation to search in, discovered rather than configured.
+ *
+ * `search_issues` declares `organizationSlug` as required, and Wake was not
+ * sending it — so every Sentry poll answered
+ * `Invalid arguments … organizationSlug: Invalid input`, both queries were
+ * swallowed by a bare `catch { continue }`, and the run was recorded as a
+ * healthy, up-to-the-second sync of zero issues. Sentry has reported `ok: true,
+ * count: 0` for its entire life on this deployment while returning nothing at
+ * all, and there was no way to tell the two apart from inside the product.
+ */
+let orgCache: { at: number; slug?: string } | null = null
+
+export async function orgSlug(): Promise<string | undefined> {
+  if (orgCache && Date.now() - orgCache.at < 30 * 60_000) return orgCache.slug
+  const r = await getSession().callJson<any>('find_organizations', {})
+  const first = Array.isArray(r?.organizations) ? r.organizations[0] : null
+  const slug = typeof first?.slug === 'string' ? first.slug : undefined
+  orgCache = { at: Date.now(), slug }
+  return slug
+}
+
+/**
+ * Sentry's search tool answers with Markdown, not JSON.
+ *
+ * Same shape of surprise as Slack's, and the same answer: a real parser written
+ * against the real response. `issuesFrom` handled arrays and three JSON envelope
+ * shapes and returned `[]` for a string, so even once the organisation slug was
+ * supplied not one issue would have landed.
+ */
+export function parseSentryIssues(md: string): SentryIssue[] {
+  const out: SentryIssue[] = []
+  for (const block of md.split(/^##\s+\d+\.\s+/m).slice(1)) {
+    const head = /^\[([^\]]+)\]\(([^)]+)\)/.exec(block)
+    if (!head) continue
+    const shortId = head[1]!
+    const permalink = head[2]!
+
+    // The title is the bold line between the heading and the first fact bullet.
+    const body = block.slice(head[0].length)
+    const beforeFacts = body.split(/^-\s+\*\*/m)[0] ?? ''
+    const title = /\*\*([\s\S]+?)\*\*/.exec(beforeFacts)?.[1]?.replace(/\s+/g, ' ').trim()
+
+    const field = (name: string) =>
+      new RegExp(`\\*\\*${name}\\*\\*:\\s*\`?([^\`\\n]+)\`?`, 'i').exec(body)?.[1]?.trim()
+
+    out.push({
+      id: shortId,
+      shortId,
+      title: title || shortId,
+      culprit: field('Culprit'),
+      permalink,
+      count: Number(field('Events')) || 0,
+      userCount: Number(field('Users')) || 0,
+      status: field('Status'),
+      lastSeen: relativeToIso(field('Last seen')),
+      // The short id's prefix is the project's own code. It is the only project
+      // identity in this response, and it is the one Sentry's own UI shows.
+      project: shortId.split('-')[0]?.toLowerCase(),
+    })
+  }
+  return out
+}
+
+/** `4 minutes ago` → an ISO instant. Sentry states ages, not timestamps. */
+const UNIT_MS: Record<string, number> = {
+  second: 1000, minute: 60_000, hour: 3.6e6, day: 864e5, week: 6.048e8, month: 2.592e9, year: 3.156e10,
+}
+export function relativeToIso(v: string | undefined): string | undefined {
+  if (!v) return undefined
+  const m = /^(?:about\s+)?(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.exec(v.trim())
+  if (!m) return undefined
+  const ms = UNIT_MS[m[2]!.toLowerCase()]
+  if (!ms) return undefined
+  return new Date(Date.now() - Number(m[1]) * ms).toISOString()
 }
 
 type SentryIssue = {
@@ -44,8 +121,12 @@ type SentryIssue = {
 
 function issuesFrom(payload: any): SentryIssue[] {
   if (!payload) return []
+  if (typeof payload === 'string') return parseSentryIssues(payload)
   if (Array.isArray(payload)) return payload
-  return payload.issues ?? payload.results ?? payload.data ?? []
+  const rows = payload.issues ?? payload.results ?? payload.data
+  if (Array.isArray(rows)) return rows
+  if (typeof payload.results === 'string') return parseSentryIssues(payload.results)
+  return []
 }
 
 const projectSlug = (p: SentryIssue['project']) => (typeof p === 'string' ? p : p?.slug) ?? ''
@@ -63,9 +144,9 @@ export const sentry: SourceAdapter = {
     }
     try {
       const find = await findIssuesTool()
-      return find
-        ? { ok: true, detail: `connected (${find})`, via }
-        : { ok: false, detail: 'connected, but no issue-search tool found', via }
+      if (!find) return { ok: false, detail: 'connected, but no issue-search tool found', via }
+      const org = await orgSlug()
+      return { ok: true, detail: org ? `connected to ${org}` : 'connected', via }
     } catch (e) {
       if (e instanceof McpUnauthorized) return { ok: false, detail: 'token rejected — reconnect', via }
       return { ok: false, detail: (e as Error).message, via }
@@ -77,6 +158,8 @@ export const sentry: SourceAdapter = {
     if (!token) throw new NotConnected('sentry')
     const tool = await findIssuesTool()
     if (!tool) throw new Error('the Sentry server exposes no issue-search tool')
+    const org = await orgSlug()
+    if (!org) throw new Error('Sentry named no organisation for this token')
 
     // Unresolved and assigned to me — errors nobody owns are not "on me".
     const queries = [
@@ -86,17 +169,28 @@ export const sentry: SourceAdapter = {
 
     const cards: RawCard[] = []
     const seen = new Set<string>()
+    // A thrown query and an empty query used to be the same observable outcome:
+    // `try { … } catch { continue }` meant a Sentry that failed both searches
+    // reported a green, up-to-the-second sync of zero issues, and there was no
+    // way to tell from the product whether that meant "nothing for you" or
+    // "failed silently, twice". Now the failures are carried out.
+    const settled: Array<PromiseSettledResult<unknown>> = []
 
     for (const g of queries) {
       let payload: any
       try {
         payload = await getSession().callJson(tool, {
+          organizationSlug: org,
           query: g.q,
           naturalLanguageQuery: g.q,
           statsPeriod: `${Math.min(LOOKBACK_DAYS, 14)}d`,
           limit: 25,
         })
-      } catch { continue }
+        settled.push({ status: 'fulfilled', value: payload })
+      } catch (e) {
+        settled.push({ status: 'rejected', reason: e })
+        continue
+      }
 
       for (const it of issuesFrom(payload)) {
         const short = it.shortId ?? it.short_id ?? it.id
@@ -131,6 +225,6 @@ export const sentry: SourceAdapter = {
         })
       }
     }
-    return cards
+    return settle('sentry', settled, cards)
   },
 }

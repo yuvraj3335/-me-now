@@ -12,7 +12,7 @@ import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import { MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs } from '../dedup'
-import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
+import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
 let session: McpSession | null = null
 const getSession = () =>
@@ -202,7 +202,7 @@ export const slack: SourceAdapter = {
     const cards: RawCard[] = []
     const seen = new Set<string>()
 
-    results.forEach((res, i) => {
+    results.forEach((res: PromiseSettledResult<SlackHit[]>, i) => {
       if (res.status !== 'fulfilled') return
       const g = queries[i]!
       for (const h of res.value) {
@@ -247,7 +247,11 @@ export const slack: SourceAdapter = {
         })
       }
     })
-    return cards
+    // A search that exploded is not a search that found nothing. Tool discovery
+    // is cached for thirty minutes, so without this a Slack whose queries start
+    // failing after one successful discovery reports `ok, 0 rows` — and the
+    // sweep then deletes every Slack card on the desk.
+    return settle('slack', results, cards)
   },
 }
 

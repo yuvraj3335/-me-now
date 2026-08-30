@@ -4,7 +4,7 @@
  */
 import { ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import { NotConnected, type RawCard, type SourceAdapter } from './types'
+import { NotConnected, settle, type RawCard, type SourceAdapter } from './types'
 
 /** Cut on a word boundary, and say so — never silently mid-word. */
 function clip(s: string | undefined, max: number): string | undefined {
@@ -155,6 +155,9 @@ export const github: SourceAdapter = {
         })
       }
     })
-    return cards
+    // Four `search/issues` calls, every one of them rate-limitable. Dropping the
+    // rejections recorded `ok, 0 rows`, and the sweep then marked every stored
+    // GitHub card gone: a swallowed 403 wiped the desk and reported "synced".
+    return settle('github', results, cards)
   },
 }

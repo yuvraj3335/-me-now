@@ -78,6 +78,53 @@ export class NotConnected extends Error {
   }
 }
 
+/**
+ * Some of this poll's questions failed and the rest answered.
+ *
+ * `NotConnected` closed the *no-credential* case. This closes the one under it,
+ * which is the one that loses data: every adapter wrapped its queries in
+ * `Promise.allSettled` (or `try { … } catch { continue }`) and dropped the
+ * rejections, so four rate-limited GitHub searches were recorded as `ok: 1,
+ * count: 0` — a healthy, successful, empty poll. The sweep in `ingest.ts` then
+ * marked every stored GitHub card `gone = 1`, because a healthy source is
+ * authoritative about what it no longer returns. A swallowed 403 wiped the desk
+ * and reported "synced".
+ *
+ * So a partial poll carries its cards *and* says it was partial. The cards land;
+ * the sweep does not run, because "not returned" cannot be told apart from "not
+ * asked"; and the run is recorded as failed, with the reason, which is what the
+ * filter chip and the Settings row read.
+ */
+export class PartialPoll extends Error {
+  constructor(
+    public readonly source: SourceName,
+    public readonly cards: RawCard[],
+    message: string,
+  ) {
+    super(message)
+    this.name = 'PartialPoll'
+  }
+}
+
+/**
+ * Decide what a set of settled queries is allowed to claim.
+ *
+ * All of them failed → throw, because zero answers out of zero is not an empty
+ * inbox. Some failed → `PartialPoll`. None failed → the cards, and the sweep may
+ * run.
+ */
+export function settle(
+  source: SourceName,
+  results: Array<PromiseSettledResult<unknown>>,
+  cards: RawCard[],
+): RawCard[] {
+  const failed = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[]
+  if (!failed.length) return cards
+  const why = failed.map(f => (f.reason as Error)?.message ?? String(f.reason)).join('; ')
+  if (failed.length === results.length) throw new Error(why)
+  throw new PartialPoll(source, cards, `${failed.length} of ${results.length} queries failed: ${why}`)
+}
+
 export interface SourceAdapter {
   name: SourceName
   label: string
