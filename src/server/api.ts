@@ -492,6 +492,20 @@ api.delete('/goals/:id', c => {
 api.post('/reminders', async c => {
   const b = await c.req.json<Row>()
   if (!b.target_kind || !b.target_id || !b.fire_at) return c.json(bad('target_kind, target_id, fire_at required'), 400)
+  /**
+   * A reminder in the past is refused here, not accepted and fired instantly.
+   *
+   * This validated presence only, and `runReminders()` fires on `fire_at <=
+   * now()`. Measured: `created_at 1788075717452`, `fired_at 1788075718465` — one
+   * second later. The Work row filters on `!fired_at` so no bell appeared, and
+   * reopening the task showed an empty field. Nobody was told anything.
+   *
+   * A minute of slack, because a form submitted at 09:00:00 for 09:00 is asking
+   * for now rather than for the past.
+   */
+  if (Number(b.fire_at) <= now() - 60_000) {
+    return c.json(bad('fire_at is in the past; a reminder can only be set for the future'), 400)
+  }
   const id = uid()
   try {
     db.query(`INSERT INTO reminders (id, target_kind, target_id, fire_at, label, repeat_rule, created_at)

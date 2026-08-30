@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { db, now, uid } from '../src/server/db'
 import { runReminders } from '../src/server/push'
+import { api } from '../src/server/api'
 
 const HOUR = 3.6e6
 
@@ -87,5 +88,46 @@ describe('deadline horizons', () => {
     await runReminders()
 
     expect(notificationsFor('already done')).toEqual([])
+  })
+})
+
+describe('a reminder cannot be set in the past', () => {
+  test('the boundary refuses it, with a reason', async () => {
+    // It used to validate presence only, and `runReminders()` fires on
+    // `fire_at <= now()` — so a past reminder was created and fired one second
+    // later, into a `push_subs` table with nothing in it. The Work row filters
+    // on `!fired_at`, so no bell appeared; reopening the task showed an empty
+    // field. He was never told.
+    const r = await api.request('/reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_kind: 'task', target_id: 't1', fire_at: Date.now() - 3.6e6,
+      }),
+    })
+    expect(r.status).toBe(400)
+    expect((await r.json() as any).error).toContain('past')
+  })
+
+  test('a minute of slack, because "now" is not "the past"', async () => {
+    const r = await api.request('/reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_kind: 'task', target_id: 'slack-window', fire_at: Date.now() - 5_000,
+      }),
+    })
+    expect(r.status).toBe(200)
+  })
+
+  test('a future reminder is still accepted', async () => {
+    const r = await api.request('/reminders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_kind: 'task', target_id: 'future', fire_at: Date.now() + 864e5,
+      }),
+    })
+    expect(r.status).toBe(200)
   })
 })
