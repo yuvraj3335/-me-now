@@ -9,9 +9,12 @@ dist/
 .DS_Store
 *.log
 
-# QA captures are live output from the running app — real card text, real mail
-# subjects, real session prompts. The set already committed is deliberate; new
-# ones are not, and a `git add -A` swept a whole run in once without anyone
-# looking at it. Ignored so that cannot happen by accident; `git add -f` to
-# include one on purpose.
-QA_EVIDENCE/
+# Evidence captures are live output from the running app — real card text, real
+# mail subjects, real session prompts, real PR titles. The QA_EVIDENCE set
+# already committed is deliberate; new ones are not, and a `git add -A` swept a
+# whole run in once without anyone looking at it.
+#
+# Matched as a family rather than by name because the second one to appear was
+# called IA_EVIDENCE, an hour later, mid-capture. `git add -f` to include one on
+# purpose.
+*_EVIDENCE/
