@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { db, logEvent, now, uid } from './db'
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
+import { fetchNow } from './fetch'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { readThread } from './sources/slack'
 import { sessionExcerpt } from './sources/claudeSessions'
@@ -151,15 +152,29 @@ api.get('/state', async c => {
     // so including in-flight runs made every source read as failed for the
     // duration of each poll — the Home page's sync line said "needs connect"
     // about a source that was answering fine.
+    // Fetch writes `fetch:<connector>` rows so that "asked, answered, nothing"
+    // and "asked, did not answer" are different states there too. They are not
+    // sources, and a filter chip named `fetch:slack` is not a thing.
     lastSync: db.query<Row, []>(
       `SELECT source, MAX(started_at) AS at, ok, connected, count, error
-         FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
+         FROM sync_runs WHERE finished_at IS NOT NULL AND source NOT LIKE 'fetch:%'
+        GROUP BY source`,
     ).all(),
     serverTime: now(),
   })
 })
 
 api.post('/refresh', async c => c.json(await ingest()))
+
+/**
+ * Fetch — pipe 2.
+ *
+ * Runs pipe 1 first, then asks every connector this box can reach the two
+ * standing questions, and lands what comes back on the same desk. It only ever
+ * adds, so nothing on the page is blocked while it runs, and a second press is
+ * neither refused nor rate-limited: it re-runs, dedups, and answers `0 new`.
+ */
+api.post('/fetch', async c => c.json(await fetchNow()))
 
 /* -------------------------------- cards --------------------------------- */
 

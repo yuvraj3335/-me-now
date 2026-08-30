@@ -751,3 +751,120 @@ bar passes `{ undo: 'done' }` and clears only that, because undoing a Done must
 not also un-park a card that was parked before it, or discard a pile someone
 chose an hour ago. An undo that does more than the thing it undid is its own
 small surprise.
+
+## 31. Fetch borrows the box's reach, and reopens one sentence of #26
+
+**Partially reverses #26.** Wake now starts a process that can reach a model:
+one bounded, read-only, allowlisted collection per press of a control called
+Fetch. Nothing else about #26 changes — Wake still holds no API key, still runs
+no model in-process, and "Open in Claude" is still a link.
+
+### Why it had to be reopened
+
+`now: 0` on this deployment is not an empty desk, it is a broken pipe. Measured
+on 2026-08-30:
+
+```
+slack   ok:false hasWakeToken:true  400 "App is not enabled for Slack MCP server access"
+gmail   ok:false connected:0        needsClientId — Google publishes no OAuth metadata
+sentry  ok:true  count:0            both queries failing silently on a missing argument
+github  ok:true  count:4            every row is `is:pr author:me`
+claude  ok:true  count:22           sessions nobody is waiting on
+```
+
+Two of the three sources that put something in the Now pile were dark, and the
+third had never worked. Slack's token is real and was accepted; the *app* is not
+entitled, which is a toggle in somebody else's console. Gmail's credential is one
+Wake cannot obtain at all. So the page rendered the word "Nothing" in a calm grey
+and was wrong — and no amount of alignment work fixes that, because the problem
+was never the type scale.
+
+The credential that reaches Slack in that state exists. It is on the box: the
+operator has signed this machine into claude.ai's Slack, Gmail and Sentry
+connectors, and `claude mcp list` says **Connected** for all three. Wake does not
+need those tokens. It needs one read through them.
+
+### Why the old reasoning does not cover this
+
+#26 struck down `launchPack`, which spawned `claude -p <brief>` to *start a
+working session* on the box. The argument was that a headless process has no
+terminal, so its permission prompts have nobody to answer them, its output goes
+to a supervisor that throws most of it away, and on a phone it does nothing you
+can see. Every clause of that is about an **interactive session**.
+
+Fetch is not one. It is a collection with a fixed question, a fixed output shape,
+no writes, and nothing to approve. There is no prompt to answer because there is
+nothing it can do that would need approving.
+
+### What bounds it, structurally
+
+In `src/server/fetch/claude.ts`, which is the only file under `src/server` that
+names the binary or spawns it:
+
+* `--print` — non-interactive by construction.
+* `--allowed-tools` with an explicit read-only allowlist, by real tool name. Not
+  a server-wide grant (`mcp__claude_ai_Slack` would include the write tools) and
+  not a wildcard. `list_labels` was removed from it rather than exempted from the
+  check, because a narrower list is a better answer than a cleverer test.
+* `--max-turns 6` and a 150-second wall clock that kills the process.
+* argv as an array, prompt over stdin: no shell parses either.
+* One shot. No `--resume`, no `--continue`, no session id, no transcript.
+* The question is a constant. `promptFor(name: Connector)` takes nothing else,
+  and `POST /api/fetch` reads no request body — there is no path from anything a
+  person can type to that string.
+
+And the model's prose never reaches a pixel. The only thing read out of the
+envelope is a JSON array of objects with a fixed shape; anything else is dropped
+silently. `why` is not in that shape: the collector returns *evidence* — a quoted
+line — and Wake's own rule table turns evidence into `why`, which is the half of
+#3 that was ever load-bearing. `refs` is not in that shape either, because a
+fabricated `gh:` reference outranks every other reference type and would decide a
+group's visible key.
+
+### The test was amended, not deleted
+
+`test/ui-contract.test.ts` asserted that no file under `src/server` contained
+`CLAUDE_BIN` or spawned `claude`. It now asserts the invariant that ban was
+standing in for: exactly one spawn site, `--print`, a turn ceiling, a wall clock
+that kills, an allowlist with no write-shaped name in it, no wildcard, and no
+resume flag. Two tests, both named, both with the reason in the body. Deleting it
+would have made this the fourth silent reversal in this file.
+
+### What is honestly worse
+
+**It costs money and it is slow.** Measured on the box: one Slack collection was
+55 seconds and $0.44 — not the "single-digit seconds, well under a cent" the plan
+assumed. Two connectors go through the box on this deployment, so a press is
+roughly a dollar and up to a minute. That is why Fetch is a manual control and
+never a timer, why it blocks nothing while it runs, and why the sync mark says
+what landed rather than a spinner saying please wait.
+
+**It depends on somebody else's tool names.** `mcp__claude_ai_Slack__…` is not a
+published contract. If a name changes, that connector returns nothing and reports
+"asked, did not answer" — which is a state Fetch renders rather than hides, and
+is the correct failure.
+
+**Two pipes are two things to reason about.** The mitigation is that they land
+through the same door: `groupCards`, the same `card_state` suppression, the same
+undo. The one place they are not symmetric is the sweep — `ingest.ts` marks gone
+every card of a healthy source it did not return, and Fetch asks questions the
+poller never asks, so `found_by` scopes that sweep to the pipe that owns the
+sighting. Without that single condition, every Fetch row is deleted within three
+minutes and the feature looks like it does nothing.
+
+### Two bugs this uncovered on the way
+
+Closing the "credential present and failing" hole in the four adapters made two
+silent failures visible immediately, and both are fixed here:
+
+* **Sentry had never worked.** `search_issues` requires `organizationSlug`, Wake
+  never sent it, and a bare `catch { continue }` turned
+  `Invalid arguments … organizationSlug: Invalid input` into a green,
+  up-to-the-second sync of zero issues. The slug is now discovered through
+  `find_organizations`. The tool also answers in *Markdown*, not JSON, so even
+  with the slug not one issue would have landed; there is a parser now, written
+  against the real response, the same way Slack's was.
+* **A swallowed failure deleted the desk.** Every adapter dropped its rejections
+  and reported `ok, 0 rows`, and the sweep then marked every card of that source
+  gone. Rate-limiting GitHub's four searches would have wiped the desk and
+  reported "synced". A partial poll now keeps its rows and loses its authority.

@@ -391,20 +391,85 @@ describe('the hand-off has to be a real link', () => {
     expect(sheet, 'the hand-off cancels its own navigation').not.toMatch(/preventDefault/)
   })
 
-  test('the server never spawns the claude binary', () => {
-    // Wake used to run `claude -p` on the DevBox: a headless process with no
-    // terminal, whose output nobody saw and whose permission prompts nobody
-    // could answer. Nothing should reintroduce it.
-    //
-    // Printing `claude --resume …` for a human to paste is a different thing and
-    // stays allowed — the test is about spawning, not about mentioning.
+  /**
+   * AMENDED, deliberately — see DECISIONS.md #31.
+   *
+   * This used to assert that no file under `src/server` mentioned `CLAUDE_BIN`
+   * or spawned `claude`, on the reasoning in DECISIONS #26: a headless process
+   * with no terminal, whose output nobody saw and whose permission prompts
+   * nobody could answer. That reasoning is about an *interactive* session, and
+   * Fetch is not one — it is a bounded, read-only, allowlisted collection with
+   * no writes and no approvals, and it is the only way the desk fills at all
+   * while Wake's own Slack login is refused by the provider and Gmail publishes
+   * no credential Wake can obtain.
+   *
+   * So the ban is gone and the invariant it was standing in for is written down
+   * instead: exactly one spawn site, non-interactive, read-only, bounded. Every
+   * clause below is a way Fetch could quietly turn into an agent.
+   */
+  test('Fetch is the only thing that starts a model, and it starts a bounded read-only one', () => {
+    const COLLECTOR = 'src/server/fetch/claude.ts'
+    const spawnSites: string[] = []
+
     for (const f of walk('src/server')) {
       const src = read(f)
-      expect(src, `${f}: reintroduced the launcher binary`).not.toContain('CLAUDE_BIN')
-      for (const m of src.matchAll(/Bun\.spawn(?:Sync)?\(\s*\[([^\]]*)\]/g)) {
-        expect(m[1], `${f}: spawns claude`).not.toMatch(/['"`]claude/)
-      }
+      // A spawn site for this purpose is a file that both starts processes and
+      // names the binary. `gh` and `truto` start processes and name neither, so
+      // they are not this test's business; `env.ts` names it and starts nothing.
+      const startsProcesses = /Bun\.spawn(?:Sync)?\(/.test(src)
+      const namesTheBinary = /CLAUDE_BIN/.test(src) ||
+        /Bun\.spawn(?:Sync)?\(\s*\[\s*['"`]claude/.test(src)
+      if (startsProcesses && namesTheBinary) spawnSites.push(f)
+
+      // `env.ts` declares it, the collector uses it, and that is the whole list.
+      if (f === COLLECTOR || f.endsWith('src/server/env.ts')) continue
+      expect(src, `${f}: a second file reaches for the claude binary`).not.toContain('CLAUDE_BIN')
     }
+
+    expect(spawnSites, 'the claude binary is spawned somewhere other than Fetch\'s collector')
+      .toEqual([COLLECTOR])
+
+    const collector = read(COLLECTOR)
+
+    // Non-interactive. `--print` is what makes "nobody can answer a permission
+    // prompt" impossible rather than merely unlikely.
+    expect(collector, 'the collector dropped --print and can now open a session')
+      .toMatch(/'--print'/)
+
+    // Bounded. A collection that can run for ever, or take another turn to look
+    // a bit deeper, is an agent.
+    expect(collector, 'the collector lost its turn ceiling').toMatch(/'--max-turns'/)
+    expect(collector, 'the collector lost its wall-clock timeout')
+      .toMatch(/setTimeout\([\s\S]{0,140}?proc\.kill\(\)/)
+
+    // Read-only. The allowlist is explicit tool names, and not one of them may
+    // be write-shaped. A wildcard would allow a whole server, writes included.
+    const list = /export const READ_TOOLS[\s\S]*?\n}\n/.exec(collector)
+    expect(list, 'the read-only tool allowlist is gone').toBeTruthy()
+    const tools = [...list![0].matchAll(/'(mcp__[A-Za-z0-9_]+)'/g)].map(m => m[1]!)
+    expect(tools.length, 'the allowlist is empty, which allows everything').toBeGreaterThan(0)
+    for (const t of tools) {
+      expect(t, `${t} is a write-shaped tool name in a read-only allowlist`)
+        .not.toMatch(/send|reply|create|update|delete|trash|label|post|draft|spam|archive|modify|write/i)
+    }
+    expect(collector, 'the allowlist became a wildcard').not.toMatch(/mcp__[A-Za-z0-9_]*\*/)
+
+    // One shot. No session to resume, no conversation to continue.
+    for (const flag of ['--resume', '--continue', '--dangerously-skip-permissions']) {
+      expect(collector, `the collector gained ${flag}`).not.toContain(flag)
+    }
+  })
+
+  test('Fetch takes no text from anywhere', () => {
+    // The property that keeps it a collector rather than a chat box: the
+    // question is a constant. Nothing a person can type reaches the prompt, and
+    // the route takes no body at all.
+    const orchestrator = read('src/server/fetch/index.ts')
+    expect(orchestrator, 'promptFor started taking an argument other than the connector')
+      .toMatch(/function promptFor\(name: Connector\)/)
+    const api = read('src/server/api.ts')
+    const route = /api\.post\('\/fetch'[\s\S]{0,200}/.exec(api)?.[0] ?? ''
+    expect(route, 'the fetch route started reading a request body').not.toMatch(/req\.json|req\.query|req\.param/)
   })
 })
 
