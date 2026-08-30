@@ -14,7 +14,7 @@
 import { Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, Circle, CircleCheck, CircleDot, Mic, Plus } from 'lucide-react'
+import { Bell, BellRing, Circle, CircleCheck, CircleDot, Mic, Plus, X } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
@@ -144,7 +144,10 @@ export function Work() {
           )}
         </div>
 
-        <VoiceNotes />
+        <div>
+          <Fired />
+          <VoiceNotes />
+        </div>
       </div>
 
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
@@ -362,6 +365,40 @@ const localDay = (ts: number) => {
   const d = new Date(ts)
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * Reminders that have already fired.
+ *
+ * `notifications` rows were written by every fired reminder and displayed by
+ * nothing — `grep -rn notifications src/web/` found no component that rendered
+ * one. So a reminder set for a device count of zero went off, wrote a row, and
+ * vanished. This is the somewhere it is visible: beside the tasks the reminders
+ * were about.
+ */
+function Fired() {
+  const { state } = useStore()
+  const rows = (state?.notifications ?? []).filter(n => !n.read_at).slice(0, 6)
+  if (!rows.length) return null
+  return (
+    <section className="mb-8">
+      <h2 className="text-eyebrow uppercase text-fg-mute mb-1">Went off</h2>
+      {rows.map(n => (
+        <div key={n.id} className="flex items-start gap-2 py-2 border-b border-rule last:border-0">
+          <BellRing size={13} className="text-accent-ink mt-0.5 shrink-0" />
+          <div className="min-w-0 grow">
+            <div className="text-base text-fg-dim truncate">{n.title}</div>
+            {n.body && <div className="text-sm text-fg-mute truncate">{n.body}</div>}
+            <div className="text-sm text-fg-mute tnum">{wallClock(n.created_at)}</div>
+          </div>
+          <Button size="sm" variant="ghost" title="Dismiss" ariaLabel="Dismiss"
+            onClick={async () => { await actions.readNotification(n.id); await reload() }}>
+            <X size={13} />
+          </Button>
+        </div>
+      ))}
+    </section>
+  )
 }
 
 /**

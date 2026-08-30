@@ -116,6 +116,7 @@ export const actions = {
   deleteGoal: (id: string) => del(`/goals/${id}`),
 
   setReminder: (b: Record<string, unknown>) => post('/reminders', b),
+  readNotification: (id: string) => post(`/notifications/${id}/read`),
   clearReminder: (id: string) => del(`/reminders/${id}`),
 
   sources: () => req<SourceStatus[]>('/sources'),

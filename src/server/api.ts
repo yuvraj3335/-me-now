@@ -562,6 +562,20 @@ api.get('/push/status', c =>
 
 api.post('/reminders/tick', async c => { await runReminders(); return c.json({ ok: true }) })
 
+/**
+ * Mark a notification read.
+ *
+ * `notifications` rows were written by every fired reminder and rendered by
+ * nothing: `grep -rn notifications src/web/` found no component that displayed
+ * one. A reminder that reaches zero devices and then appears nowhere in the
+ * product has not been delivered, it has been discarded. Work shows them now,
+ * and this is how one leaves.
+ */
+api.post('/notifications/:id/read', c => {
+  db.query(`UPDATE notifications SET read_at = ? WHERE id = ?`).run(now(), c.req.param('id'))
+  return c.json({ ok: true })
+})
+
 /* ------------------------------ sub-routers ----------------------------- */
 
 api.route('/analytics', analytics)

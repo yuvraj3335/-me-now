@@ -249,9 +249,12 @@ export function CardRow({
 
       {cols.why && <td className={`${CELL} text-sm text-fg-dim`} title={card.why}>{card.why}</td>}
       {cols.who && <td className={`${CELL} text-sm text-fg-dim`}>{card.who ?? ''}</td>}
+      {/* Head-truncated to what the column actually holds, and NOT also
+          `truncate`d: doing both gave `…utohq/tru…`, cut at each end, which is
+          the one form that identifies nothing. */}
       {cols.where && (
-        <td className={`${CELL} text-sm text-fg-dim font-mono`} title={where ?? undefined}>
-          {where ? headTruncate(where, 16) : ''}
+        <td className={`${CELL} text-sm text-fg-dim font-mono overflow-hidden`} title={where ?? undefined}>
+          {where ? headTruncate(where, 13) : ''}
         </td>
       )}
 

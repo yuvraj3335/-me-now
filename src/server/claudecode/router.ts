@@ -9,6 +9,7 @@
  */
 
 import { Hono } from 'hono'
+import { unlinkSync } from 'node:fs'
 import { audit, db } from '../db'
 import { listSessions } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
@@ -103,8 +104,22 @@ claudecode.post('/packs/:id/open', async c => {
   return 'error' in r ? c.json(bad(r.error), 404) : c.json(r)
 })
 
+/**
+ * Delete a pack, and the files that are the pack.
+ *
+ * This used to remove the row and leave the `.md` and the `.json` on disk —
+ * four such orphans were found and cleaned up by hand. A brief is a real file
+ * containing quoted provider text and whatever an excerpt carried into it;
+ * deleting the record and keeping the document is the wrong half.
+ */
 claudecode.delete('/packs/:id', c => {
-  db.query(`DELETE FROM launch_packs WHERE id = ?`).run(c.req.param('id'))
+  const id = c.req.param('id')
+  const pack = getPack(id)
+  db.query(`DELETE FROM launch_packs WHERE id = ?`).run(id)
+  for (const f of [pack?.pack_path, pack?.pack_path?.replace(/\.md$/, '.json')]) {
+    if (!f) continue
+    try { unlinkSync(f) } catch { /* already gone is the state we wanted */ }
+  }
   return c.json({ ok: true })
 })
 

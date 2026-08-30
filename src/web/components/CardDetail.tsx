@@ -90,7 +90,10 @@ export function CardDetail({
       </div>
 
       <div className="grow min-h-0 overflow-y-auto px-4 pb-4">
-        {card.excerpt && (
+        {/* A session's excerpt is its last prompt, and the Session block below
+            renders the transcript tail that ends with that same prompt. Showing
+            both is one quote printed twice. */}
+        {card.excerpt && !card.sources.some(s => s.source === 'claude') && (
           <p className="text-sm text-fg-dim whitespace-pre-wrap border-l-2 border-rule pl-3
                         line-clamp-6">
             {card.excerpt}

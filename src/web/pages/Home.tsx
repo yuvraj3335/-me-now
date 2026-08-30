@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react'
 import { actions, optimistic, refresh, reload, useStore } from '../lib/api'
 import type { Card as CardT, SourceName } from '../lib/types'
@@ -274,12 +275,19 @@ export function Home() {
    * makes the OS Back button close the detail instead of leaving Wake.
    */
   if (!isTable && selected) {
-    return (
-      <div className="fixed inset-0 z-40 bg-ink-900 flex flex-col pad-top">
+    // Through a portal, not inline. `main` carries `relative z-10`, so anything
+    // rendered inside it lives in that stacking context and can never paint
+    // above the `z-30` tab bar that is its sibling — which put the detail's
+    // action bar back underneath the nav, the exact clipping this view exists to
+    // fix. On `document.body` it is above everything, and the tab bar is
+    // covered rather than competed with.
+    return createPortal(
+      <div className="fixed inset-0 z-50 bg-ink-900 flex flex-col pad-top pad-bottom">
         <CardDetail card={selected} onClose={closeDetail}
           onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
         <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
-      </div>
+      </div>,
+      document.body,
     )
   }
 
@@ -317,10 +325,12 @@ function Header({ syncing }: { syncing: boolean }) {
   return (
     <header className="flex items-center gap-3 pt-4 pb-2">
       <h1 className="text-lg font-medium">Now</h1>
-      <Button size="sm" variant="ghost" className="ml-auto"
+      {/* `md`, not `sm`: with its `::after` inset this is a 44px target, and
+          the old one was a 31×31 tap on a phone. */}
+      <Button size="md" variant="ghost" className="ml-auto"
         title="Refresh all sources" ariaLabel="Refresh all sources"
         onClick={() => void refresh()}>
-        <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+        <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
       </Button>
     </header>
   )
