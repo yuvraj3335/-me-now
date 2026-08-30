@@ -4,7 +4,8 @@
  * client_id/secret when it does not (Slack is the latter — see SETUP.md).
  */
 import { Hono } from 'hono'
-import { db, now, uid } from './db'
+import { latestFinishedRuns, db, now, uid } from './db'
+import { resetSlackSession } from './sources/slack'
 import { MCP_SERVERS, PUBLIC_URL } from './env'
 import { ADAPTERS } from './ingest'
 import { resolveToken, claudeBridgeToken } from './mcp/creds'
@@ -29,13 +30,7 @@ connections.get('/', async c => {
   // `connected` renders "Slack, synced 1m ago" about a Slack nobody ever
   // connected. `sync_runs` is the single source of truth for what happened;
   // `status()` below answers the different question of what could happen now.
-  const runs = new Map<string, { ok: number; connected: number; at: number; count: number | null; error: string | null }>(
-    db.query<{ source: string; at: number; ok: number; connected: number; count: number | null; error: string | null }, []>(
-      `SELECT source, MAX(started_at) AS at, ok, connected, count, error
-         FROM sync_runs WHERE finished_at IS NOT NULL AND source NOT LIKE 'fetch:%'
-        GROUP BY source`,
-    ).all().map(r => [r.source, { ok: r.ok, connected: r.connected, at: r.at, count: r.count, error: r.error }]),
-  )
+  const runs = new Map(latestFinishedRuns().map(r => [r.source, r]))
 
   const sources = await Promise.all(ADAPTERS.map(async a => {
     const status = await a.status()
@@ -147,6 +142,10 @@ connections.get('/callback', async c => {
       expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : null,
       scope: t.scope,
     })
+    // The Slack MCP session caches tools/list. A reconnect that just granted
+    // search scopes would otherwise keep serving the three-tool list from
+    // the previous token for the rest of the process lifetime.
+    if (pending.server === 'slack') resetSlackSession()
     return c.html(page(`${cfg!.label} connected`, 'You can close this tab.', true))
   } catch (e) {
     return c.html(page('Authorization failed', (e as Error).message))

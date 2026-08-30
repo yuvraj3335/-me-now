@@ -66,12 +66,21 @@ not `user_scope`. Wake sends `scope` on that URL. Add the scopes below as
 **User Token Scopes** on the app, then start Connect from Wake — do not use
 Slack's own "Install to Workspace" with an empty bot-scope list.
 
-Requested scopes are read-only:
+Requested scopes are read-only. Slack MCP does **not** honour classic
+`search:read` — that name is accepted at authorize time and then the server
+exposes no search tool. Use the granular names it advertises:
 
 ```
 channels:history channels:read groups:history groups:read
-im:history mpim:history mpim:read users:read search:read team:read
+im:history im:read mpim:history mpim:read users:read
+search:read.public search:read.private search:read.im
+search:read.mpim search:read.users
 ```
+
+Also turn **Slack MCP Server** on at
+`https://api.slack.com/apps/<APP_ID>/app-assistant`. Leave Agent experience
+off. After a scope change, press **Reconnect** in Settings — do not
+Disconnect; that wipes the client id.
 
 **What Wake pulls:** DMs and messages addressed to you (`to:me`), explicit
 `@`-mentions, and anything that reads like an ask — a question, "can you", "any

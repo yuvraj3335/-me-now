@@ -685,5 +685,38 @@ export function audit(kind: string, fields: {
   )
 }
 
+/**
+ * Latest finished poll per source, with every column taken from that same row.
+ *
+ * `SELECT source, MAX(started_at), ok, connected, … GROUP BY source` is the
+ * query SQLite will happily run, and it is a lie: `MAX(started_at)` is the
+ * latest run, and `ok` / `connected` / `error` are from an arbitrary row in
+ * the group. A Slack that is connected and whose last poll failed then
+ * renders as "not connected" because an older NotConnected row donated its
+ * `connected = 0`. Settings and Now both read this.
+ */
+export type LastSync = {
+  source: string
+  at: number
+  ok: number
+  connected: number
+  count: number | null
+  error: string | null
+}
+
+export function latestFinishedRuns(): LastSync[] {
+  return db.query<LastSync, []>(
+    `SELECT s.source, s.started_at AS at, s.ok, s.connected, s.count, s.error
+       FROM sync_runs s
+       JOIN (
+         SELECT source, MAX(started_at) AS at
+           FROM sync_runs
+          WHERE finished_at IS NOT NULL AND source NOT LIKE 'fetch:%'
+          GROUP BY source
+       ) t ON t.source = s.source AND t.at = s.started_at
+      WHERE s.finished_at IS NOT NULL`,
+  ).all()
+}
+
 export const now = () => Date.now()
 export const uid = () => crypto.randomUUID()

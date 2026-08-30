@@ -81,8 +81,12 @@ export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: 
     url: str('WAKE_SLACK_MCP_URL', 'https://mcp.slack.com/mcp'),
     label: 'Slack',
     oauth: 'client-id',
-    // Read-only by construction (DECISIONS.md #7).
-    scopes: 'channels:history,channels:read,groups:history,groups:read,im:history,mpim:history,mpim:read,users:read,search:read,team:read',
+    // Read-only by construction (DECISIONS.md #7). Slack MCP advertises
+    // granular search scopes (`search:read.public`, `.private`, `.im`, …) and
+    // does not map classic `search:read` onto any tool — a token that only
+    // holds the classic name initializes fine and then exposes no search
+    // tool, which Settings used to render as "not connected".
+    scopes: 'channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,users:read,search:read.public,search:read.private,search:read.im,search:read.mpim,search:read.users',
   },
   sentry: { url: str('WAKE_SENTRY_MCP_URL', 'https://mcp.sentry.dev/mcp'), label: 'Sentry', oauth: 'dcr' },
   gmail: { url: str('WAKE_GMAIL_MCP_URL', 'https://gmailmcp.googleapis.com/mcp/v1'), label: 'Gmail', oauth: 'none' },

@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { db, logEvent, now, uid } from './db'
+import { db, latestFinishedRuns, logEvent, now, uid } from './db'
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
 import { fetchNow } from './fetch'
@@ -155,11 +155,7 @@ api.get('/state', async c => {
     // Fetch writes `fetch:<connector>` rows so that "asked, answered, nothing"
     // and "asked, did not answer" are different states there too. They are not
     // sources, and a filter chip named `fetch:slack` is not a thing.
-    lastSync: db.query<Row, []>(
-      `SELECT source, MAX(started_at) AS at, ok, connected, count, error
-         FROM sync_runs WHERE finished_at IS NOT NULL AND source NOT LIKE 'fetch:%'
-        GROUP BY source`,
-    ).all(),
+    lastSync: latestFinishedRuns(),
     serverTime: now(),
   })
 })

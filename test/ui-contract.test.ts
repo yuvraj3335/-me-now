@@ -566,8 +566,12 @@ describe('a source nobody connected is not a healthy sync', () => {
     const ingest = readSrv('src/server/ingest.ts')
     expect(ingest).toContain('NotConnected')
     expect(ingest).toMatch(/connected\s*=/)
-    expect(readSrv('src/server/api.ts'), '/state stopped reporting `connected`')
-      .toMatch(/SELECT source, MAX\(started_at\) AS at, ok, connected/)
+    expect(readSrv('src/server/api.ts'), '/state stopped reporting the latest run')
+      .toContain('latestFinishedRuns')
+    expect(readSrv('src/server/connections.ts'), 'Settings lastSync used the GROUP BY lie')
+      .toContain('latestFinishedRuns')
+    expect(readSrv('src/server/db.ts'), 'latestFinishedRuns must take ok/connected from the same row as MAX(started_at)')
+      .toMatch(/JOIN \([\s\S]*MAX\(started_at\)/)
   })
 
   /**
@@ -581,6 +585,15 @@ describe('a source nobody connected is not a healthy sync', () => {
    * has to be able to tell the three states apart, so the assertion stays and
    * points at the chip's own title.
    */
+  test('a held Slack token is Reconnect, not Disconnect, when the poll failed', () => {
+    const settings = readFileSync('src/web/pages/Settings.tsx', 'utf8')
+    expect(settings, 'Reconnect was folded back into Disconnect').toContain("'Reconnect'")
+    const fn = settings.slice(settings.indexOf('export function stateWord'), settings.indexOf('function AuditSheet'))
+    expect(fn, 'stateWord forgot hasWakeToken').toContain('hasWakeToken')
+    expect(fn, 'the not-connected lie came back as the first branch')
+      .not.toMatch(/if \(!s\.lastSync\?\.connected && !s\.ok\)/)
+  })
+
   test('Now still distinguishes all three states, on the chip', () => {
     const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
     expect(home).toContain('not connected')

@@ -27,11 +27,9 @@
  *      the diagnosis appeared only when there was nothing to diagnose. Slack's
  *      `detail` is the provider's own sentence naming the app and the URL that
  *      fixes it — fetched, held in state, and never painted.
- *   2. **Connect versus Disconnect is chosen by `hasWakeToken`, never by `ok`.**
- *      Disconnect deletes an `oauth_tokens` row; if the token came from the
- *      Claude bridge there is no row, so the click reported success and changed
- *      nothing. The server has always returned `hasWakeToken` and the UI had
- *      never read it.
+ *   2. **Disconnect is only offered for a token that is actually working.**
+ *      A held token whose poll failed is Reconnect (same client id, new
+ *      grant). Disconnect deletes the `oauth_tokens` row, client id included.
  *   3. **A source that cannot be connected offers no Connect button.** Gmail's
  *      could only ever answer 400.
  */
@@ -101,7 +99,9 @@ export function Settings() {
       if (r.url) {
         // A popup keeps Wake's state alive behind the consent screen.
         window.open(r.url, '_blank', 'width=620,height=760')
-        setTimeout(load, 4000)
+        // One 4s reload used to fire before Slack's Allow tab finished, so
+        // the row still said the previous failure after a successful grant.
+        for (const ms of [2_000, 6_000, 12_000, 20_000, 30_000]) setTimeout(load, ms)
       } else if (r.error === 'needs_client_id') {
         if (r.redirectUri) setRedirectUri(r.redirectUri)
         setClientFor(s)
@@ -326,16 +326,17 @@ function SourceRow({
             fix <ExternalLink size={13} />
           </a>
         )}
-        {/* Chosen by whether Wake holds its own token, not by whether the last
-            poll worked. And a source Wake cannot obtain a credential for offers
-            nothing at all, because a button that can only 400 is worse than no
-            button. */}
+        {/* Connect / Reconnect / Disconnect.
+            A held token that cannot poll is not "Disconnect" — that wipes the
+            client id they just pasted — it is Reconnect, which starts OAuth
+            again against the same app. A source Wake cannot obtain a
+            credential for offers nothing at all. */}
         {s.oauthable && s.connectable && (
           <span className="shrink-0 pl-3">
             <Button size="sm" variant="ghost" disabled={busy}
-              onClick={() => (s.hasWakeToken ? onDisconnect() : onConnect())}>
+              onClick={() => (s.hasWakeToken && s.ok ? onDisconnect() : onConnect())}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : null}
-              {s.hasWakeToken ? 'Disconnect' : 'Connect'}
+              {!s.hasWakeToken ? 'Connect' : s.ok ? 'Disconnect' : 'Reconnect'}
             </Button>
           </span>
         )}
@@ -357,9 +358,15 @@ function SourceRow({
  * Slack holding a real, accepted token — flatly wrong, and the opposite of what
  * the footer on Now said about the same source in the same second.
  */
-function stateWord(s: SourceStatus): { text: string; tone: string } {
-  if (!s.lastSync?.connected && !s.ok) return { text: 'not connected', tone: 'text-fg-mute' }
-  if (s.lastSync && !s.lastSync.ok) return { text: 'sync failed', tone: 'text-warn' }
+export function stateWord(s: SourceStatus): { text: string; tone: string } {
+  // A token Wake holds is connected. Live MCP failure is sync failed, never
+  // "not connected" — that word is reserved for no credential at all.
+  if (!s.hasWakeToken && !s.lastSync?.connected && !s.ok) {
+    return { text: 'not connected', tone: 'text-fg-mute' }
+  }
+  if ((s.lastSync && !s.lastSync.ok) || (s.hasWakeToken && !s.ok)) {
+    return { text: 'sync failed', tone: 'text-warn' }
+  }
   if (s.lastSync?.ok) {
     return {
       text: `synced ${ago(s.lastSync.at)}${s.lastSync.count === null ? '' : ` · ${s.lastSync.count}`}`,

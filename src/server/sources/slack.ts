@@ -18,28 +18,44 @@ let session: McpSession | null = null
 const getSession = () =>
   (session ??= new McpSession('slack', new HttpTransport(MCP_SERVERS.slack!.url, tokenGetter('slack'))))
 
+/** Drop a cached handshake so the next call re-discovers tools against the current token. */
+export function resetSlackSession() {
+  session = null
+  toolCache = null
+}
+
 /* --------------------------- tool discovery --------------------------- */
 
 type Tools = { search?: string; readThread?: string; myUserId?: string }
 let toolCache: { at: number; tools: Tools } | null = null
 
 export async function discoverTools(): Promise<Tools> {
-  if (toolCache && Date.now() - toolCache.at < 30 * 60_000) return toolCache.tools
-  const all = await getSession().listTools()
-  const byName = (re: RegExp) => all.find(t => re.test(t.name))?.name
+  // A miss is not a fact worth remembering. Slack MCP hides the search tool
+  // when the token lacks `search:read.public` / `.private`; caching that
+  // empty list for thirty minutes is how a reconnect that just granted
+  // those scopes still looked like "no search tool".
+  if (toolCache?.tools.search && Date.now() - toolCache.at < 30 * 60_000) return toolCache.tools
+  try {
+    const all = await getSession().listTools(!toolCache?.tools.search)
+    const byName = (re: RegExp) => all.find(t => re.test(t.name))?.name
 
-  const search =
-    byName(/search.*(public.*private|messages)/i) ??
-    byName(/^slack_search(_public)?$/i) ??
-    byName(/search/i)
+    const search =
+      byName(/^slack_search_public_and_private$/) ??
+      byName(/search.*(public.*private|messages)/i) ??
+      byName(/^slack_search(_public)?$/i) ??
+      byName(/search/i)
 
-  // The server tells us who we are in prose; that beats hard-coding an id.
-  const desc = all.map(t => t.description ?? '').join('\n')
-  const myUserId = ME.slackUserId || desc.match(/user_id is (U[A-Z0-9]+)/i)?.[1]
+    // The server tells us who we are in prose; that beats hard-coding an id.
+    const desc = all.map(t => t.description ?? '').join('\n')
+    const myUserId = ME.slackUserId || desc.match(/user_id is (U[A-Z0-9]+)/i)?.[1]
 
-  const tools: Tools = { search, readThread: byName(/read_thread|thread_replies/i), myUserId }
-  toolCache = { at: Date.now(), tools }
-  return tools
+    const tools: Tools = { search, readThread: byName(/read_thread|thread_replies/i), myUserId }
+    if (tools.search) toolCache = { at: Date.now(), tools }
+    return tools
+  } catch (e) {
+    resetSlackSession()
+    throw e
+  }
 }
 
 /* ------------------------------ parsing ------------------------------- */
@@ -175,7 +191,13 @@ export const slack: SourceAdapter = {
     }
     try {
       const t = await discoverTools()
-      if (!t.search) return { ok: false, detail: 'connected, but the server exposes no search tool', via }
+      if (!t.search) {
+        return {
+          ok: false,
+          detail: 'Slack granted a token but no search tool — reconnect to grant search:read.public and search:read.private',
+          via,
+        }
+      }
       return { ok: true, detail: t.myUserId ? `connected as ${t.myUserId}` : 'connected', via }
     } catch (e) {
       if (e instanceof McpUnauthorized) return { ok: false, detail: 'token rejected — reconnect', via }
@@ -188,7 +210,9 @@ export const slack: SourceAdapter = {
     if (!token) throw new NotConnected('slack')
 
     const t = await discoverTools()
-    if (!t.search) throw new Error('the Slack server exposes no search tool')
+    if (!t.search) {
+      throw new Error('Slack granted a token but no search tool — reconnect to grant search:read.public and search:read.private')
+    }
 
     const since = new Date(Date.now() - LOOKBACK_DAYS * 864e5).toISOString().slice(0, 10)
     const me = t.myUserId
