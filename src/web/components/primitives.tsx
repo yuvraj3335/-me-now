@@ -252,10 +252,10 @@ export function Chip({
  * A whole surface that is empty says one word, on the row grid.
  *
  * One line at the content's own x, exactly one row tall. Never centred, never a
- * sentence, never a number, never an icon — and never naming the filter, because
- * the chip already does and "Nothing from Slack" is three chapters' worth of
- * apology compressed into one. Default `—`, because most callers are a value
- * that has nothing in it rather than a surface that is empty.
+ * sentence, never a number, never an icon — and never naming the filter, since
+ * the pressed chip already does. Naming it was three chapters' worth of apology
+ * compressed into one line. Default `—`, because most callers are a value that
+ * has nothing in it rather than a surface that is empty.
  *
  * An empty *group* does not use this. It is not rendered at all.
  */
