@@ -59,7 +59,14 @@ Wake picks the token up on its next poll — nothing to restart.
 registration, so Wake needs an app's credentials. Create one at
 <https://api.slack.com/apps>, add the redirect URL that Settings shows you
 (`https://<your-wake>/api/connections/callback`), then paste the client id and
-secret into Settings → Slack → Connect. Requested scopes are read-only:
+secret into Settings → Slack → Connect.
+
+Slack MCP authorizes at `/oauth/v2_user/authorize`, which reads **`scope=`**,
+not `user_scope`. Wake sends `scope` on that URL. Add the scopes below as
+**User Token Scopes** on the app, then start Connect from Wake — do not use
+Slack's own "Install to Workspace" with an empty bot-scope list.
+
+Requested scopes are read-only:
 
 ```
 channels:history channels:read groups:history groups:read

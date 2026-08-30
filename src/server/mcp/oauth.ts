@@ -61,6 +61,27 @@ export async function discover(mcpUrl: string): Promise<AsMetadata | null> {
   return null
 }
 
+/**
+ * Which query parameter carries scopes on this authorize URL.
+ *
+ * Slack MCP (mcp.slack.com) authorizes at `/oauth/v2_user/authorize`. That
+ * endpoint only reads `scope`. Sending `user_scope` there is Slack's
+ * "No scopes requested" page — the app can have every user scope configured
+ * and the install still dies.
+ *
+ * Classic workspace install (`/oauth/v2/authorize`) still reads user grants
+ * from `user_scope`. Everything else is standard `scope`.
+ */
+export function scopeQueryParam(authorizationEndpoint: string, server: string): 'scope' | 'user_scope' {
+  if (server === 'slack' && !/\/oauth\/v2_user\b/.test(authorizationEndpoint)) return 'user_scope'
+  return 'scope'
+}
+
+/** Slack wants commas on both of its authorize URLs; other servers want spaces. */
+export function formatScopeList(scopes: string, server: string): string {
+  return scopes.replace(/,/g, server === 'slack' ? ',' : ' ')
+}
+
 export async function registerClient(md: AsMetadata, redirectUri: string): Promise<{ client_id: string; client_secret?: string } | null> {
   if (!md.registration_endpoint) return null
   return json(md.registration_endpoint, {

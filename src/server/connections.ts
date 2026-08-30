@@ -8,7 +8,10 @@ import { db, now, uid } from './db'
 import { MCP_SERVERS, PUBLIC_URL } from './env'
 import { ADAPTERS } from './ingest'
 import { resolveToken, claudeBridgeToken } from './mcp/creds'
-import { challengeFor, discover, exchangeCode, getStored, makeVerifier, putStored, registerClient } from './mcp/oauth'
+import {
+  challengeFor, discover, exchangeCode, formatScopeList, getStored, makeVerifier,
+  putStored, registerClient, scopeQueryParam,
+} from './mcp/oauth'
 
 export const connections = new Hono()
 
@@ -102,8 +105,7 @@ connections.post('/:server/start', async c => {
   u.searchParams.set('code_challenge_method', 'S256')
   const scopes = cfg.scopes ?? md.scopes_supported?.join(',')
   if (scopes) {
-    // Slack reads user grants from `user_scope`; everything else uses `scope`.
-    u.searchParams.set(server === 'slack' ? 'user_scope' : 'scope', scopes.replace(/,/g, server === 'slack' ? ',' : ' '))
+    u.searchParams.set(scopeQueryParam(md.authorization_endpoint, server), formatScopeList(scopes, server))
   }
   return c.json({ url: u.toString() })
 })
