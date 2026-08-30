@@ -149,7 +149,11 @@ export function Recorder({
             <Button variant="ghost" onClick={rec.cancel}>Discard</Button>
           </>
         ) : (
-          <Button variant="default" onClick={start} disabled={saving || rec.state === 'requesting'}>
+          // Ghost, not bordered. Starting a recording is a decision, not a
+          // commit — the commit is Stop, which saves — and Work already spends
+          // its one filled control on `+ Task`. A bordered box beside an amber
+          // one put three control styles on a page that needs one.
+          <Button variant="ghost" onClick={start} disabled={saving || rec.state === 'requesting'}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : <MicIcon size={14} />}
             {saving ? 'Saving…' : rec.state === 'requesting' ? 'Asking for the mic…' : 'Record a note'}
           </Button>

@@ -29,13 +29,16 @@ import { navigate, setParam, useRoute } from './lib/route'
  * control in Now's header and a command in the palette.
  *
  * `flush` marks a page that lays out the whole shell column itself — Now, which
- * is a table beside a detail pane, and Mail, which is a list beside a thread.
- * Everything else gets the shell's own padding.
+ * is a table beside a detail pane, Mail, which is a list beside a thread, and
+ * Work, which is a list beside its notes. All three pad each of their own
+ * columns with the same `.pad-x`, which is what puts the second column's left
+ * edge on one vertical across the product instead of on a 360px inset that only
+ * Work used. Everything else gets the shell's own padding.
  */
 const TABS = [
   { path: '/', label: 'Now', Icon: Inbox, Page: Home, flush: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, flush: true },
-  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: false },
+  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: true },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, flush: false },
   { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, flush: false },
 ] as const

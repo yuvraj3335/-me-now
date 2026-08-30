@@ -1,9 +1,20 @@
 /**
  * Work — his own list, beside his own notes.
  *
- * Two columns rather than one 760px reading strip with 65% of the screen dark:
- * tasks and goals on the left, voice notes on the right, both visible at once
- * because they are two halves of "what am I carrying".
+ * On the same grid as Now and Mail: a padded list column and a pane of the same
+ * width token with the same left hairline, so the second column's left edge sits
+ * on the one vertical the product uses. It used to be a `[1fr_360px]` grid
+ * inside the shell's own pad, which put its right column at x=1056 — a vertical
+ * nothing else shared — and left roughly 760px of nothing under both halves.
+ *
+ * One control language, too. `Tasks | Goals` is text, `Record a note` is ghost,
+ * and `+ Task` is the single amber commit: three control styles on one surface
+ * is three claims about which one matters.
+ *
+ * **A page with nothing on it is one column.** Two structural columns, each
+ * holding an em dash, is a layout announcing an absence. Nothing on the list,
+ * nothing in the notes and nothing that went off collapses to a title, a dash
+ * and the mic.
  *
  * Every time on this page is stated in the words he set it in — `Thu 3 Sep,
  * 2:35pm`, or `2:35pm` when it is today, or `late — Thu 3 Sep, 2:35pm` once it
@@ -18,7 +29,7 @@ import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, Terminal, X } fro
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
-import { Button, Empty, Field, Segmented, Sheet, inputClass, spring } from '../components/primitives'
+import { Button, Empty, Field, Sheet, inputClass, spring } from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
@@ -39,12 +50,29 @@ export function Work() {
   const tasks = state?.tasks ?? []
   const goals = state?.goals ?? []
   const reminders = state?.reminders ?? []
+  const fired = (state?.notifications ?? []).filter(n => !n.read_at).slice(0, 6)
+
+  /**
+   * The notes live here rather than inside their own section, because whether
+   * this page has a second column at all depends on whether there are any. A
+   * component that fetches what the layout above it needs to know cannot answer
+   * that question in time. `null` is "not read yet" and reads as empty, which is
+   * right: the common case is zero and it never flashes.
+   */
+  const [notes, setNotes] = useState<VoiceNote[] | null>(null)
+  useEffect(() => {
+    let live = true
+    voiceApi.list()
+      .then(d => { if (live) setNotes(d.notes) })
+      .catch(() => { if (live) setNotes([]) })
+    return () => { live = false }
+  }, [])
 
   /**
    * Provenance, resolved once per render rather than per row: a task carries the
-   * group key it was made from, and the card is what turns that key into "from
-   * Slack". Cards churn; the task does not, so a task whose card is gone simply
-   * loses the line rather than breaking.
+   * group key it was made from, and the card is what turns that key into the
+   * name of the source it came from. Cards churn; the task does not, so a task
+   * whose card is gone simply loses the line rather than breaking.
    */
   const cardByGroup = useMemo(() => {
     const all = [...(state?.now ?? []), ...(state?.open ?? []), ...(state?.parked ?? [])]
@@ -81,7 +109,7 @@ export function Work() {
 
   // Nothing at all until the first read lands. A sentence saying a page is
   // loading is chrome that teaches, and it paints for one frame.
-  if (!state) return <div className="pt-4"><h1 className="text-lg font-medium">Work</h1></div>
+  if (!state) return <div className="pad-x pt-4"><h1 className="text-lg font-medium">Work</h1></div>
 
   const rowProps = (t: Task) => ({
     task: t, reminders, goals,
@@ -92,72 +120,109 @@ export function Work() {
     onCycle: cycle, onEdit: setEditing,
   })
 
-  return (
-    <div className="pb-24">
-      <header className="flex items-center gap-3 pt-4 pb-2">
-        <h1 className="text-lg font-medium">Work</h1>
-        <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
-        <span className="ml-auto flex items-center gap-2">
-          <Segmented
-            options={[{ id: 'tasks', label: 'Tasks' }, { id: 'goals', label: 'Goals' }]}
-            value={tab}
-            onChange={id => setParam('tab', id === 'tasks' ? null : id)}
-            ariaLabel="Tasks or goals"
-          />
-          {/* The one primary in the product, and the only place amber marks a
-              commit rather than a decision. */}
-          <Button size="md" variant="primary"
-            onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
-            <Plus size={14} /> {tab === 'tasks' ? 'Task' : 'Goal'}
-          </Button>
+  const header = (
+    <header className="flex items-center gap-3 pt-4 pb-2">
+      <h1 className="text-lg font-medium">Work</h1>
+      <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
+      <span className="ml-auto flex items-center gap-4">
+        {/* Two words, not a bordered segmented box. It is a choice between two
+            lists, and the page already carries one bordered control too many. */}
+        <span className="flex items-center gap-3">
+          {(['tasks', 'goals'] as const).map(id => (
+            <button
+              key={id}
+              onClick={() => setParam('tab', id === 'tasks' ? null : id)}
+              aria-pressed={tab === id}
+              className={`hit h-8 text-sm font-medium transition-colors duration-100
+                ${tab === id ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}
+            >
+              {id === 'tasks' ? 'Tasks' : 'Goals'}
+            </button>
+          ))}
         </span>
-      </header>
+        {/* The one primary in the product, and the only place amber marks a
+            commit rather than a decision. */}
+        <Button size="md" variant="primary"
+          onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
+          <Plus size={14} /> {tab === 'tasks' ? 'Task' : 'Goal'}
+        </Button>
+      </span>
+    </header>
+  )
 
-      <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-6 lg:items-start">
-        <div className="min-w-0">
-          {tab === 'tasks' ? (
-            <>
-              {doing.length > 0 && (
-                <Group label="In flight">
-                  <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
-                    {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
-                  </Reorder.Group>
-                </Group>
-              )}
-
-              {todo.length > 0 && (
-                <Group label="Up next">
-                  <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
-                    {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
-                  </Reorder.Group>
-                </Group>
-              )}
-              {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
-              {!todo.length && !doing.length && !done.length && <Empty />}
-
-              {done.length > 0 && (
-                <Group label={`Done — ${done.length}`}>
-                  <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
-                    {showDone ? 'Hide' : 'Show'}
-                  </Button>
-                  {showDone && done.slice(0, 40).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
-                </Group>
-              )}
-            </>
-          ) : (
-            <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
-          )}
-        </div>
-
-        <div>
-          <Fired />
-          <VoiceNotes />
-        </div>
-      </div>
-
+  const sheets = (
+    <>
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
       <TaskSheet open={!!editing} onClose={() => setEditing(null)} task={editing} />
       <GoalSheet goal={goalEditing} onClose={() => setGoalEditing(null)} />
+    </>
+  )
+
+  /**
+   * Nothing on the list, nothing that went off, nothing recorded.
+   *
+   * One column, one dash, and the mic — because a second structural column
+   * holding a second em dash is a layout describing an absence, and 760px of it
+   * is the loudest way this product has ever said nothing.
+   */
+  if (!tasks.length && !goals.length && !fired.length && !notes?.length) {
+    return (
+      <div className="pad-x pb-24 xl:pb-8">
+        {header}
+        <Empty />
+        <VoiceNotes notes={notes} onNotes={setNotes} />
+        {sheets}
+      </div>
+    )
+  }
+
+  return (
+    /* The shell's own grid: a padded list column, then a pane on the same width
+       token with the same left hairline Now's detail and Mail's list use. Below
+       the pane width the two simply stack, which is what they did anyway. */
+    <div className="xl:flex xl:items-stretch xl:min-h-dvh">
+      <div className="min-w-0 grow pad-x pb-8">
+        {header}
+        {tab === 'tasks' ? (
+          <>
+            {doing.length > 0 && (
+              <Group label="In flight">
+                <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
+                  {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
+                </Reorder.Group>
+              </Group>
+            )}
+
+            {todo.length > 0 && (
+              <Group label="Up next">
+                <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
+                  {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
+                </Reorder.Group>
+              </Group>
+            )}
+            {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
+            {!todo.length && !doing.length && !done.length && <Empty />}
+
+            {done.length > 0 && (
+              <Group label={`Done — ${done.length}`}>
+                <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
+                  {showDone ? 'Hide' : 'Show'}
+                </Button>
+                {showDone && done.slice(0, 40).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+              </Group>
+            )}
+          </>
+        ) : (
+          <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
+        )}
+      </div>
+
+      <aside className="pad-x xl:pt-4 pb-24 xl:pb-8 xl:w-90 2xl:w-100 xl:shrink-0 xl:border-l xl:border-edge">
+        <Fired rows={fired} />
+        <VoiceNotes notes={notes} onNotes={setNotes} />
+      </aside>
+
+      {sheets}
     </div>
   )
 }
@@ -406,9 +471,7 @@ const localDay = (ts: number) => {
  * vanished. This is the somewhere it is visible: beside the tasks the reminders
  * were about.
  */
-function Fired() {
-  const { state } = useStore()
-  const rows = (state?.notifications ?? []).filter(n => !n.read_at).slice(0, 6)
+function Fired({ rows }: { rows: Array<{ id: string; title: string; body?: string | null; created_at: number }> }) {
   if (!rows.length) return null
   return (
     <section className="mb-8">
@@ -437,41 +500,35 @@ function Fired() {
  * They live on this page because a note is a note; the only difference is that
  * this one was easier to make while walking.
  */
-function VoiceNotes() {
-  const [notes, setNotes] = useState<VoiceNote[]>([])
-  const [err, setErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    voiceApi.list()
-      .then(d => { setNotes(d.notes) })
-      .catch(e => setErr((e as Error).message))
-  }, [])
-
+function VoiceNotes({
+  notes, onNotes,
+}: { notes: VoiceNote[] | null; onNotes: (fn: (prev: VoiceNote[] | null) => VoiceNote[]) => void }) {
+  const rows = notes ?? []
   return (
-    <section className="mt-8 lg:mt-0">
+    <section className="mt-8 xl:mt-0">
       {/* The lone `ml-auto` mic glyph is gone: it sat 250px from anything it
           related to and did nothing when pressed. `Recorder` below is the mic. */}
       <div className="flex items-baseline gap-2 mb-2">
         <h2 className="text-eyebrow uppercase text-fg-mute">Voice notes</h2>
-        {notes.length > 0 && <span className="text-eyebrow uppercase tnum text-fg-mute">{notes.length}</span>}
+        {rows.length > 0 && <span className="text-eyebrow uppercase tnum text-fg-mute">{rows.length}</span>}
       </div>
 
-      <Recorder onSaved={n => setNotes(prev => [n, ...prev])} />
+      <Recorder onSaved={n => onNotes(prev => [n, ...(prev ?? [])])} />
 
-      {err && <p className="mt-2 text-sm text-bad">{err}</p>}
-
+      {/* No dash under an empty list. Zero notes is the mic and nothing else —
+          the second em dash on this page was the other half of a two-column
+          void. */}
       <div className="mt-2">
-        {notes.map(n => (
+        {rows.map(n => (
           <VoicePlayer
             key={n.id}
             note={n}
             onDelete={async () => {
               await voiceApi.remove(n.id)
-              setNotes(prev => prev.filter(x => x.id !== n.id))
+              onNotes(prev => (prev ?? []).filter(x => x.id !== n.id))
             }}
           />
         ))}
-        {!notes.length && <Empty />}
       </div>
     </section>
   )
