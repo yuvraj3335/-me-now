@@ -8,3 +8,10 @@ dist/
 .env.local
 .DS_Store
 *.log
+
+# QA captures are live output from the running app — real card text, real mail
+# subjects, real session prompts. The set already committed is deliberate; new
+# ones are not, and a `git add -A` swept a whole run in once without anyone
+# looking at it. Ignored so that cannot happen by accident; `git add -f` to
+# include one on purpose.
+QA_EVIDENCE/
