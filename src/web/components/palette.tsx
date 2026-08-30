@@ -145,9 +145,9 @@ export function Palette({
                 value={q}
                 onChange={e => setQ(e.target.value)}
                 placeholder="Go to, or do…"
-                className="flex-1 bg-transparent outline-none text-[14.5px] text-fg placeholder:text-fg-mute"
+                className="flex-1 bg-transparent outline-none text-base text-fg placeholder:text-fg-mute"
               />
-              <kbd className="text-[10.5px] text-fg-mute px-1.5 py-0.5 rounded bg-ink-800">esc</kbd>
+              <kbd className="text-xs text-fg-mute px-1.5 py-0.5 rounded bg-ink-800">esc</kbd>
             </div>
 
             <div ref={listRef} className="max-h-[52vh] overflow-y-auto py-1.5">
@@ -157,7 +157,7 @@ export function Palette({
                 return (
                   <div key={c.id}>
                     {head && (
-                      <div className="px-4 pt-2.5 pb-1 text-[10.5px] uppercase tracking-[0.08em] text-fg-mute">
+                      <div className="px-4 pt-2.5 pb-1 text-eyebrow uppercase tracking-[0.08em] text-fg-mute">
                         {head}
                       </div>
                     )}
@@ -169,14 +169,14 @@ export function Palette({
                         ${i === sel ? 'bg-ink-800' : 'hover:bg-ink-800/60'}`}
                     >
                       <span className="text-fg-mute shrink-0">{c.icon}</span>
-                      <span className="text-[13.5px] text-fg truncate">{c.label}</span>
-                      {c.hint && <span className="ml-auto text-[11.5px] text-fg-mute truncate max-w-[45%]">{c.hint}</span>}
+                      <span className="text-sm text-fg truncate">{c.label}</span>
+                      {c.hint && <span className="ml-auto text-xs text-fg-mute truncate max-w-[45%]">{c.hint}</span>}
                     </button>
                   </div>
                 )
               })}
               {!hits.length && (
-                <p className="px-4 py-6 text-[13px] text-fg-mute text-center">Nothing matches that.</p>
+                <p className="px-4 py-6 text-sm text-fg-mute text-center">Nothing matches that.</p>
               )}
             </div>
           </motion.div>

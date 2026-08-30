@@ -15,7 +15,7 @@ export type ButtonVariant = 'primary' | 'default' | 'ghost' | 'danger'
 /**
  * Three sizes, and the hit area is not the ink.
  *
- * There used to be exactly one button in the app — `min-h-9 px-3 text-[13.5px]`
+ * There used to be exactly one button in the app — `min-h-9 px-3 text-sm`
  * — used for a close X, a snooze preset and a form submit alike, which is how
  * "Tonight" became a 69×36 box around a seven-character label.
  *

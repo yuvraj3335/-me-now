@@ -31,12 +31,12 @@ export function ToastBar() {
           <div className="pointer-events-auto flex items-center gap-3 max-w-[min(30rem,100%)]
                           rounded-panel bg-ink-850 border border-edge
                           pl-4 pr-1.5 py-1.5">
-            <span className="text-[13px] text-fg-dim truncate">{t.text}</span>
+            <span className="text-sm text-fg-dim truncate">{t.text}</span>
             {t.action && (
               <button
                 onClick={() => { const run = t.action!.run; dismissToast(); void run() }}
                 className="shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full
-                           text-[13px] font-medium text-accent-ink hover:bg-ink-600 transition-colors"
+                           text-sm font-medium text-accent-ink hover:bg-ink-600 transition-colors"
               >
                 <Undo2 size={13} />
                 {t.action.label}

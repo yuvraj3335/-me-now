@@ -172,7 +172,7 @@ export function TaskSheet({
       }
     >
       {fromCard && (
-        <p className="text-[12.5px] text-fg-mute mb-3.5 leading-snug">
+        <p className="text-xs text-fg-mute mb-3.5 leading-snug">
           Linked to <span className="text-fg-dim">{fromCard.title.slice(0, 60)}</span>. The task
           survives even if that message goes away.
         </p>
@@ -242,13 +242,13 @@ export function TaskSheet({
 
       {task && (
         <div className="mt-1">
-          <div className="text-[11.5px] uppercase tracking-[0.07em] text-fg-mute mb-2">
+          <div className="text-xs uppercase tracking-[0.07em] text-fg-mute mb-2">
             Sticky notes
           </div>
           <div className="space-y-2 mb-2">
             {task.notes?.map(n => (
               <div key={n.id}
-                className="group relative rounded-[10px] px-3 py-2.5 text-[13px] leading-relaxed"
+                className="group relative rounded-[10px] px-3 py-2.5 text-sm leading-relaxed"
                 style={{
                   background: `color-mix(in oklab, ${n.color ?? 'var(--color-accent)'} 12%, var(--color-ink-800))`,
                   boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}`,

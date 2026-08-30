@@ -37,7 +37,7 @@ export function Bars({
   // 2px slivers — which looks broken, not early. Say so instead, the same way
   // `Trend` already does when it has too few points to draw a line.
   if (rawMax === 0) {
-    return <div style={{ height }} className="grid place-items-center text-[12.5px] text-fg-mute">
+    return <div style={{ height }} className="grid place-items-center text-xs text-fg-mute">
       Nothing here yet
     </div>
   }
@@ -86,7 +86,7 @@ export function Bars({
         })}
       </svg>
 
-      <div className="flex justify-between mt-1.5 text-[11px] text-fg-mute tnum">
+      <div className="flex justify-between mt-1.5 text-xs text-fg-mute tnum">
         <span>{data[0]?.day.slice(5)}</span>
         <span className={active ? 'text-fg' : ''}>
           {active ? (label?.(active) ?? `${active.day.slice(5)} · ${format(active.value)}`) : ''}
@@ -172,7 +172,7 @@ export function Trend({
                 onPointerEnter={() => setHover(p.i)} onPointerLeave={() => setHover(null)} />
         ))}
       </svg>
-      <div className="flex justify-between mt-1.5 text-[11px] text-fg-mute tnum">
+      <div className="flex justify-between mt-1.5 text-xs text-fg-mute tnum">
         <span>{data[0]?.day.slice(5)}</span>
         <span className={active ? 'text-fg' : ''}>
           {active ? `${active.day.slice(5)} · ${format(active.v)}` : ''}
@@ -245,15 +245,15 @@ export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; val
         })}
 
         <text x={cx} y={cy - 4} textAnchor="middle"
-              className="fill-[var(--color-fg)] text-[15px] font-medium tnum">
+              className="fill-[var(--color-fg)] text-md font-medium tnum">
           {String(shown.hour).padStart(2, '0')}:00
         </text>
         <text x={cx} y={cy + 13} textAnchor="middle"
-              className="fill-[var(--color-fg-mute)] text-[10.5px]">
+              className="fill-[var(--color-fg-mute)] text-xs">
           {shown.value} done
         </text>
       </svg>
-      <p className="text-[12px] text-fg-mute mt-1">
+      <p className="text-xs text-fg-mute mt-1">
         {hover == null ? 'Your sharpest hour' : 'Hover to compare'}
       </p>
     </div>
@@ -337,7 +337,7 @@ export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: nu
             animate={{ height: `${Math.max(3, (d.value / max) * 82)}%` }}
             transition={{ delay: d.weekday * 0.04, type: 'spring', stiffness: 200, damping: 24 }}
           />
-          <span className="text-[10.5px] text-fg-mute">{WD[d.weekday]!.slice(0, 1)}</span>
+          <span className="text-xs text-fg-mute">{WD[d.weekday]!.slice(0, 1)}</span>
         </div>
       ))}
     </div>

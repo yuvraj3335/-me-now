@@ -167,8 +167,8 @@ export function Pulse() {
                 return (
                   <div key={g.id}>
                     <div className="flex items-baseline justify-between mb-1.5">
-                      <span className="text-[13.5px] text-fg-dim">{g.title}</span>
-                      <span className="tnum text-[12.5px] text-fg-mute">
+                      <span className="text-sm text-fg-dim">{g.title}</span>
+                      <span className="tnum text-xs text-fg-mute">
                         {g.done}/{g.total}
                       </span>
                     </div>

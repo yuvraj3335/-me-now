@@ -235,12 +235,58 @@ describe('the console does not become a feed again', () => {
     }
   })
 
+  test('the type scale stays at seven sizes', () => {
+    // Wake shipped 19 distinct font sizes, 123 of ~222 declarations under
+    // 13.5px — which is the actual content of "dark mode text is too faint".
+    // The scale lives in styles.css as `--text-*`; an arbitrary `text-[12.5px]`
+    // in a component is a nineteenth size sneaking back in.
+    for (const f of tsx) {
+      for (const line of read(f).split('\n')) {
+        const m = /className[^\n]*?(text-\[[0-9.]+px\])/.exec(line)
+        if (m) throw new Error(`${f}: ${m[1]} — use a --text-* token\n  ${line.trim()}`)
+      }
+    }
+    const css = read('src/web/styles.css')
+    for (const t of ['--text-eyebrow', '--text-xs', '--text-sm', '--text-base', '--text-md', '--text-lg', '--text-xl']) {
+      expect(css, `${t} left the scale`).toContain(`${t}:`)
+    }
+  })
+
+  test('the eyebrow token is only ever an eyebrow', () => {
+    // It carries weight 500 and +0.06em tracking. On a chart axis label or a
+    // `kbd` that is not a small label, it is a shouty one — and the token table
+    // names `--text-xs` for tabular numerics, tab labels and key hints.
+    for (const f of tsx) {
+      for (const line of read(f).split('\n')) {
+        if (!line.includes('text-eyebrow')) continue
+        expect(line, `${f}: the eyebrow token is being used as body chrome\n  ${line.trim()}`)
+          .toContain('uppercase')
+      }
+    }
+  })
+
+  test('a desktop row uses columns as its separator, not a dot', () => {
+    // 65 `·` on Now, painted in `ink-600` at 1.58:1 — the only elements in the
+    // product that failed contrast. The table has no separators because the
+    // columns are the separator; the phone's two-line row keeps one muted run,
+    // which is what the layout there is, and it is `--fg-mute` at 7.2:1.
+    const table = read('src/web/components/CardTable.tsx')
+    const row = table.slice(table.indexOf('export function CardRow('), table.indexOf('export function CardLine('))
+    expect(row, 'a separator came back into the table row').not.toContain('·')
+  })
+
   test('help text cannot come back through a component prop', () => {
     // Sixty-one explanatory strings shipped across five routes and six overlays.
     // Removing the prop is what stops them returning without a code change.
     const primitives = read('src/web/components/primitives.tsx')
     const field = primitives.slice(primitives.indexOf('export function Field('))
     expect(field.slice(0, 300), 'Field grew a hint again').not.toMatch(/\bhint\b/)
+
+    // The Now page's own section header had the same prop. It is `GroupHead`
+    // now, and it takes a count, not a sentence.
+    const table = read('src/web/components/CardTable.tsx')
+    const head = table.slice(table.indexOf('export function GroupHead('))
+    expect(head.slice(0, 400), 'the group header grew a hint').not.toMatch(/\bhint\b/)
     for (const f of tsx) {
       expect(read(f), `${f}: a Field is being given a hint`).not.toMatch(/<Field[^>]*\shint=/)
     }

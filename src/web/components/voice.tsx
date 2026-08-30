@@ -65,7 +65,7 @@ export function Mic({
         )}
       </button>
       {note && (
-        <p className="absolute right-0 top-8 z-20 w-[240px] text-[11.5px] text-fg-mute
+        <p className="absolute right-0 top-8 z-20 w-[240px] text-xs text-fg-mute
                       bg-ink-800 rounded-lg p-2 leading-snug shadow-xl">
           {note}
         </p>
@@ -101,7 +101,7 @@ export function Recorder({
 
   if (!rec.supported) {
     return (
-      <p className="text-[12.5px] text-fg-mute leading-relaxed">
+      <p className="text-xs text-fg-mute leading-relaxed">
         This browser cannot record audio, so voice notes are unavailable here.
       </p>
     )
@@ -145,7 +145,7 @@ export function Recorder({
             <Button variant="primary" onClick={stop} disabled={saving}>
               <Square size={13} className="fill-current" /> Stop
             </Button>
-            <span className="tnum text-[13px] text-accent-ink">{fmtDuration(rec.ms)}</span>
+            <span className="tnum text-sm text-accent-ink">{fmtDuration(rec.ms)}</span>
             <Button variant="ghost" onClick={rec.cancel}>Discard</Button>
           </>
         ) : (
@@ -157,13 +157,13 @@ export function Recorder({
       </div>
 
       {(rec.error || err) && (
-        <p className="mt-2 flex items-start gap-1.5 text-[12.5px] text-bad leading-snug">
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-bad leading-snug">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           {rec.error ?? err}
         </p>
       )}
       {rec.state === 'recording' && !dict.supported && (
-        <p className="mt-2 text-[11.5px] text-fg-mute">
+        <p className="mt-2 text-xs text-fg-mute">
           This browser cannot transcribe live; the audio is still saved.
         </p>
       )}
@@ -198,7 +198,7 @@ export function VoicePlayer({ note, onDelete }: { note: VoiceNote; onDelete?: ()
         </button>
 
         <div className="grow min-w-0">
-          <div className="text-[13.5px] text-fg leading-snug">{note.title ?? 'Note'}</div>
+          <div className="text-sm text-fg leading-snug">{note.title ?? 'Note'}</div>
           <div className="mt-1 flex items-center gap-2">
             <input
               type="range"
@@ -214,21 +214,21 @@ export function VoicePlayer({ note, onDelete }: { note: VoiceNote; onDelete?: ()
               className="flex-1 h-1 accent-[var(--color-accent)] bg-ink-700 rounded-full appearance-none cursor-pointer"
               aria-label="Seek"
             />
-            <span className="tnum text-[11px] text-fg-mute shrink-0">
+            <span className="tnum text-xs text-fg-mute shrink-0">
               {fmtDuration(pos * 1000)} / {dur ? fmtDuration(dur * 1000) : '—'}
             </span>
           </div>
 
           {note.transcript && (
-            <p className="mt-1.5 text-[12.5px] text-fg-dim leading-relaxed whitespace-pre-wrap">{note.transcript}</p>
+            <p className="mt-1.5 text-xs text-fg-dim leading-relaxed whitespace-pre-wrap">{note.transcript}</p>
           )}
           {!note.transcript && note.transcript_state === 'failed' && (
-            <p className="mt-1.5 text-[11.5px] text-fg-mute">
+            <p className="mt-1.5 text-xs text-fg-mute">
               Transcription failed; the recording is intact. {note.transcript_error}
             </p>
           )}
-          {err && <p className="mt-1.5 text-[11.5px] text-bad">{err}</p>}
-          <div className="mt-1 text-[11px] text-fg-mute tnum">{ago(note.created_at)} ago</div>
+          {err && <p className="mt-1.5 text-xs text-bad">{err}</p>}
+          <div className="mt-1 text-xs text-fg-mute tnum">{ago(note.created_at)} ago</div>
         </div>
 
         {onDelete && (
