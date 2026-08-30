@@ -30,7 +30,8 @@ import {
 import { CardDetail } from '../components/CardDetail'
 import { TaskSheet } from '../components/TaskSheet'
 import { Button, Chip, Empty } from '../components/primitives'
-import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
+import { SOURCE_LABEL } from '../components/sources'
+import { SourceMark } from '../components/kinds'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { overlayOpen, useOverlay } from '../lib/overlay'
@@ -46,8 +47,9 @@ import { closeDetail, openDetail, setParam, useDetailKey, useParam } from '../li
  * 7am. Hiding the broken thing is how the broken thing stops getting fixed.
  *
  * They are filters over rows, not connection indicators, so none of them is ever
- * disabled either. A source whose last poll failed carries a hollow dot and the
- * reason on `title`, and that is the only sync mark on this page.
+ * disabled either. A source whose last poll failed carries its own mark at a
+ * quarter weight and the reason on `title`, and that is the only sync mark on
+ * this page.
  */
 const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
 
@@ -235,9 +237,10 @@ export function Home() {
   /**
    * A filter that matches nothing anywhere is one line.
    *
-   * Not three chapters and a count and a fourth heading. Not "Nothing from
-   * Slack" either — the chip above it is already pressed and already says Slack,
-   * so the suffix restates the question in the answer. `Done and not mine` is
+   * Not three chapters and a count and a fourth heading. One word, with no
+   * source name appended either — the chip above it is already pressed and
+   * already names the source, so the suffix restates the question inside the
+   * answer, and the phrase it would make is a banned one. `Done and not mine` is
    * not rendered here either: it is scoped to the same filter, so it opens to
    * either a different population than the filter implies or a second empty
    * state, and both are worse than absence.
@@ -366,9 +369,10 @@ function Header() {
  * could not be bookmarked and a refresh mid-triage lost his place.
  *
  * All five sources, always, in one fixed order, never disabled and never
- * reordered. A source whose last poll failed gets a hollow dot and the reason on
- * `title`; a source with no credential gets the same treatment with a different
- * reason. That is the only sync mark on this page — `SyncLine`, a wrapping
+ * reordered. Each carries the mark its rows already carry in the Kind column, so
+ * the row is readable on a device that cannot hover. A source whose last poll
+ * failed draws that mark at a quarter weight with the reason on `title`; a
+ * source with no credential gets the same treatment with a different reason. That is the only sync mark on this page — `SyncLine`, a wrapping
  * five-clause paragraph at 12px that ended in amber and sat 424px below the
  * fold, is deleted rather than shortened. Failure belongs on the chip you are
  * about to press and on the row in Settings where you would go to fix it.
@@ -394,17 +398,26 @@ function FilterRow({
           <Chip
             key={s}
             active={value === s}
-            dot={SOURCE_COLOR[s]}
-            hollow={!!bad}
+            /* Below the width that fits five names, a chip carries either its
+               mark or its name and never both — and the one with a name is the
+               one that is pressed. Both together is 41–86px per chip on a row
+               that has 358 to spend on eight controls, which is how a filtered
+               phone ended up 71px wider than the screen. */
+            flexible={value === s}
+            mark={
+              <span className={value === s ? 'hidden lg:inline-flex' : 'inline-flex'}>
+                <SourceMark source={s} failed={!!bad} />
+              </span>
+            }
             title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
             ariaLabel={SOURCE_LABEL[s]}
             onClick={() => setParam('src', value === s ? null : s)}
           >
-            {/* On the phone only the pressed chip carries its label, so all five
-                sources plus Fetch fit 390px in one row that does not scroll.
-                The row used to be 442px of content in a 358px box with the
-                scrollbar suppressed. */}
-            <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
+            {/* Every name at `lg`, where all five fit; the pressed one's name at
+                every width, truncating rather than pushing Fetch off the screen.
+                The names used to appear from `sm`, where the row needs 612px and
+                has 392 — the page scrolled sideways at 640 and 768. */}
+            <span className={value === s ? 'truncate' : 'hidden lg:inline'}>{SOURCE_LABEL[s]}</span>
           </Chip>
         )
       })}
@@ -463,7 +476,13 @@ function Fetch() {
       )}
       <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
         title="Ask every connector this machine can reach what is on you">
-        {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+        {/* The word is the control; the glyph is decoration, and on a phone it
+            is 22px of a 358px row that six filters and this have to share. It
+            comes back at the width where the filters get their names. The busy
+            state is still legible without it — the label is the indicator. */}
+        <span className="hidden lg:inline-flex">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+        </span>
         {/* One width for both words, so the row does not shift under the finger. */}
         <span className="w-14 text-left">{busy ? 'Fetching' : 'Fetch'}</span>
       </Button>

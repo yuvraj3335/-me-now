@@ -83,6 +83,47 @@ export function KindGlyph({ kind, size = 16 }: { kind: Kind; size?: number }) {
   return <Icon size={size} strokeWidth={1.8} style={{ color: SOURCE_COLOR[kind.source] }} aria-hidden />
 }
 
+/**
+ * One mark per source, from the same set the Kind column draws from.
+ *
+ * A source's rows can be more than one kind — GitHub is a pull request, an issue
+ * and a review request — so this names the one that stands for the whole source:
+ * whichever mark the eye has already learned from the rows. Nothing new is
+ * invented, which is the point. A second vocabulary for the same five things
+ * would be a legend to memorise.
+ */
+export const SOURCE_GLYPH: Record<SourceName, LucideIcon> = {
+  slack: MessageSquare,
+  gmail: Mail,
+  github: GitPullRequest,
+  sentry: TriangleAlert,
+  claude: Terminal,
+}
+
+/**
+ * A source, identified without a word.
+ *
+ * The filter row's chips carried a 6px dot and their name on `title`, and a
+ * phone has no hover: five coloured dots that are only distinguishable once you
+ * have tapped one. The mark says which source before it is read, and the failed
+ * state is the same mark at a quarter weight, with the reason still on `title` —
+ * present, legible as a source, and visibly not answering.
+ */
+export function SourceMark({
+  source, failed, size = 14,
+}: { source: SourceName; failed?: boolean; size?: number }) {
+  const Icon = SOURCE_GLYPH[source]
+  return (
+    <Icon
+      size={size}
+      strokeWidth={1.8}
+      className={`shrink-0 ${failed ? 'opacity-40' : ''}`}
+      style={{ color: SOURCE_COLOR[source] }}
+      aria-hidden
+    />
+  )
+}
+
 /* --------------------------------- where ---------------------------------- */
 
 /**

@@ -213,12 +213,29 @@ export const inputClass =
    focus:ring-1 focus:ring-accent/50`
 
 export function Chip({
-  active, onClick, children, dot, hollow, disabled, title, ariaLabel,
+  active, onClick, children, dot, mark, disabled, title, ariaLabel, flexible,
 }: {
   active?: boolean; onClick?: () => void; children: ReactNode
+  /**
+   * This chip may give up width rather than push its neighbours off the screen.
+   *
+   * A chip is `shrink-0` by default, which is right for a row that fits and
+   * wrong for the one chip in it that carries a variable-length name. Six
+   * controls and a name like `Claude Code` do not fit 358px, and the row is
+   * required not to scroll, so that name truncates instead.
+   */
+  flexible?: boolean
+  /** A colour swatch — a goal's colour, and nothing that has a mark of its own. */
   dot?: string
-  /** The dot is an outline: this source's last poll failed. */
-  hollow?: boolean
+  /**
+   * A mark the caller draws itself, which wins over `dot`.
+   *
+   * A phone has no hover, so a row of chips whose only identification is a
+   * `title` attribute is a row of anonymous lozenges until you tap one. A chip
+   * that stands for something with a glyph elsewhere in the product carries that
+   * same glyph here.
+   */
+  mark?: ReactNode
   disabled?: boolean; title?: string; ariaLabel?: string
 }) {
   return (
@@ -229,20 +246,12 @@ export function Chip({
       aria-label={ariaLabel}
       aria-pressed={active}
       className={`hit relative inline-flex items-center gap-2 h-8 px-2 rounded-control text-sm
-        font-medium transition-colors duration-100 whitespace-nowrap shrink-0
+        font-medium transition-colors duration-100 whitespace-nowrap
+        ${flexible ? 'min-w-0' : 'shrink-0'}
         disabled:opacity-40 disabled:pointer-events-none
         ${active ? 'bg-ink-800 text-fg border border-edge' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800 border border-transparent'}`}
     >
-      {/* A hollow dot is a source whose last poll failed; the reason is on the
-          chip's own `title`. It is the only sync mark on Now. */}
-      {dot && (
-        <span
-          className="w-2 h-2 rounded-full shrink-0"
-          style={hollow
-            ? { border: `1.5px solid ${dot}`, background: 'transparent' }
-            : { background: dot }}
-        />
-      )}
+      {mark ?? (dot && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dot }} />)}
       {children}
     </button>
   )
