@@ -9,7 +9,7 @@
  * about could notify me a second time. That inheritance is what makes the
  * brief's hard requirement hold across time rather than only within one poll.
  */
-import { db, logEvent, now } from './db'
+import { db, logEvent, now, sweepOauthPending } from './db'
 import { cardId, groupCards } from './dedup'
 import { NotConnected, PartialPoll, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
@@ -59,6 +59,10 @@ export function ingest(only?: SourceName): Promise<IngestReport> {
 
 async function doIngest(only?: SourceName): Promise<IngestReport> {
   const at = now()
+  // Abandoned Connect attempts are only ever deleted by the callback that
+  // consumes them, so the poll is the one thing that runs often enough to
+  // notice the ones nobody came back from.
+  sweepOauthPending()
   const adapters = only ? ADAPTERS.filter(a => a.name === only) : ADAPTERS
   const report: IngestReport = { at, sources: [], groups: 0, newGroups: 0 }
 
@@ -235,9 +239,31 @@ export function ensureGroupState(at: number): { groups: number; fresh: number } 
 }
 
 /**
+ * How far along the two sides of a merge are, so the further one can win.
+ *
+ * `wont_do` sits one step above `not_started` and below everything else: a
+ * group someone has started working on is not a group he disowned, and the
+ * merge is exactly the moment those two claims meet.
+ */
+const STATUS_RANK: Record<string, number> = {
+  not_started: 0, wont_do: 1, in_progress: 2, in_review: 3, done: 4,
+}
+
+const furtherStatus = (a: string | null, b: string | null): string => {
+  const x = a ?? 'not_started', y = b ?? 'not_started'
+  return (STATUS_RANK[y] ?? 0) > (STATUS_RANK[x] ?? 0) ? y : x
+}
+
+/**
  * Merge my state from an old group key into the new one. Every field takes the
  * "already handled" side of the merge: if either group was acknowledged or
  * notified, the merged group counts as acknowledged and notified.
+ *
+ * Status, priority and due date follow the same principle in their own terms —
+ * the further-along status, the more urgent priority, the sooner deadline —
+ * because the alternative is that a status he set by hand is destroyed the
+ * first time a Slack message merges that group into a pull request's group,
+ * silently, by a background poll.
  */
 export function migrateState(from: string, to: string) {
   const src = db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(from)
@@ -250,15 +276,20 @@ export function migrateState(from: string, to: string) {
   if (!dst) {
     db.query(
       `INSERT INTO card_state (group_key, pile_override, snoozed_until, acked_at, notified_at,
-                               not_mine, done_at, pinned, first_seen_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                               not_mine, done_at, pinned, status, priority, due_at,
+                               first_seen_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(to, src.pile_override, src.snoozed_until, src.acked_at, src.notified_at,
-          src.not_mine, src.done_at, src.pinned, src.first_seen_at, now())
+          src.not_mine, src.done_at, src.pinned,
+          src.status ?? 'not_started', src.priority ?? 2, src.due_at,
+          src.first_seen_at, now())
   } else {
+    const status = furtherStatus(dst.status, src.status)
     db.query(
       `UPDATE card_state SET
          pile_override = COALESCE(pile_override, ?), snoozed_until = ?, acked_at = ?,
-         notified_at = ?, not_mine = ?, done_at = ?, pinned = ?, first_seen_at = ?, updated_at = ?
+         notified_at = ?, not_mine = ?, done_at = ?, pinned = ?,
+         status = ?, priority = ?, due_at = ?, first_seen_at = ?, updated_at = ?
        WHERE group_key = ?`,
     ).run(
       src.pile_override,
@@ -266,9 +297,18 @@ export function migrateState(from: string, to: string) {
       maxN(dst.acked_at, src.acked_at),
       // Earliest notification wins: once notified, always notified.
       minN(dst.notified_at, src.notified_at),
-      dst.not_mine || src.not_mine ? 1 : 0,
-      maxN(dst.done_at, src.done_at),
+      // `not_mine` and `done_at` are derived from the merged status rather than
+      // OR-ed and MAX-ed on their own. Taking the union would leave a group
+      // whose status says in-progress carrying `not_mine = 1` from the side it
+      // beat, and `pile()` still reads that column — so the card would be
+      // hidden while claiming to be worked on.
+      status === 'wont_do' ? 1 : 0,
+      status === 'done' ? (maxN(dst.done_at, src.done_at) ?? now()) : null,
       dst.pinned || src.pinned ? 1 : 0,
+      status,
+      Math.min(dst.priority ?? 2, src.priority ?? 2),
+      // The sooner deadline is the real one.
+      minN(dst.due_at, src.due_at),
       Math.min(dst.first_seen_at, src.first_seen_at),
       now(), to,
     )

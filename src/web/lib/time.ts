@@ -69,6 +69,27 @@ export function deadlineWords(ts: number, now = Date.now()): string {
   return ts < now ? `late — ${wallClock(ts, now)}` : `${wallClock(ts, now)} · ${until(ts, now)}`
 }
 
+/**
+ * `<input type="datetime-local">` wants local wall-clock, not an ISO instant.
+ *
+ * Built from the parts rather than by subtracting an offset. The old version
+ * used `new Date().getTimezoneOffset()` — *today's* offset, applied to an
+ * instant that might sit on the other side of a daylight-saving boundary, which
+ * is an hour wrong wherever the clocks move. It is harmless in IST and wrong
+ * everywhere else, which is the worst kind of harmless.
+ */
+const pad = (n: number) => String(n).padStart(2, '0')
+
+export function toLocalInput(ms: number | null): string {
+  if (!ms) return ''
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+export function fromLocalInput(v: string): number | null {
+  return v ? new Date(v).getTime() : null
+}
+
 /** Local start-of-day plus an hour offset — used by the snooze presets. */
 export function atHour(daysAhead: number, hour: number): number {
   const d = new Date()

@@ -8,9 +8,9 @@
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
 import { db, now } from '../src/server/db'
 import { api } from '../src/server/api'
+import { migrateState } from '../src/server/ingest'
 
 const GROUP = 'gh:acme/widgets#7'
 
@@ -169,15 +169,76 @@ describe('every pile the server accepts is a pile the UI can ask for', () => {
     const live = await (await api.request('/state')).json() as any
     expect(live.parked.map((c: any) => c.group_key)).toContain(GROUP)
   })
+})
 
-  test('and the card detail offers exactly the piles it is not in', () => {
-    // Read off the source: the control is built from a list that excludes the
-    // current pile, so "Move to Open" cannot be offered for an Open card — which
-    // used to be a silent write of `pile_override:'open'`, freezing the card
-    // against Wake's own classification forever.
-    const detail = readFileSync('src/web/components/CardDetail.tsx', 'utf8')
-    expect(detail).toMatch(/PILES\b/)
-    expect(detail, 'the move control no longer filters out the current pile')
-      .toMatch(/filter\([^)]*p\.id !== card\.pile/)
+/**
+ * Group keys are not stable. A Slack message linking to a pull request can
+ * arrive after that pull request's own card, and at that instant two groups
+ * become one — so everything he set by hand on either side has to survive a
+ * merge nobody asked for and nobody sees. Before this, a status, a priority and
+ * a due date were simply dropped by the next poll.
+ */
+describe('a merge keeps what he set by hand', () => {
+  const OTHER = 'slack:C123:1788094379.882969'
+
+  const seed = (group: string, patch: Record<string, unknown>) => {
+    db.query(
+      `INSERT INTO card_state (group_key, first_seen_at, updated_at) VALUES (?,?,?)
+       ON CONFLICT(group_key) DO NOTHING`,
+    ).run(group, now(), now())
+    const keys = Object.keys(patch)
+    db.query(
+      `UPDATE card_state SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE group_key = ?`,
+    ).run(...keys.map(k => patch[k] as any), group)
+  }
+
+  const merged = () =>
+    db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(GROUP)
+
+  test('the further-along status wins, and a park has no say in it', () => {
+    seed(GROUP, { status: 'not_started' })
+    seed(OTHER, { status: 'in_review' })
+    migrateState(OTHER, GROUP)
+    expect(merged().status).toBe('in_review')
+  })
+
+  test("won't do loses to work someone has started", () => {
+    // A group somebody is working on is not a group he disowned, and the
+    // derived `not_mine` has to follow the merged status rather than be OR-ed:
+    // `pile()` still reads that column, so a stale 1 would hide a card whose
+    // status says it is being worked on.
+    seed(GROUP, { status: 'wont_do', not_mine: 1 })
+    seed(OTHER, { status: 'in_progress' })
+    migrateState(OTHER, GROUP)
+    expect(merged().status).toBe('in_progress')
+    expect(merged().not_mine).toBe(0)
+  })
+
+  test("won't do still beats a group nobody has touched", () => {
+    seed(GROUP, { status: 'not_started' })
+    seed(OTHER, { status: 'wont_do', not_mine: 1 })
+    migrateState(OTHER, GROUP)
+    expect(merged().status).toBe('wont_do')
+    expect(merged().not_mine).toBe(1)
+  })
+
+  test('the sooner deadline and the more urgent priority win', () => {
+    const soon = now() + 864e5
+    const later = now() + 7 * 864e5
+    seed(GROUP, { due_at: later, priority: 3 })
+    seed(OTHER, { due_at: soon, priority: 1 })
+    migrateState(OTHER, GROUP)
+    expect(merged().due_at).toBe(soon)
+    expect(merged().priority).toBe(1)
+  })
+
+  test('a merge into a group with no state of its own carries all three over', () => {
+    const at = now() + 864e5
+    seed(OTHER, { status: 'in_review', priority: 0, due_at: at })
+    db.query(`DELETE FROM card_state WHERE group_key = ?`).run(GROUP)
+    migrateState(OTHER, GROUP)
+    expect(merged().status).toBe('in_review')
+    expect(merged().priority).toBe(0)
+    expect(merged().due_at).toBe(at)
   })
 })

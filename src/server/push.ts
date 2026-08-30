@@ -126,19 +126,34 @@ export async function runReminders() {
   await warnDeadlines()
 }
 
+/**
+ * One emoji per notification kind, always the same one, always leading the
+ * title, and never in the body.
+ *
+ * These four are the only emoji in the product. A push lands in OS chrome,
+ * where no lucide glyph and no Wake token reaches, and a lock screen holding
+ * six grey lines needs one mark that says which of them this is. Inside the DOM
+ * the same distinction is drawn with a glyph and a colour, so nothing there
+ * needs one — and the body is his own words either way.
+ */
+const REMINDER = '⏰ '
+const GOAL = '🎯 '
+const OVERDUE = '🔴 '
+const DUE_SOON = '🟠 '
+
 function describeTarget(r: any): { title: string; body?: string; url?: string } {
   if (r.target_kind === 'task') {
     const t = db.query<any, [string]>(`SELECT title FROM tasks WHERE id = ?`).get(r.target_id)
-    return { title: r.label || 'Reminder', body: t?.title ?? undefined, url: `${PUBLIC_URL}/work` }
+    return { title: REMINDER + (r.label || 'Reminder'), body: t?.title ?? undefined, url: `${PUBLIC_URL}/work` }
   }
   if (r.target_kind === 'goal') {
     const g = db.query<any, [string]>(`SELECT title FROM goals WHERE id = ?`).get(r.target_id)
-    return { title: r.label || 'Goal reminder', body: g?.title ?? undefined, url: `${PUBLIC_URL}/work` }
+    return { title: GOAL + (r.label || 'Goal reminder'), body: g?.title ?? undefined, url: `${PUBLIC_URL}/work` }
   }
   const c = db.query<any, [string]>(
     `SELECT title, url FROM cards WHERE group_key = ? AND gone = 0 ORDER BY ts DESC LIMIT 1`,
   ).get(r.target_id)
-  return { title: r.label || 'Reminder', body: c?.title ?? undefined, url: c?.url ?? `${PUBLIC_URL}/` }
+  return { title: REMINDER + (r.label || 'Reminder'), body: c?.title ?? undefined, url: c?.url ?? `${PUBLIC_URL}/` }
 }
 
 /**
@@ -156,17 +171,48 @@ const HORIZONS: Array<[number, string]> = [[0, 'overdue'], [3600_000, 'due withi
 
 async function warnDeadlines() {
   const t = now()
-  const tasks = db.query<any, []>(
-    `SELECT id, title, due_at FROM tasks WHERE status != 'done' AND due_at IS NOT NULL`,
-  ).all()
 
-  for (const task of tasks) {
+  const due: Array<{ key: string; title: string; at: number; url: string }> = []
+
+  for (const task of db.query<any, []>(
+    `SELECT id, title, due_at FROM tasks WHERE status != 'done' AND due_at IS NOT NULL`,
+  ).all()) {
+    due.push({ key: `due:${task.id}`, title: task.title, at: task.due_at, url: `${PUBLIC_URL}/work` })
+  }
+
+  /*
+   * Cards have due dates too, and the join to `cards` is what keeps this
+   * honest: `card_state` outlives the card the poller sweeps, so without
+   * `gone = 0` Wake would push deadline warnings about things that are no
+   * longer on any desk and cannot be opened from the notification.
+   */
+  for (const card of db.query<any, []>(
+    `SELECT s.group_key, s.due_at, c.title
+       FROM card_state s
+       JOIN cards c ON c.id = (
+         SELECT live.id FROM cards live
+          WHERE live.group_key = s.group_key AND live.gone = 0
+          ORDER BY live.ts DESC LIMIT 1
+       )
+      WHERE s.status NOT IN ('done','wont_do') AND s.due_at IS NOT NULL`,
+  ).all()) {
+    due.push({
+      key: `due:card:${card.group_key}`,
+      title: card.title,
+      at: card.due_at,
+      // The desk, not the source: a due date is Wake's own fact about the card,
+      // and the thing to do with it is look at the row it is on.
+      url: `${PUBLIC_URL}/`,
+    })
+  }
+
+  for (const item of due) {
     for (const [lead, label] of HORIZONS) {
-      if (task.due_at - lead > t) continue
-      await notify(`due:${task.id}:${task.due_at}:${lead}`, {
-        title: label === 'overdue' ? 'Overdue' : 'Due soon',
-        body: task.title,
-        url: `${PUBLIC_URL}/work`,
+      if (item.at - lead > t) continue
+      await notify(`${item.key}:${item.at}:${lead}`, {
+        title: label === 'overdue' ? `${OVERDUE}Overdue` : `${DUE_SOON}Due soon`,
+        body: item.title,
+        url: item.url,
         kind: 'deadline',
       })
       break // one horizon per pass; the nearer one wins

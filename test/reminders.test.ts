@@ -20,6 +20,15 @@ import { api } from '../src/server/api'
 
 const HOUR = 3.6e6
 
+/**
+ * The titles carry one leading emoji each, because a push lands in OS chrome
+ * where nothing else can tell two grey lines apart. They are pinned here rather
+ * than matched loosely: the whole point of the policy is that the mark for a
+ * kind never changes, and a regex that shrugs at the prefix would not notice.
+ */
+const OVERDUE = '🔴 Overdue'
+const DUE_SOON = '🟠 Due soon'
+
 function task(title: string, dueAt: number): string {
   const id = uid()
   db.query(
@@ -36,8 +45,23 @@ const notificationsFor = (taskTitle: string) =>
     )
     .all(taskTitle)
 
+function card(group: string, title: string, dueAt: number, opts: { gone?: number; status?: string } = {}) {
+  db.query(
+    `INSERT INTO cards (id, source, source_id, group_key, kind, title, why, url, ts, pile,
+                        refs, meta, first_seen_at, last_seen_at, gone)
+     VALUES (?,?,?,?,?,?,?,?,?,?,'[]','{}',?,?,?)`,
+  ).run(`github:${group}`, 'github', group, group, 'my_pr', title, 'yours',
+        'https://github.com/acme/widgets/pull/7', now(), 'open', now(), now(), opts.gone ?? 0)
+  db.query(
+    `INSERT INTO card_state (group_key, status, due_at, first_seen_at, updated_at)
+     VALUES (?,?,?,?,?)`,
+  ).run(group, opts.status ?? 'not_started', dueAt, now(), now())
+}
+
 beforeEach(() => {
   db.query(`DELETE FROM tasks`).run()
+  db.query(`DELETE FROM cards`).run()
+  db.query(`DELETE FROM card_state`).run()
   db.query(`DELETE FROM notifications`).run()
 })
 
@@ -47,7 +71,7 @@ describe('deadline horizons', () => {
     await runReminders()
 
     const sent = notificationsFor('ship the migration')
-    expect(sent.map(n => n.title)).toEqual(['Overdue'])
+    expect(sent.map(n => n.title)).toEqual([OVERDUE])
     expect(sent[0]?.kind).toBe('deadline')
   })
 
@@ -55,7 +79,7 @@ describe('deadline horizons', () => {
     task('review the PR', now() + 30 * 60_000)
     await runReminders()
 
-    expect(notificationsFor('review the PR').map(n => n.title)).toEqual(['Due soon'])
+    expect(notificationsFor('review the PR').map(n => n.title)).toEqual([DUE_SOON])
   })
 
   test('the two horizons do not collide on one pass', async () => {
@@ -63,8 +87,8 @@ describe('deadline horizons', () => {
     task('soon one', now() + 20 * 60_000)
     await runReminders()
 
-    expect(notificationsFor('overdue one').map(n => n.title)).toEqual(['Overdue'])
-    expect(notificationsFor('soon one').map(n => n.title)).toEqual(['Due soon'])
+    expect(notificationsFor('overdue one').map(n => n.title)).toEqual([OVERDUE])
+    expect(notificationsFor('soon one').map(n => n.title)).toEqual([DUE_SOON])
   })
 
   test('a deadline further out than an hour says nothing at all', async () => {
@@ -88,6 +112,38 @@ describe('deadline horizons', () => {
     await runReminders()
 
     expect(notificationsFor('already done')).toEqual([])
+  })
+})
+
+describe('a card has a deadline too', () => {
+  test('an overdue card is nudged, with a link back to the desk', async () => {
+    card('gh:acme/widgets#7', 'the migration PR', now() - 10 * 60_000)
+    await runReminders()
+
+    const sent = db.query<any, [string]>(
+      `SELECT title, url FROM notifications WHERE body = ?`,
+    ).all('the migration PR')
+    expect(sent.map(n => n.title)).toEqual([OVERDUE])
+    expect(sent[0].url).toMatch(/\/$/)
+  })
+
+  test('a card the poller swept says nothing', async () => {
+    // `card_state` outlives the card. Without the `gone = 0` join, a due date on
+    // a group whose last card vanished upstream keeps buzzing about something
+    // that is on no desk and opens to nothing.
+    card('gh:acme/widgets#8', 'a merged PR', now() - HOUR, { gone: 1 })
+    await runReminders()
+
+    expect(notificationsFor('a merged PR')).toEqual([])
+  })
+
+  test('a card he finished says nothing', async () => {
+    card('gh:acme/widgets#9', 'already shipped', now() - HOUR, { status: 'done' })
+    card('gh:acme/widgets#10', 'never doing it', now() - HOUR, { status: 'wont_do' })
+    await runReminders()
+
+    expect(notificationsFor('already shipped')).toEqual([])
+    expect(notificationsFor('never doing it')).toEqual([])
   })
 })
 

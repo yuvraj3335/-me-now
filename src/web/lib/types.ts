@@ -15,16 +15,52 @@ export type CardSource = {
   meta: Record<string, any>
 }
 
+/**
+ * Where the work stands. Orthogonal to `Pile`, which is still computed from the
+ * snooze and the adapter's own claim — a card can be in progress and parked
+ * until Monday at once, and there is deliberately no `parked` status because a
+ * park is a statement about when he wants to see it.
+ */
+export type CardStatus =
+  | 'not_started' | 'in_progress' | 'in_review' | 'done' | 'wont_do'
+export type CardPriority = 0 | 1 | 2 | 3
+
+/** The order a Status control offers them in: how work actually moves. */
+export const STATUS_ORDER: readonly CardStatus[] =
+  ['not_started', 'in_progress', 'in_review', 'done', 'wont_do'] as const
+
+export const STATUS_LABEL: Record<CardStatus, string> = {
+  not_started: 'Not started',
+  in_progress: 'In progress',
+  in_review:   'In review',
+  done:        'Done',
+  wont_do:     "Won't do",
+}
+
+export const PRIORITY_ORDER: readonly CardPriority[] = [0, 1, 2, 3] as const
+export const PRIORITY_LABEL: Record<CardPriority, string> = {
+  0: 'Urgent', 1: 'High', 2: 'Normal', 3: 'Low',
+}
+/** Normal. A row at this priority draws no mark — see DECISIONS.md #33. */
+export const PRIORITY_DEFAULT: CardPriority = 2
+
 export type Card = {
   group_key: string
   pile: Pile
+  /**
+   * Authoritative, and always present. Never read `state?.status` in the UI:
+   * a card with no state row at all still has a status, and this is where it is.
+   */
+  status: CardStatus
+  priority: CardPriority
+  due_at: number | null
   title: string
   why: string
   actor?: string | null
   /**
    * A person waiting on you, or null — never a project slug and never the
-   * operator's own login. The `Who` column renders this, and renders nothing
-   * when it is null, because an invented name is worse than a blank.
+   * operator's own login. Rendered where there is room for it, and rendered as
+   * nothing when it is null, because an invented name is worse than a blank.
    */
   who?: string | null
   excerpt?: string | null
@@ -40,9 +76,16 @@ export type Card = {
     notified_at: number | null
     pinned: boolean
     pile_override: string | null
-    /** Only ever set on a card `GET /cards/done` returned. */
-    done_at?: number | null
-    not_mine?: boolean
+    /**
+     * Derived from `status` and kept in sync with it server-side, for the
+     * hidden-list sort and for undo records written before status existed.
+     * Always emitted, on every card, not only on the hidden list.
+     */
+    done_at: number | null
+    not_mine: boolean
+    status: CardStatus
+    priority: CardPriority
+    due_at: number | null
   } | null
   tasks: Array<{ id: string; title: string; status: string }>
 }
@@ -113,6 +156,13 @@ export type SyncRun = {
 }
 
 export type State = {
+  /** The flat list the desk renders. Sorted pinned -> pile rank -> ts desc. */
+  cards: Card[]
+  /**
+   * The same rows, split by pile. Kept for one release so nothing breaks mid
+   * wave; nothing new may read them. Cards whose status is `done` or `wont_do`
+   * are in none of these — they are reached through `GET /cards/done`.
+   */
   now: Card[]; open: Card[]; parked: Card[]
   tasks: Task[]; goals: Goal[]; reminders: Reminder[]
   notifications: Notification[]
@@ -122,7 +172,6 @@ export type State = {
 
 export type SourceStatus = {
   name: SourceName; label: string; ok: boolean; detail: string; via?: string
-  /** The last finished poll, or null if this source has never run one. */
   /**
    * The last finished poll. `connected` is the fact `ok` cannot carry: one
    * ingest run stamps every source with the same `at`, including the ones with
@@ -130,6 +179,14 @@ export type SourceStatus = {
    * about a source nobody ever connected.
    */
   lastSync: { ok: number; connected: number; at: number; count: number | null; error: string | null } | null
+  /** When this credential last completed an auth round-trip. */
+  lastAuthOkAt?: number | null
+  /**
+   * Non-null means reconnect, and the string is the provider's own reason. A
+   * credential that cannot refresh is not connected, and "sync failed" is the
+   * wrong sentence for it — see DECISIONS.md #36.
+   */
+  lastAuthError?: string | null
   oauthable: boolean
   /**
    * Whether pressing Connect can succeed at all, as opposed to whether Wake
@@ -142,10 +199,10 @@ export type SourceStatus = {
 
 export type Analytics = {
   days: number
-  throughput: Record<'done' | 'created' | 'appeared' | 'cleared', Array<{ day: string; value: number }>>
+  throughput: Record<'done' | 'appeared' | 'cleared', Array<{ day: string; value: number }>>
   responseTime: {
     count: number; p50: number; p90: number
-    daily: Array<{ day: string; value: number | null; n: number }>
+    daily: Array<{ day: string; value: number | null }>
   }
   /**
    * The selected period against the one before it. `delta` is null when the
@@ -160,7 +217,7 @@ export type Analytics = {
   aging: Array<{ source: string; buckets: Record<string, number> }>
   agingBuckets: string[]
   goals: Array<{ id: string; title: string; color: string | null; target_date: number | null; total: number; done: number }>
-  totals: { openNow: number; doneAllTime: number; tasksOpen: number }
+  totals: { openNow: number }
 }
 
 /**

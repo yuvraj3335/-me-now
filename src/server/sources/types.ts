@@ -3,6 +3,27 @@ export type SourceName = 'slack' | 'gmail' | 'github' | 'sentry' | 'claude'
 export type Pile = 'now' | 'open' | 'parked'
 
 /**
+ * Where the work itself stands, as opposed to where the card sits.
+ *
+ * `Pile` above is still the adapter's own claim about urgency and still seeds
+ * the default here. This is the orthogonal fact: a card can be in progress and
+ * parked until Monday at the same time, which is the normal state of half the
+ * desk. There is deliberately no `parked` status — parked is a statement about
+ * *when* he wants to see it, not about whether the work has begun.
+ */
+export type CardStatus =
+  | 'not_started' | 'in_progress' | 'in_review' | 'done' | 'wont_do'
+
+export const CARD_STATUSES = [
+  'not_started', 'in_progress', 'in_review', 'done', 'wont_do',
+] as const satisfies readonly CardStatus[]
+
+/** 0 urgent · 1 high · 2 normal (default, renders nothing) · 3 low. */
+export type CardPriority = 0 | 1 | 2 | 3
+export const CARD_PRIORITIES = [0, 1, 2, 3] as const satisfies readonly CardPriority[]
+export const PRIORITY_NORMAL: CardPriority = 2
+
+/**
  * A hard reference to a real-world entity. Two cards that share one are the
  * same thing, which is the entire basis of dedup — see DECISIONS.md #4.
  */

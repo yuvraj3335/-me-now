@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS card_state (
   not_mine      INTEGER NOT NULL DEFAULT 0,
   done_at       INTEGER,
   pinned        INTEGER NOT NULL DEFAULT 0,
+  -- Where the WORK stands, as against where the card sits. Orthogonal to the
+  -- pile on purpose: "in progress and parked until Monday" is a normal state.
+  -- done_at and not_mine survive as derived timestamps kept in sync with this
+  -- column -- see DECISIONS.md #32.
+  status        TEXT NOT NULL DEFAULT 'not_started',
+  priority      INTEGER NOT NULL DEFAULT 2,  -- 0 urgent .. 3 low; 2 draws nothing
+  due_at        INTEGER,
   -- What the last undoable action replaced, so an undo can put ALL of it back.
   -- Later writes two fields (snoozed_until AND pile_override = null) and its
   -- undo used to clear one, which turned "undo" into "destroy the park you had".
@@ -195,6 +202,10 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   client_id     TEXT,
   client_secret TEXT,
   metadata      TEXT,
+  -- When this credential last completed an auth round-trip, and why the last
+  -- one failed. A dead grant has to read as "reconnect", not as "sync failed".
+  last_auth_ok_at INTEGER,
+  last_auth_error TEXT,
   updated_at    INTEGER NOT NULL
 );
 
@@ -458,6 +469,11 @@ CREATE TABLE IF NOT EXISTS launch_packs (
   first_message TEXT NOT NULL DEFAULT '',
   skills        TEXT NOT NULL DEFAULT '[]',
   pack_path     TEXT,
+  -- session_id is deliberately NOT here: migration 4 drops a column of that
+  -- name (the old launcher's spawned process), so listing it above the thing
+  -- that removes it would make one boot add and drop it for no reason.
+  -- Migration 10 owns that column on the fresh and the upgraded path alike.
+  permission_mode TEXT NOT NULL DEFAULT 'bypassPermissions',
   created_at    INTEGER NOT NULL,
   launched_at   INTEGER                   -- when the link was produced
 );
@@ -675,6 +691,92 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
       ])
     },
   },
+  {
+    id: 9,
+    name: 'card-status-priority-due',
+    // Where the work stands, how much it matters, and when it is due — stored,
+    // because none of the three can be computed from anything the sources say.
+    // DECISIONS.md #32 and #33 carry the argument; this is the back-fill.
+    //
+    // The back-fill is the irreversible part of this release, so every clause
+    // below is a restatement of something already on the row rather than a
+    // guess:
+    //
+    //   done_at IS NOT NULL   -> done      (he finished it)
+    //   not_mine = 1          -> wont_do   (he disowned it)
+    //   everything else       -> not_started
+    //
+    // `acked_at` is left implying nothing. An ack suppressed a notification; it
+    // was never a claim that work had begun, and reading it as `in_progress`
+    // would silently assert that about most of the desk. `in_progress` and
+    // `in_review` start empty because they are facts only he can assert.
+    //
+    // A parked card also lands on `not_started` and keeps its park: the snooze
+    // moves to `due_at`, because a park always was a snooze with a wake time.
+    // No status is spent on it — see the note on `card_state.status` above.
+    //
+    // No CHECK constraint on the enum: validation lives in the router, so
+    // widening the vocabulary later is a code change and not a table rebuild.
+    run() {
+      if (!hasColumn('card_state', 'status')) {
+        db.exec(`ALTER TABLE card_state ADD COLUMN status TEXT NOT NULL DEFAULT 'not_started'`)
+      }
+      if (!hasColumn('card_state', 'priority')) {
+        db.exec(`ALTER TABLE card_state ADD COLUMN priority INTEGER NOT NULL DEFAULT 2`)
+      }
+      if (!hasColumn('card_state', 'due_at')) {
+        db.exec(`ALTER TABLE card_state ADD COLUMN due_at INTEGER`)
+      }
+      // Ordered so the stronger claim wins: a row that is both done and
+      // disowned reads as done, which is the one he acted on last.
+      db.exec(`UPDATE card_state SET status = 'wont_do' WHERE not_mine = 1 AND done_at IS NULL`)
+      db.exec(`UPDATE card_state SET status = 'done'    WHERE done_at IS NOT NULL`)
+      // A park was always a snooze with a wake time. Only where he has not
+      // already set a due date, so re-running this cannot overwrite one.
+      db.exec(`UPDATE card_state SET due_at = snoozed_until
+                WHERE snoozed_until IS NOT NULL AND due_at IS NULL`)
+      db.exec(`CREATE INDEX IF NOT EXISTS card_state_status ON card_state(status)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS card_state_due ON card_state(due_at) WHERE due_at IS NOT NULL`)
+    },
+  },
+  {
+    id: 10,
+    name: 'launch-pack-session',
+    // A brief is now written against a real transcript, and it says which one
+    // rather than describing "a session". `permission_mode` is stored with the
+    // pack because the resume line it prints has to name the same mode the
+    // brief was written for.
+    //
+    // `session_id` is added here rather than in the baseline CREATE: migration
+    // 4 drops a column of that name, so the two would otherwise contradict each
+    // other inside a single fresh boot.
+    run() {
+      if (!hasColumn('launch_packs', 'session_id')) {
+        db.exec(`ALTER TABLE launch_packs ADD COLUMN session_id TEXT`)
+      }
+      if (!hasColumn('launch_packs', 'permission_mode')) {
+        db.exec(`ALTER TABLE launch_packs ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'bypassPermissions'`)
+      }
+    },
+  },
+  {
+    id: 11,
+    name: 'oauth-last-auth',
+    // A credential that cannot refresh is not connected (DECISIONS.md #36), and
+    // saying so needs two facts the token row never held: when the grant last
+    // completed a round-trip, and what the provider said the last time it
+    // refused. Existing rows get NULL for both — nothing recorded it at the
+    // time, and inventing a timestamp would be worse than admitting to not
+    // having one.
+    run() {
+      if (!hasColumn('oauth_tokens', 'last_auth_ok_at')) {
+        db.exec(`ALTER TABLE oauth_tokens ADD COLUMN last_auth_ok_at INTEGER`)
+      }
+      if (!hasColumn('oauth_tokens', 'last_auth_error')) {
+        db.exec(`ALTER TABLE oauth_tokens ADD COLUMN last_auth_error TEXT`)
+      }
+    },
+  },
 ]
 
 const applied = new Set(
@@ -691,6 +793,25 @@ for (const m of MIGRATIONS) {
       .run(m.id, m.name, Date.now())
   })()
 }
+
+/**
+ * Drop authorization attempts nobody ever came back from.
+ *
+ * An `oauth_pending` row is deleted by the callback that consumes it, and only
+ * by that callback — so every abandoned Connect (a closed tab, a denied consent
+ * screen, a state that never made the round trip) leaves its verifier and
+ * redirect behind forever. Ten minutes is well past any real consent screen and
+ * well inside the window a live attempt needs.
+ *
+ * Called at boot and again on every poll, because a box that has been up for a
+ * fortnight is exactly the one accumulating them.
+ */
+export function sweepOauthPending(olderThanMs = 600_000): number {
+  return db.query(`DELETE FROM oauth_pending WHERE created_at < ?`)
+    .run(Date.now() - olderThanMs).changes
+}
+
+sweepOauthPending()
 
 export function kvGet(k: string): string | null {
   const r = db.query<{ v: string }, [string]>(`SELECT v FROM kv WHERE k = ?`).get(k)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import type { Analytics, SourceStatus, State } from './types'
+import type { Analytics, CardPriority, CardStatus, SourceStatus, State } from './types'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
 export type ConnectStart = {
@@ -115,6 +115,22 @@ export const actions = {
   ack: (g: string) => post(`/cards/${encodeURIComponent(g)}/ack`),
   snooze: (g: string, until: number) => post(`/cards/${encodeURIComponent(g)}/snooze`, { until }),
   move: (g: string, pile: string | null) => post(`/cards/${encodeURIComponent(g)}/pile`, { pile }),
+  /**
+   * Where the work stands. Undoable, under the label `status`.
+   *
+   * The three below it are the same act with older names and older undo
+   * labels: `notMine` sets `wont_do`, `doneCard` sets `done`, and `ack`
+   * promotes a card nobody had started. They keep their URLs so the toast and
+   * undo wiring around them keeps working unchanged.
+   */
+  setStatus: (g: string, status: CardStatus) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/status`, { status }),
+  /** 0 urgent · 1 high · 2 normal · 3 low. Not undoable. */
+  setPriority: (g: string, priority: CardPriority) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/priority`, { priority }),
+  /** A timestamp, or null to clear it. A date in the past is accepted. */
+  setDue: (g: string, at: number | null) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/due`, { at }),
   notMine: (g: string) => post(`/cards/${encodeURIComponent(g)}/not-mine`),
   doneCard: (g: string) => post(`/cards/${encodeURIComponent(g)}/done`),
   pin: (g: string, pinned: boolean) => post(`/cards/${encodeURIComponent(g)}/pin`, { pinned }),
@@ -122,7 +138,7 @@ export const actions = {
    * With no `undo`, everything keeping this card off a list is cleared. With
    * one, only that — so undoing a Done leaves a snooze or a manual pile alone.
    */
-  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine' | 'moved') =>
+  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine' | 'moved' | 'status') =>
     post(`/cards/${encodeURIComponent(g)}/restore`, undo ? { undo } : {}),
   doneCards: () => req<{ cards: import('./types').Card[] }>('/cards/done'),
   thread: (g: string) => req<{ thread: any }>(`/cards/${encodeURIComponent(g)}/thread`),
