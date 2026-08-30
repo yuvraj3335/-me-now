@@ -1,10 +1,10 @@
 /**
- * "Open in Claude Code" on the client.
+ * "Open in Claude" on the client.
  *
- * The selection lives here rather than inside one sheet, because a launch can
- * be started from a card, a mail thread, an agent inspector or the palette, and
- * all of them add to the same basket. `add()` is idempotent by ref so clicking
- * "add to launch" twice does not pack the same thread twice.
+ * The selection lives here rather than inside one sheet, because a hand-off can
+ * be started from a card, a mail thread or the palette, and all of them add to
+ * the same basket. `openLaunch()` is idempotent by ref so clicking it twice does
+ * not pack the same thread twice.
  */
 
 import { useCallback, useSyncExternalStore } from 'react'
@@ -30,13 +30,18 @@ export type Template = {
   instruction: string
 }
 
-export type LauncherStatus = {
-  ok: boolean
-  binary: string
-  version: string | null
-  loggedIn: boolean | null
-  reason: string
-  packDir: string
+/** Where a brief goes, and how much of one the link can carry. */
+export type HandoffTarget = { url: string; maxChars: number }
+
+/** What came back when a brief was handed over. */
+export type Handoff = {
+  packId: string
+  url: string
+  cwd: string
+  packPath: string | null
+  sent: number
+  total: number
+  trimmed: boolean
 }
 
 export type Session = {
@@ -54,21 +59,17 @@ export type Pack = {
   title: string
   cwd: string
   repo_name: string | null
-  session_id: string | null
   status: string
-  error: string | null
   created_at: number
   launched_at: number | null
-  finished_at: number | null
-  live: boolean
-  resumeCommand: string | null
   pack_path?: string | null
+  first_message?: string
   items?: Array<PackItem & { id: string }>
   skills?: string[]
 }
 
 export type LaunchState = {
-  status: LauncherStatus
+  handoff: HandoffTarget
   templates: Template[]
   repos: Array<{ name: string; path: string; role: string; branch: string | null; dirty: number }>
   sessions: Session[]
@@ -93,16 +94,11 @@ export const launchApi = {
     cwd?: string | null
     instruction?: string
     items: PackItem[]
-    resumeSessionId?: string | null
   }) => req<Pack>('/packs', { method: 'POST', body: JSON.stringify(b) }),
-  launch: (id: string) =>
-    req<{ launched: boolean; sessionId?: string; cwd?: string; resumeCommand?: string; packPath?: string }>(
-      `/packs/${id}/launch`,
-      { method: 'POST' },
-    ),
+  /** Mark a brief handed over and get the link that opens it in Claude. */
+  open: (id: string) => req<Handoff>(`/packs/${id}/open`, { method: 'POST' }),
   pack: (id: string) => req<Pack>(`/packs/${id}`),
   packs: () => req<{ packs: Pack[] }>('/packs'),
-  stop: (id: string) => req<{ stopped: boolean }>(`/packs/${id}/stop`, { method: 'POST' }),
   packFileUrl: (id: string) => `/api/claude/packs/${id}/file`,
 }
 

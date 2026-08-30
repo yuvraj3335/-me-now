@@ -140,38 +140,39 @@ registered.
 
 ---
 
-## The Wake Agent's API key
+## Open in Claude
 
-The chat inside Wake runs on the Anthropic API, not on the `claude` CLI. Add a
-key in **Settings → Agent**; it is stored on the box, never returned to the
-browser, and never passed to a subprocess.
+Nothing to connect, no key to add, and nothing installed. Wake packs the context
+and hands you a link — `https://claude.ai/new?q=<the brief>` — which opens the
+Claude app on a phone and a tab on a laptop, under the login you already have.
 
-Without one, the Agent page says so and offers the settings link rather than
-looking like a chat that ignores you.
+Two things shape what a brief can say:
 
-`ANTHROPIC_API_KEY` in `.env` works too, and Settings will tell you which of the
-two answered.
+1. **Repositories under `WAKE_WORKSPACE_ROOT`** (default `~/work`). A brief can
+   only name a repository the registry scanned — that allowlist is what stops a
+   template's directory field from becoming an arbitrary path in text a session
+   will act on.
+2. **The size cap** (`WAKE_HANDOFF_MAX_CHARS`, 12,000). The brief travels in a
+   query string. A longer one is trimmed *and says so inside itself*, so the
+   session asks rather than answering half a Slack thread confidently. The whole
+   text is always on disk and one click away.
 
-> This is a *different credential* from the one "Open in Claude Code" uses. That
-> feature runs the `claude` binary already signed in on this machine, and Wake
-> deliberately strips `ANTHROPIC_API_KEY` from the environment it hands that
-> process — otherwise Claude Code would prefer the key over its own login and
-> quietly move your sessions onto Wake's billing.
+Briefs are written to `<data dir>/packs` as Markdown plus JSON, redacted, and are
+readable from the result panel.
 
-## Open in Claude Code
+If Anthropic ever changes that URL shape, `WAKE_HANDOFF_URL` and
+`WAKE_HANDOFF_PARAM` are the two knobs — a personal tool whose only hand-off is
+hard-coded is one product change away from a dead button.
 
-Nothing to connect. It needs two things on the machine Wake runs on:
+## Appearance
 
-1. The `claude` binary, signed in. Settings → Claude Code shows the version it
-   found and whether it can tell you are signed in. On macOS that login lives in
-   the keychain, which Wake does not read, so it reports "cannot tell" rather
-   than guessing "no".
-2. Repositories under `WAKE_WORKSPACE_ROOT` (default `~/work`). A session can
-   only be opened in a repository the registry scanned — that allowlist is what
-   stops a template's directory field from becoming an arbitrary path.
+Light, dark, or whatever the device says — **Settings → Appearance**. "System" is
+the default and is a real choice, not the absence of one: a phone that goes dark
+at sunset takes Wake with it.
 
-Packs are written to `<data dir>/packs` as Markdown plus JSON, redacted, and are
-readable from the result sheet.
+Every text-on-background pair clears WCAG AA in both themes, and the ratios are
+written into `styles.css` next to the values so the next edit has something to
+check against.
 
 ## Voice
 

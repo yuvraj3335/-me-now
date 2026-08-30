@@ -1,0 +1,15 @@
+[Unit]
+Description=Wake — pull main and redeploy if it moved
+Documentation=file:///home/yuvraj/work/wake/deploy/DEPLOY.md
+# Ordered after Wake rather than requiring it: a deploy is still the right thing
+# to do if the service is down, and is in fact how you would fix it.
+After=wake.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/work/wake
+ExecStart=%h/work/wake/deploy/wake-deploy.sh
+# The script is a no-op when origin/main has not moved, so the usual run is a
+# single fetch. Nothing is logged in that case.
+StandardOutput=journal
+StandardError=journal

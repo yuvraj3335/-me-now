@@ -114,7 +114,7 @@ export function Palette({
       {open && (
         <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4">
           <motion.div
-            className="absolute inset-0 bg-ink-950/70 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim/70 backdrop-blur-[2px]"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.14 }}
             onClick={onClose}

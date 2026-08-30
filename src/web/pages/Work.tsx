@@ -155,7 +155,7 @@ function Group({ label, children, accent }: { label: string; children: React.Rea
   return (
     <section className="mb-8">
       <h2 className={`text-[11.5px] uppercase tracking-[0.08em] mb-2.5
-        ${accent ? 'text-accent' : 'text-fg-mute'}`}>{label}</h2>
+        ${accent ? 'text-accent-ink' : 'text-fg-mute'}`}>{label}</h2>
       {children}
     </section>
   )
@@ -182,7 +182,7 @@ function TaskRow({
         aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}`}
       >
         <Icon size={16} className={
-          task.status === 'done' ? 'text-ok' : task.status === 'doing' ? 'text-accent' : 'text-fg-mute hover:text-fg-dim'
+          task.status === 'done' ? 'text-ok' : task.status === 'doing' ? 'text-accent-ink' : 'text-fg-mute hover:text-fg-dim'
         } />
       </button>
 
@@ -198,14 +198,14 @@ function TaskRow({
           <div className="mt-1.5 flex items-center gap-x-2 gap-y-1 flex-wrap text-[12px] text-fg-mute leading-none">
             {goal && (
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: goal.color ?? '#8f8f99' }} />
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: goal.color ?? 'var(--color-fg-mute)' }} />
                 {goal.title}
               </span>
             )}
             {task.due_at && (
               <span className={overdue ? 'text-bad' : ''}>{until(task.due_at)}</span>
             )}
-            {reminder && <Bell size={11} className="text-accent/70" />}
+            {reminder && <Bell size={11} className="text-accent-ink/70" />}
             {!!task.notes?.length && <span>{task.notes.length} note{task.notes.length > 1 ? 's' : ''}</span>}
             {origin && (
               <a

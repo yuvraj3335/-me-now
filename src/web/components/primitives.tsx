@@ -17,7 +17,7 @@ export function Button({
     ghost: 'text-fg-dim hover:text-fg hover:bg-ink-800',
     quiet: 'text-fg-mute hover:text-fg-dim',
     solid: 'bg-ink-700 text-fg hover:bg-ink-600',
-    accent: 'bg-accent text-ink-950 hover:brightness-110 font-medium',
+    accent: 'bg-accent text-on-accent hover:brightness-110 font-medium',
   }[variant]
 
   return (
@@ -67,7 +67,7 @@ export function Sheet({
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center">
           <motion.div
-            className="absolute inset-0 bg-ink-950/70 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim/70 backdrop-blur-[2px]"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
             onClick={onClose}

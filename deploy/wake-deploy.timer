@@ -1,0 +1,14 @@
+[Unit]
+Description=Check main for a new Wake commit every minute
+
+[Timer]
+# A minute after boot, then every minute. AccuracySec keeps systemd from
+# batching this with unrelated timers and turning "every minute" into "some
+# time in the next five".
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=wake-deploy.service
+
+[Install]
+WantedBy=timers.target

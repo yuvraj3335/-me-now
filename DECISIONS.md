@@ -251,6 +251,12 @@ notifications rather than letting the toggle silently do nothing.
 
 ## 14. Two engines, and the reasons they are not one
 
+> **Superseded by #26.** There is one engine now, and it is not Wake's: the
+> in-app agent is gone and "Open in Claude" is a link. The reasoning below is
+> kept because it was right about the thing that mattered — a chat and a
+> launcher are different products — and wrong about the conclusion it drew from
+> that, which was to build both.
+
 **Reversed.** The first version drove the in-app chat with `claude -p`, on the
 argument that authentication, caching and compaction came free. They do. But a
 chat and a launcher are different products, and running both on one engine made
@@ -467,3 +473,119 @@ one: the next boot skips the half it believes ran.
 The existing tables stayed under their existing names. Renaming `conversations`
 to `agent_conversations` would have been churn against a live database for no
 gain — they are already namespaced by the section they live in.
+
+---
+
+## 26. No agent, and the hand-off is a link
+
+**Reverses #14 and most of #3, #15–#18.** Wake had a chat of its own: nine
+modes, a typed tool surface, durable turns, blocking approvals, and an Anthropic
+API key it held in SQLite. All of it is gone.
+
+Two reasons, and the second one is the real one.
+
+**A personal command center should not ask you for an API key.** Wake exists so
+that at 7am one screen tells you what is on you. A second credential to obtain,
+paste, rotate and pay for is friction placed between a person and their own
+inbox, and every one of those turns is billed to a key that sits on a DevBox.
+
+**The launcher was a session in name only.** `launchPack` spawned
+`claude -p <brief> --output-format stream-json` on the box. That process had no
+terminal, so its permission prompts had no one to answer them; its output went
+to a supervisor that scraped a result event and threw the rest away; and the
+`claude --resume <id>` it handed back only helped if you were about to SSH in.
+On a phone — which is where this app is actually read — it did nothing you could
+see. #14 argued the launcher had to be Claude Code *exactly* because the session
+must be real. That was right, and spawning a headless subprocess was not how you
+get one.
+
+What replaced it is one URL:
+
+```
+https://claude.ai/new?q=<the packed brief>
+```
+
+- On a laptop it opens a tab. On a phone it is a universal link, so it opens the
+  Claude app.
+- It is authenticated because *you* are. Wake holds no credential for it, sends
+  none, and cannot see the conversation.
+- Nothing runs on the DevBox, so there is no process to supervise, no pid to
+  record, and nothing for a restart to orphan. `recoverPacks` is gone because
+  there is nothing left to recover.
+
+The packing is untouched, because packing was always the valuable half: the
+template, the repository, the named skills, and every Slack thread and Sentry
+issue quoted inside a fence that says it is data. That is the part a person
+cannot be bothered to do by hand, and it is the part that survives.
+
+**What is honestly worse.** The brief travels in a query string, so it is capped
+— 12,000 characters, which holds a real thread but not a huge one. Rather than
+truncate silently, a trimmed brief carries a line saying how much was cut and
+telling the session to ask before assuming anything is missing; the whole text
+stays on disk and is one click away. Silent truncation was the alternative and it
+is much worse: a session that receives half a thread and no indication of it
+answers the wrong question with confidence.
+
+**What survived the deletion, and why.** Redaction, CLI classification and the
+untrusted-content fence are all still here (`redact.ts`, `truto/classify.ts`,
+`untrusted.ts`). None of them were ever about the agent. Wake still shells out to
+the Truto CLI, still writes text to disk and into a URL, and still quotes
+strangers — so not leaking a token, and not handing an instruction to something
+that will act on it, are exactly as load-bearing as they were.
+
+## 27. Light mode, and a contrast floor that is checked rather than felt
+
+Wake was dark-only, and its muted text was `#5c5c66` on `#0a0a0c` — **3.0:1**.
+WCAG AA wants 4.5:1 for body text. That token carries most of the meaning on this
+app: every timestamp, every "why this is on you", every source badge, at 11 to
+12.5px. It was not a matter of taste; it was under the floor.
+
+Both palettes now clear AA against their own ground, and the numbers are written
+into `styles.css` beside the values so the next edit has something to check
+rather than an opinion. Muted text went 3.0 → 5.8 in dark and is 4.9 in light.
+
+Three states, not a switch: an explicit choice stamps `data-theme` on `<html>`,
+and *no attribute* means follow the system — which is why the
+`prefers-color-scheme` block is guarded with `:not([data-theme])`. Without that
+guard, choosing light on a machine set to dark loses the argument every time.
+
+The accent is two tokens, which looks like over-engineering and is not. `#e9a23b`
+as **text** on white is 2.0:1, so light mode needs a darker amber; but darkening
+the **surface** turns the primary button brown. So `accent` is the surface amber
+(bright in both, dark ink on top) and `accent-ink` is the text one. A test
+asserts every token exists in all three blocks, because a colour added to one and
+forgotten in another does not error — it silently inherits the other theme's
+value, which is how a light page ends up with one black card on it.
+
+The first paint is set by an inline script in `index.html`, before the
+stylesheet. Applying the theme from React means one frame of the wrong palette on
+every cold load: a white flash on a phone opened at 7am, which is the one moment
+this app exists for.
+
+## 28. CI on GitHub, CD on the box — because the box has no inbound door
+
+"Redeploy when main moves" has an obvious shape — a GitHub Action that SSHes in —
+and it does not work here. The DevBox sits behind a Cloudflare tunnel with Access
+in front of it and accepts no inbound connections. Making it work would mean a
+service token, an SSH key in GitHub secrets, and a new hole in the one thing
+protecting a box that holds live customer credentials.
+
+So the halves are split:
+
+- **CI runs on GitHub** (`.github/workflows/ci.yml`): typecheck, tests, build, on
+  every push and PR.
+- **CD runs on the box** (`deploy/wake-deploy.timer`): a `oneshot` unit every
+  minute that does nothing unless `origin/main` has moved. When it has, it backs
+  up the database, fast-forwards, and runs the *same three checks* before
+  restarting.
+
+Pull-based deployment needs no secrets, opens no ports, and survives the tunnel
+being down. The verification is deliberately duplicated rather than trusted from
+CI: what matters is that the code works on the machine it will run on, with that
+machine's Bun and that machine's database.
+
+Two refusals are deliberate. It is `git merge --ff-only`, so a diverged checkout
+stops the deploy instead of silently discarding an edit someone made on the box.
+And the restart is last, so a failing build leaves the previous `dist/` in place
+and the service untouched — a bad push costs a red log line rather than a dark
+screen on someone's phone.

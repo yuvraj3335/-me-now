@@ -1,17 +1,20 @@
 /**
- * "Open in Claude Code" is the one feature that starts a process on the machine,
- * so the things worth pinning down are the boundaries: where a session may run,
- * what reaches the pack file, and whether the resume command shown in the UI is
- * the id that was actually used.
+ * "Open in Claude" packs context and hands it over as a link.
+ *
+ * The boundaries worth pinning down are the ones that outlive the click: which
+ * repository a brief may name, what reaches the file on disk, and — since the
+ * brief travels in a URL — that a trimmed one says so instead of stopping
+ * mid-sentence.
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildPack, getPack, launcherStatus, launchPack, resolveCwd, resumeCommand } from '../src/server/claudecode/launch'
+import { buildPack, getPack, openPack, resolveCwd } from '../src/server/claudecode/launch'
+import { handoffFor } from '../src/server/claudecode/handoff'
+import { HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../src/server/env'
 import { TEMPLATES, getTemplate } from '../src/server/claudecode/templates'
 import { rescan } from '../src/server/registry/scan'
-import { db } from '../src/server/db'
 
 const root = process.env.WAKE_WORKSPACE_ROOT!
 
@@ -59,7 +62,7 @@ describe('templates', () => {
   })
 })
 
-describe('where a session may run', () => {
+describe('which repository a brief may name', () => {
   test('a registry repository is allowed', () => {
     const r = resolveCwd(join(root, 'truto'))
     expect(r.ok).toBe(true)
@@ -125,34 +128,59 @@ describe('the pack', () => {
   })
 })
 
-describe('launching', () => {
-  test('the resume command names the session and the binary that was used', () => {
-    const bin = process.env.WAKE_CLAUDE_BIN!
-    expect(resumeCommand('abc-123', '/w/truto')).toBe(`cd /w/truto && ${bin} --resume abc-123`)
-    expect(resumeCommand('abc-123')).toBe(`${bin} --resume abc-123`)
+describe('the hand-off', () => {
+  test('a short brief travels whole, in the parameter the target expects', () => {
+    const h = handoffFor('read this thread and tell me who is blocked')
+    expect(h.trimmed).toBe(false)
+    expect(h.sent).toBe(h.total)
+
+    const u = new URL(h.url)
+    expect(`${u.origin}${u.pathname}`).toBe(HANDOFF_URL)
+    expect(u.searchParams.get(HANDOFF_PARAM)).toBe('read this thread and tell me who is blocked')
   })
 
-  test('a missing binary fails visibly rather than silently', () => {
-    const built = buildPack({ template: 'blank', cwd: join(root, 'truto'), items: [] })
+  test('a brief too long for a URL is trimmed, and says so inside itself', () => {
+    // Silent truncation is the failure mode here: a session that receives half a
+    // Slack thread and no indication of it will answer the wrong question
+    // confidently.
+    const long = 'x'.repeat(HANDOFF_MAX_CHARS * 2)
+    const h = handoffFor(long)
+
+    expect(h.trimmed).toBe(true)
+    expect(h.total).toBe(long.length)
+    expect(h.sent).toBeLessThanOrEqual(HANDOFF_MAX_CHARS)
+
+    const sent = new URL(h.url).searchParams.get(HANDOFF_PARAM)!
+    expect(sent).toContain('Wake trimmed this brief')
+    expect(sent).toContain(String(HANDOFF_MAX_CHARS.toLocaleString()))
+  })
+
+  test('the trim note is not itself cut off', () => {
+    // The note is appended inside the budget, not on top of it, so a brief that
+    // exactly fills the cap still ends with a readable sentence.
+    const h = handoffFor('y'.repeat(HANDOFF_MAX_CHARS + 1))
+    const sent = new URL(h.url).searchParams.get(HANDOFF_PARAM)!
+    expect(sent.trimEnd().endsWith(']')).toBe(true)
+  })
+
+  test('opening a pack returns its link and records that it was handed over', () => {
+    const built = buildPack({ template: 'blank', cwd: join(root, 'truto'), items: [{ kind: 'note', ref: 'n1' }] })
     if ('error' in built) throw new Error(built.error)
 
-    const before = process.env.WAKE_CLAUDE_BIN
-    // The launcher reads the binary through env at import time, so this test
-    // drives the same refusal through the recorded status instead.
-    const status = launcherStatus()
-    if (!status.ok) {
-      const r = launchPack(built.id)
-      expect(r.launched).toBe(false)
-      expect(r.error).toBe(status.reason)
-    } else {
-      // On a machine that does have Claude Code, prove the other half: a pack
-      // whose directory has been made invalid is refused before any spawn.
-      db.query(`UPDATE launch_packs SET cwd = '/etc' WHERE id = ?`).run(built.id)
-      const r = launchPack(built.id)
-      expect(r.launched).toBe(false)
-      expect(r.error).toContain('not a repository')
-    }
-    process.env.WAKE_CLAUDE_BIN = before
+    expect(getPack(built.id)!.status).toBe('draft')
+
+    const r = openPack(built.id)
+    expect('error' in r).toBe(false)
+    if ('error' in r) return
+
+    expect(r.url.startsWith(HANDOFF_URL)).toBe(true)
+    expect(r.cwd).toBe(join(root, 'truto'))
+    // "opened" means the link was produced, never that the work was done.
+    expect(getPack(built.id)!.status).toBe('opened')
+  })
+
+  test('opening a pack that does not exist is an error, not an empty link', () => {
+    expect(openPack('no-such-pack')).toEqual({ error: 'no such pack' })
   })
 
   test('a pack records its items in order', () => {

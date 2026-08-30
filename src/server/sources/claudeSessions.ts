@@ -129,13 +129,6 @@ function titleFromPrompt(prompt: string, limit = 72): string {
 export type SessionFile = { path: string; id: string; project: string; mtime: number }
 
 /**
- * Recent Claude Code transcripts on this machine, newest first.
- *
- * Shared by the card adapter and by "Open in Claude Code", because a session
- * list that disagreed with the Open pile would be a second answer to the same
- * question.
- */
-/**
  * Transcript files in the window, newest first. Nothing is opened here — a
  * readdir and a stat each — which is what lets `sessionExcerpt` look one up by
  * id over all of history without parsing two hundred transcripts to find it.
@@ -196,9 +189,8 @@ export function listSessions(limit = 30, windowDays = 30) {
 /**
  * The last few exchanges of one transcript, as plain text.
  *
- * Session bodies are the user's own words and their agent's replies, so this is
- * never called without an explicit confirmation from the person asking — see
- * the `claude_session_excerpt` tool.
+ * Session bodies are your own words. Nothing calls this on a timer; it exists so
+ * a brief can quote work already underway when you choose to attach it.
  */
 export function sessionExcerpt(id: string, maxChars = 12_000): { found: boolean; cwd?: string; text?: string } {
   // A session named by id is looked up over all of history, by filename. The
@@ -273,7 +265,8 @@ export const claudeSessions: SourceAdapter = {
         // Nobody else is blocked on a session, so these are never "now".
         why: ageDays < 1 ? 'you were just working on this' : `you left this ${Math.round(ageDays)}d ago`,
         excerpt: prompt?.slice(0, 240),
-        // No web URL exists for a local session; the UI offers the resume command.
+        // A local session has no web URL; the card offers the command that
+        // rejoins it on the machine it is actually on.
         url: s.pr?.url ?? `wake:claude/${s.id}`,
         ts: s.lastTs,
         pile: 'open',
@@ -294,9 +287,9 @@ export const claudeSessions: SourceAdapter = {
         ],
         meta: {
           project: projectName,
-          // Named explicitly rather than left to be re-derived from source_id:
-          // "Open in Claude Code" resumes on this, and a card whose group merged
-          // with a PR no longer has the session id in its group key.
+          // Named explicitly rather than left to be re-derived from source_id: a
+          // card whose group merged with a PR no longer has the session id in
+          // its group key, and the resume command still needs it.
           session_id: s.id,
           cwd,
           resume_cmd: `claude --resume ${s.id}`,

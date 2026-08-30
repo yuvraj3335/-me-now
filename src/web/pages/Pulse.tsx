@@ -173,7 +173,7 @@ function Stat({
         initial={still ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 260, damping: 28 }}
         className={`text-[32px] sm:text-[38px] leading-none font-medium tnum tracking-[-0.03em]
-          ${accent ? 'text-accent' : 'text-fg'}`}
+          ${accent ? 'text-accent-ink' : 'text-fg'}`}
       >
         {value}
       </motion.div>

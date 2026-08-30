@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowUpRight, Check, Clock, Copy, Inbox, ListPlus, MessageSquare, Pin, PinOff,
-  Sparkles, SquareCheck, Terminal, UserMinus,
+  SquareCheck, Terminal, UserMinus,
 } from 'lucide-react'
 import type { Card as CardT } from '../lib/types'
 import { actions, reload } from '../lib/api'
@@ -9,8 +9,6 @@ import { ago, atHour, timeOfDay } from '../lib/time'
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, Sheet } from './primitives'
 import { openLaunch } from '../lib/launch'
-import { addAttachment } from '../lib/agent'
-import { navigate } from '../App'
 
 const SNOOZE = [
   { label: 'Later today', at: () => Date.now() + 4 * 3.6e6 },
@@ -140,22 +138,13 @@ export function CardSheet({
           </div>
         )}
 
-        {/* The two hand-offs, side by side and named differently on purpose:
-            one asks the agent inside Wake, the other opens a session on the
-            machine. They are not the same thing. */}
-        <div className="mt-5 grid grid-cols-2 gap-1.5">
+        {/* One hand-off. It packs this card's context — why it is on you, every
+            place it was seen — and opens Claude with that brief already in the
+            box, under the login you already have. */}
+        <div className="mt-5">
           <Button
             variant="solid"
-            onClick={() => {
-              addAttachment({ kind: 'card', ref: card.group_key, title: card.title, excerpt, url: card.url })
-              onClose()
-              navigate('/agent')
-            }}
-          >
-            <Sparkles size={14} /> Ask Wake
-          </Button>
-          <Button
-            variant="solid"
+            className="w-full"
             onClick={() => {
               onClose()
               openLaunch(
@@ -171,7 +160,7 @@ export function CardSheet({
               )
             }}
           >
-            <Terminal size={14} /> Open in Claude Code
+            <Terminal size={14} /> Open in Claude
           </Button>
         </div>
 
@@ -208,7 +197,7 @@ export function CardSheet({
           {card.url.startsWith('http') && (
             <a href={card.url} target="_blank" rel="noreferrer"
                className="col-span-2 inline-flex items-center justify-center gap-1.5 min-h-10
-                          rounded-[10px] bg-accent text-ink-950 font-medium text-[13.5px]
+                          rounded-[10px] bg-accent text-on-accent font-medium text-[13.5px]
                           hover:brightness-110 transition">
               Open <ArrowUpRight size={15} />
             </a>

@@ -43,9 +43,36 @@ systemctl --user restart wake
 
 ## Updating
 
+Nothing, normally. A timer on the box checks `origin/main` every minute and
+redeploys when it moves — backing the database up, fast-forwarding, and running
+typecheck, tests and the build *before* it restarts anything. A failing build
+leaves the running version alone.
+
+Install it once:
+
 ```bash
-cd ~/work/wake && git pull && bun install && bun run build && systemctl --user restart wake
+cp ~/work/wake/deploy/wake-deploy.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now wake-deploy.timer
 ```
+
+Watch it:
+
+```bash
+systemctl --user list-timers wake-deploy.timer
+journalctl --user -u wake-deploy -f
+```
+
+It is quiet by design: a run where `origin/main` has not moved logs nothing at
+all. To deploy by hand, or to see why one failed:
+
+```bash
+~/work/wake/deploy/wake-deploy.sh
+```
+
+The same three checks also run on GitHub Actions for every push and pull request
+(`.github/workflows/ci.yml`), so a red build there is a deploy that does not
+happen here.
 
 ## Checking on it
 
@@ -58,15 +85,13 @@ curl -s localhost:8585/healthz        # card count and uptime
 A healthy boot looks like:
 
 ```
-agent: 43 repos, 28 skills indexed, key via settings (…a1b2)
-claude code: 2.1.233 (Claude Code)
+workspace: 43 repos, 28 skills indexed
+hand-off: https://claude.ai/new
 ingest: 22 groups (+0 new) · slack=14 github=4 gmail=0 sentry=0 claude=18
 ```
 
-`key MISSING` on the first line means the Agent cannot run — add one in
-Settings → Agent. A `claude code:` line that names a reason instead of a version
-means "Open in Claude Code" is unavailable, and the launch sheet will say the
-same thing rather than failing at the click.
+There is no key to check and no binary to find: "Open in Claude" is a link, so
+the only thing that can be wrong with it is `WAKE_HANDOFF_URL`.
 
 A source reporting `=err` names its error on the same line, and Settings shows
 the same thing in plain words.
@@ -94,7 +119,8 @@ you would want it still polling.
 - **`~/.local/share/wake/packs/`** — the briefs handed to Claude Code sessions.
   Regenerable in principle, but they are the record of what was handed over.
 
-Back up before every deploy that carries a migration:
+The deploy timer backs the database up before every update it applies, keeping
+the last fortnight in `~/.local/share/wake/backups/`. To take one by hand:
 
 ```bash
 sqlite3 ~/.local/share/wake/wake.sqlite ".backup '/tmp/wake-backup-$(date +%F).sqlite'"

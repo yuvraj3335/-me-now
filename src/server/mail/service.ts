@@ -10,7 +10,7 @@
 
 import { db, now } from '../db'
 import { GMAIL_ACCOUNTS, MAIL_CACHE_TTL_MS, MAIL_PAGE_SIZE, ME } from '../env'
-import { formatUntrusted } from '../agent/guard'
+import { formatUntrusted } from '../untrusted'
 import { call, probeMail, callWrite } from './gmail'
 import {
   BOXES, cursorOf, formatAddress, listOf, normalizeMessage, normalizeThread, queryFor,

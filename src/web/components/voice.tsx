@@ -49,7 +49,7 @@ export function Mic({
           listening ? stop() : start()
         }}
         className={`p-1.5 rounded-lg transition-colors ${
-          listening ? 'text-accent bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-ink-800' : 'text-fg-mute/50'
+          listening ? 'text-accent-ink bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-ink-800' : 'text-fg-mute/50'
         }`}
       >
         {listening ? (
@@ -145,7 +145,7 @@ export function Recorder({
             <Button variant="accent" onClick={stop} disabled={saving}>
               <Square size={13} className="fill-current" /> Stop
             </Button>
-            <span className="tnum text-[13px] text-accent">{fmtDuration(rec.ms)}</span>
+            <span className="tnum text-[13px] text-accent-ink">{fmtDuration(rec.ms)}</span>
             <Button variant="quiet" onClick={rec.cancel}>Discard</Button>
           </>
         ) : (

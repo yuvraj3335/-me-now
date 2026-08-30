@@ -1,7 +1,7 @@
 import { MotionConfig, motion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
-  BarChart3, Inbox, Mail as MailIcon, MoreHorizontal, RefreshCw, Settings2, Sparkles, SquareCheck,
+  BarChart3, Inbox, Mail as MailIcon, MoreHorizontal, RefreshCw, Settings2, SquareCheck,
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
 import { registerSW } from './lib/push'
@@ -9,28 +9,25 @@ import { Home } from './pages/Home'
 import { Work } from './pages/Work'
 import { Pulse } from './pages/Pulse'
 import { Settings } from './pages/Settings'
-import { Agent } from './pages/Agent'
 import { Mail } from './pages/Mail'
 import { spring, Sheet } from './components/primitives'
 import { STATIC_MODE, useStill } from './lib/motion'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
-import { useAgentBadge } from './lib/agent'
 import { useMailBadge } from './lib/mailBadge'
 
 /**
- * Seven destinations on a laptop, four on a phone.
+ * Five destinations on a laptop, three on a phone.
  *
  * `bleed` is the difference between a reading column and a working surface. Now,
  * Work, Pulse and Settings are things you read, so they stay at 760px. Mail is a
- * list beside a thread and Agent is history beside a conversation beside an
- * inspector; squeezing either into a column wastes two thirds of the screen.
+ * list beside a thread; squeezing that into a column wastes two thirds of the
+ * screen.
  */
 const TABS = [
   { path: '/', label: 'Now', Icon: Inbox, Page: Home, bleed: false, mobile: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, bleed: true, mobile: true },
-  { path: '/agent', label: 'Agent', Icon: Sparkles, Page: Agent, bleed: true, mobile: true },
-  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, bleed: false, mobile: false },
+  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, bleed: false, mobile: true },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, bleed: false, mobile: false },
   { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, bleed: false, mobile: false },
 ] as const
@@ -91,11 +88,9 @@ export default function App() {
 
   const active = TABS.find(t => t.path === path) ?? TABS[0]
   const nowCount = store.state?.now.length ?? 0
-  const agentBadge = useAgentBadge()
   const mailBadge = useMailBadge()
 
-  const badgeFor = (p: string) =>
-    p === '/' ? nowCount : p === '/mail' ? mailBadge : p === '/agent' ? agentBadge : 0
+  const badgeFor = (p: string) => (p === '/' ? nowCount : p === '/mail' ? mailBadge : 0)
 
   const commands = useCommands(go)
 
@@ -250,7 +245,7 @@ function NavItem({
       )}
       <Icon size={14} />
       {label}
-      {badge > 0 && <span className="ml-0.5 tnum text-[11px] text-accent">{badge > 99 ? '99+' : badge}</span>}
+      {badge > 0 && <span className="ml-0.5 tnum text-[11px] text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
     </button>
   )
 }
@@ -266,7 +261,7 @@ function TabItem({
         <Icon size={19} strokeWidth={active ? 2.1 : 1.7} />
         {badge > 0 && (
           <span className="absolute -top-1 -right-2 min-w-[15px] h-[15px] px-1 rounded-full
-                           bg-accent text-ink-950 text-[10px] font-semibold leading-[15px]
+                           bg-accent text-on-accent text-[10px] font-semibold leading-[15px]
                            text-center tnum">
             {badge > 99 ? '99+' : badge}
           </span>

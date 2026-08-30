@@ -1,0 +1,48 @@
+# Typecheck, test, build — on every push to main and every pull request.
+#
+# This is the half of "CI/CD" that can run on GitHub's machines. Deployment
+# cannot: the DevBox is behind a Cloudflare tunnel with Access in front of it and
+# accepts no inbound SSH, so a runner has nowhere to connect to. The box pulls
+# instead — see deploy/wake-deploy.service, which watches this branch and only
+# restarts after the same three checks pass locally.
+#
+# Which means a red build here is also a deploy that does not happen there.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push makes an in-flight run irrelevant.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # The suite writes to a temp directory of its own (test/setup.ts) and
+      # reaches no network, so it needs nothing configured here.
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build

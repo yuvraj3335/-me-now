@@ -10,8 +10,8 @@
 
 import { useEffect, useState } from 'react'
 import {
-  Activity, Bell, BellRing, Check, ChevronRight, KeyRound, Link2, Loader2, Mic,
-  Smartphone, Terminal,
+  Activity, Bell, BellRing, Check, ChevronRight, Link2, Loader2, Mic, Monitor, Moon,
+  Smartphone, Sun, Terminal,
 } from 'lucide-react'
 import { actions } from '../lib/api'
 import type { SourceStatus } from '../lib/types'
@@ -22,15 +22,14 @@ import { Button, Field, Sheet, inputClass } from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
 import { dictationSupported, fmtBytes, recordingSupported } from '../lib/voice'
 import { ago } from '../lib/time'
+import { useTheme, type Theme } from '../lib/theme'
 
 type Overview = {
-  agent: { key: { present: boolean; via: string; last4: string | null }; model: string; modes: number; engine: string }
-  claudeCode: { ok: boolean; binary: string; version: string | null; loggedIn: boolean | null; reason: string; packDir: string; recentSessions: number }
+  handoff: { url: string; maxChars: number; templates: number; recentSessions: number }
   mail: { connected: boolean; reason: string | null; accounts: Array<{ address: string; connected: boolean; via: string; reason: string | null }>; canSend: boolean; canDraft: boolean; discovered: string[] }
   voice: { stt: { available: boolean; reason: string }; storage: { count: number; bytes: number }; missing: number }
   skills: { total: number; byCatalog: Record<string, number> }
   workspace: { root: string; repos: number }
-  remote: Record<string, { configured: boolean; url: string | null; why: string | null }>
   identity: { emails: string[]; github: string; gmailAccounts: string[] }
   publicUrl: string
 }
@@ -68,7 +67,6 @@ export function Settings() {
   const [pushOn, setPushOn] = useState(false)
   const [devices, setDevices] = useState(0)
   const [msg, setMsg] = useState<string | null>(null)
-  const [keySheet, setKeySheet] = useState(false)
   const [audit, setAudit] = useState(false)
 
   const load = async () => {
@@ -132,6 +130,11 @@ export function Settings() {
         <p className="mt-2 text-[13px] text-fg-mute">What is connected, and what runs where</p>
       </header>
 
+      {/* --------------------------- appearance ------------------------------ */}
+      <Section title="Appearance" hint="Follows the system unless you say otherwise.">
+        <ThemeChoice />
+      </Section>
+
       {/* ------------------------------ sources ------------------------------ */}
       <Section title="Sources" hint="Wake reads these on a timer and never writes to them.">
         {sources.map(s => (
@@ -191,42 +194,29 @@ export function Settings() {
         </Section>
       )}
 
-      {/* ------------------------------ agent -------------------------------- */}
+      {/* ---------------------------- open in claude ------------------------- */}
       {over && (
-        <Section title="Agent" hint="The chat inside Wake. It runs on the Anthropic API with a key Wake holds.">
-          <Row
-            icon={<KeyRound size={14} />}
-            label="Anthropic API key"
-            value={over.agent.key.present ? `set · ${over.agent.key.via} · …${over.agent.key.last4}` : 'not set — the agent cannot run'}
-            tone={over.agent.key.present ? 'ok' : 'bad'}
-            action={<Button variant="solid" onClick={() => setKeySheet(true)}>{over.agent.key.present ? 'Replace' : 'Add a key'}</Button>}
-          />
-          <Row label="Model" value={over.agent.model} />
-          <Row label="Modes" value={`${over.agent.modes} — each one changes the tool surface, not a label`} />
-        </Section>
-      )}
-
-      {/* --------------------------- claude code ----------------------------- */}
-      {over && (
-        <Section title="Claude Code" hint="“Open in Claude Code” starts a session on this machine. Wake sends it no credential of its own.">
+        <Section
+          title="Open in Claude"
+          hint="Wake packs the context and hands it over as a link. It runs no model and holds no key of its own."
+        >
           <Row
             icon={<Terminal size={14} />}
-            label="Binary"
-            value={over.claudeCode.version ? `${over.claudeCode.binary} · ${over.claudeCode.version}` : `${over.claudeCode.binary} — not runnable`}
-            tone={over.claudeCode.version ? 'ok' : 'bad'}
+            label="Opens"
+            value={over.handoff.url}
+            mono
+            tone="ok"
           />
           <Row
-            label="Signed in"
-            value={
-              over.claudeCode.loggedIn === true ? 'yes'
-                : over.claudeCode.loggedIn === false ? 'no'
-                : 'stored in the system keychain — Wake does not read it'
-            }
-            tone={over.claudeCode.loggedIn === false ? 'bad' : over.claudeCode.loggedIn ? 'ok' : undefined}
+            label="Brief size"
+            value={`up to ${over.handoff.maxChars.toLocaleString()} characters travel in the link; anything longer is trimmed and says so`}
           />
-          <Row label="Recent sessions" value={`${over.claudeCode.recentSessions} in the last 30 days`} />
-          <Row label="Packs" value={over.claudeCode.packDir} mono />
-          {!over.claudeCode.ok && <p className="text-[12.5px] text-warn pt-2 leading-relaxed">{over.claudeCode.reason}</p>}
+          <Row label="Templates" value={`${over.handoff.templates}, each with its own context slots and named skills`} />
+          <Row label="Recent sessions" value={`${over.handoff.recentSessions} on this machine in the last 30 days`} />
+          <p className="text-[12px] text-fg-mute pt-2 leading-relaxed">
+            On a phone this opens the Claude app; on a laptop, a new tab. Either way it is your own
+            Claude login — Wake never sees it, and nothing starts on the DevBox.
+          </p>
         </Section>
       )}
 
@@ -260,7 +250,7 @@ export function Settings() {
 
       {/* --------------------------- skills & MCP ---------------------------- */}
       {over && (
-        <Section title="Skills and connectors" hint="Skills are indexed by metadata; a body is read only when a turn needs it.">
+        <Section title="Skills and workspace" hint="Skills are named in a brief, never inlined into one.">
           <Row
             label="Skills indexed"
             value={`${over.skills.total} across ${Object.keys(over.skills.byCatalog).length} catalogs (${Object.entries(over.skills.byCatalog).map(([k, v]) => `${k}:${v}`).join(', ')})`}
@@ -269,14 +259,6 @@ export function Settings() {
             label="Workspace"
             value={`${over.workspace.repos} ${over.workspace.repos === 1 ? 'repository' : 'repositories'} under ${over.workspace.root}`}
           />
-          {Object.entries(over.remote).map(([name, r]) => (
-            <Row
-              key={name}
-              label={name === 'platform' ? 'Platform MCP' : 'truto-monitoring MCP'}
-              value={r.configured ? (r.url ?? 'configured') : 'not configured — its tools report themselves unavailable'}
-              tone={r.configured ? 'ok' : undefined}
-            />
-          ))}
         </Section>
       )}
 
@@ -315,7 +297,7 @@ export function Settings() {
       <Section title="Notifications">
         {needsHomeScreenInstall() && (
           <div className="flex gap-3 mb-4 text-[13px] text-fg-dim leading-relaxed">
-            <Smartphone size={15} className="shrink-0 mt-0.5 text-accent" />
+            <Smartphone size={15} className="shrink-0 mt-0.5 text-accent-ink" />
             <p>
               On iPhone, open the share sheet and choose <strong className="font-medium">Add to Home Screen</strong> first.
               Apple only delivers push to an installed app, never to a Safari tab.
@@ -345,7 +327,7 @@ export function Settings() {
       </Section>
 
       {/* ------------------------------ audit -------------------------------- */}
-      <Section title="Audit" hint="Every message sent, every session started, every command run.">
+      <Section title="Audit" hint="Every message sent, every brief handed over, every command run.">
         <button
           onClick={() => setAudit(true)}
           className="w-full flex items-center gap-2 py-3 text-left text-[13.5px] text-fg-dim hover:text-fg transition-colors"
@@ -356,7 +338,6 @@ export function Settings() {
         </button>
       </Section>
 
-      <KeySheet open={keySheet} onClose={() => setKeySheet(false)} onSaved={async () => { setKeySheet(false); await load() }} />
       <AuditSheet open={audit} onClose={() => setAudit(false)} />
       <ClientSheet
         source={clientFor}
@@ -433,65 +414,6 @@ function Reason({ name, detail }: { name: string; detail: string }) {
   )
 }
 
-function KeySheet({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
-  const [key, setKey] = useState('')
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => { if (open) { setKey(''); setErr(null) } }, [open])
-
-  const save = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      const r = await fetch('/api/settings/agent/key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key }),
-      })
-      const body = await r.json()
-      if (!r.ok) throw new Error(body.error ?? `${r.status}`)
-      onSaved()
-    } catch (e) {
-      setErr((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title="Anthropic API key"
-      footer={
-        <div className="flex gap-1.5">
-          <Button variant="accent" className="flex-1" onClick={save} disabled={busy}>
-            {busy ? <Loader2 size={14} className="animate-spin" /> : null} Save
-          </Button>
-          <Button variant="ghost" onClick={() => { setKey(''); void save() }}>Clear</Button>
-        </div>
-      }
-    >
-      <p className="text-[13px] text-fg-dim leading-relaxed mb-4">
-        This key runs the chat inside Wake. It is stored on this machine only, is never sent to a
-        subprocess, and is never shown again — Settings will only ever report its last four characters.
-      </p>
-      <Field label="Key">
-        <input
-          className={inputClass}
-          type="password"
-          value={key}
-          autoFocus
-          onChange={e => setKey(e.target.value)}
-          placeholder="sk-ant-…"
-        />
-      </Field>
-      {err && <p className="text-[12.5px] text-bad">{err}</p>}
-    </Sheet>
-  )
-}
-
 function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [data, setData] = useState<any>(null)
   useEffect(() => {
@@ -505,7 +427,7 @@ function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         <p className="text-[13px] text-fg-mute py-6">Reading…</p>
       ) : (
         <div className="space-y-5">
-          <AuditGroup title="Outbound and launches" rows={data.events} render={(e: any) => (
+          <AuditGroup title="Outbound and hand-offs" rows={data.events} render={(e: any) => (
             <>
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${e.ok ? 'bg-ok' : 'bg-bad'}`} />
               <span className="font-mono text-[11.5px] text-fg-dim shrink-0">{e.kind}</span>
@@ -518,14 +440,6 @@ function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.ok ? 'bg-ok' : 'bg-bad'}`} />
               <span className="font-mono text-[11.5px] text-fg-dim truncate">truto {r.argv.slice(0, 4).join(' ')}</span>
               <span className="ml-auto tnum text-[11px] text-fg-mute shrink-0">{ago(r.at)}</span>
-            </>
-          )} />
-          <AuditGroup title="Agent tool calls" rows={data.tools} render={(t: any) => (
-            <>
-              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.ok ? 'bg-ok' : 'bg-bad'}`} />
-              <span className="font-mono text-[11.5px] text-fg-dim truncate">{t.name}</span>
-              {t.mutates ? <span className="text-[10px] text-warn uppercase tracking-wide shrink-0">write</span> : null}
-              <span className="ml-auto tnum text-[11px] text-fg-mute shrink-0">{t.ms}ms</span>
             </>
           )} />
         </div>
@@ -594,5 +508,46 @@ function ClientSheet({
           onChange={e => setSecret(e.target.value)} placeholder="••••••••" />
       </Field>
     </Sheet>
+  )
+}
+
+/**
+ * Three states, not a switch.
+ *
+ * "System" is a real choice — a phone that goes dark at sunset should take the
+ * app with it — so the control says which one is in effect right now rather than
+ * leaving you to guess what "system" resolved to.
+ */
+function ThemeChoice() {
+  const { theme, resolved, set } = useTheme()
+  const options: Array<{ id: Theme; label: string; Icon: typeof Sun }> = [
+    { id: 'system', label: 'System', Icon: Monitor },
+    { id: 'light', label: 'Light', Icon: Sun },
+    { id: 'dark', label: 'Dark', Icon: Moon },
+  ]
+
+  return (
+    <div className="py-2">
+      <div className="flex gap-1.5">
+        {options.map(o => (
+          <button
+            key={o.id}
+            onClick={() => set(o.id)}
+            aria-pressed={theme === o.id}
+            className={`flex-1 inline-flex items-center justify-center gap-1.5 min-h-10 rounded-[10px]
+              text-[13.5px] transition-colors
+              ${theme === o.id ? 'bg-ink-700 text-fg' : 'bg-ink-800 text-fg-mute hover:text-fg-dim'}`}
+          >
+            <o.Icon size={14} />
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {theme === 'system' && (
+        <p className="mt-2 text-[11.5px] text-fg-mute">
+          Following this device — {resolved} right now.
+        </p>
+      )}
+    </div>
   )
 }

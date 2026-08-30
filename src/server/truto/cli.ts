@@ -12,7 +12,7 @@
 
 import { db, now } from '../db'
 import { CLI_MAX_OUTPUT, CLI_MAX_PARSE, CLI_TIMEOUT_MS, TRUTO_BIN } from '../env'
-import { childEnv, redact } from '../agent/redact'
+import { childEnv, redact } from '../redact'
 import { classify, hazardNote, type Classification } from './classify'
 
 export type CliResult = {

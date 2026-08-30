@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { existsSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { api } from './api'
-import { agentApi, bootAgent } from './agentApi'
+import { boot } from './boot'
 import { originGuard, sweepConfirmations } from './security'
 import { HOST, PORT, POLL_INTERVAL_MS, PUBLIC_URL, REMINDER_TICK_MS, IS_DEV } from './env'
 import { ingest } from './ingest'
@@ -40,7 +40,6 @@ app.get('/healthz', c =>
 )
 
 app.route('/api', api)
-app.route('/api/agent', agentApi)
 
 /* ------------------------------- static --------------------------------- */
 
@@ -111,14 +110,9 @@ if (!process.env.WAKE_NO_SCHEDULER) {
   every(6 * 3.6e6, 'confirmations', async () => { sweepConfirmations() })
 }
 
-const boot = bootAgent()
-console.log(
-  `agent: ${boot.repos} repos, ${boot.skills} skills indexed, key ${boot.key.present ? `via ${boot.key.via} (…${boot.key.last4})` : 'MISSING — Settings → Agent'}` +
-  (boot.interrupted ? `, ${boot.interrupted} interrupted turn(s) closed` : '') +
-  (boot.expired ? `, ${boot.expired} orphaned approval(s) expired` : '') +
-  (boot.packs ? `, ${boot.packs} interrupted launch(es) closed` : ''),
-)
-console.log(`claude code: ${boot.launcher.ok ? boot.launcher.version : boot.launcher.reason}`)
+const b = boot()
+console.log(`workspace: ${b.repos} repos, ${b.skills} skills indexed`)
+console.log(`hand-off: ${b.handoff}`)
 
 console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${IS_DEV ? '  [dev]' : ''}`)
 

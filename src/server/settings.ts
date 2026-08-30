@@ -7,23 +7,22 @@
  * that fixes a source is still available — behind a disclosure — because when it
  * is the answer, it is the whole answer.
  *
- * Nothing in this file ever returns a secret. The Anthropic key comes back as a
- * presence, a source and four characters.
+ * Nothing in this file ever returns a secret, and Wake now holds no model
+ * credential of its own to return: "Open in Claude" opens a link under the
+ * Claude login you already have.
  */
 
 import { Hono } from 'hono'
-import { audit, db } from './db'
-import { keyStatus, setKey } from './agent/key'
-import { AGENT_MODEL, GMAIL_ACCOUNTS, ME, PUBLIC_URL, WORKSPACE_ROOT } from './env'
-import { remoteStatus } from './agent/remote'
-import { launcherStatus } from './claudecode/launch'
+import { db } from './db'
+import { GMAIL_ACCOUNTS, HANDOFF_MAX_CHARS, ME, PUBLIC_URL, WORKSPACE_ROOT } from './env'
+import { handoffTarget } from './claudecode/handoff'
 import { listSessions } from './sources/claudeSessions'
 import { probeMail } from './mail/gmail'
 import { sttStatus, storageUsed, verifyStorage } from './voice/store'
 import { listSkills } from './skills/catalog'
 import { listRepos } from './registry/scan'
 import { listProfiles, whoami } from './truto/cli'
-import { MODE_LIST } from './agent/modes'
+import { TEMPLATES } from './claudecode/templates'
 
 export const settings = new Hono()
 
@@ -32,19 +31,13 @@ settings.get('/', async c => {
   const byCatalog: Record<string, number> = {}
   for (const s of skills) byCatalog[s.catalog] = (byCatalog[s.catalog] ?? 0) + 1
 
-  const launcher = launcherStatus()
   const mail = await probeMail()
 
   return c.json({
-    agent: {
-      key: keyStatus(),
-      model: AGENT_MODEL,
-      modes: MODE_LIST.length,
-      // Two engines, named so the difference is visible rather than folded away.
-      engine: 'Anthropic API (key held by Wake)',
-    },
-    claudeCode: {
-      ...launcher,
+    handoff: {
+      url: handoffTarget(),
+      maxChars: HANDOFF_MAX_CHARS,
+      templates: TEMPLATES.length,
       recentSessions: listSessions(50, 30).length,
     },
     mail: {
@@ -58,7 +51,6 @@ settings.get('/', async c => {
     voice: { stt: sttStatus(), storage: storageUsed(), ...verifyStorage() },
     skills: { total: skills.length, byCatalog },
     workspace: { root: WORKSPACE_ROOT, repos: listRepos().length },
-    remote: remoteStatus(),
     identity: { emails: ME.emails, github: ME.githubLogin, gmailAccounts: GMAIL_ACCOUNTS },
     publicUrl: PUBLIC_URL,
   })
@@ -79,34 +71,21 @@ settings.get('/truto', async c => {
   }
 })
 
-settings.post('/agent/key', async c => {
-  const { key } = await c.req.json<{ key: string }>().catch(() => ({ key: '' }))
-  const r = setKey(String(key ?? ''))
-  if (!r.ok) return c.json({ error: r.error }, 400)
-  audit('settings.agent_key', { target: key ? 'set' : 'cleared' })
-  return c.json({ ok: true, key: keyStatus() })
-})
-
 /** The security audit trail, and the tool calls behind it. */
 settings.get('/audit', c => {
   const limit = Math.min(Number(c.req.query('limit') ?? 100), 500)
   return c.json({
     events: db
       .query<Record<string, any>, [number]>(
-        `SELECT id, kind, actor, turn_id, target, ok, error, at FROM audit_events ORDER BY id DESC LIMIT ?`,
+        `SELECT id, kind, actor, target, ok, error, at FROM audit_events ORDER BY id DESC LIMIT ?`,
       )
       .all(limit),
     commands: db
       .query<Record<string, any>, [number]>(
-        `SELECT id, turn_id, profile, argv, class, exit_code, ms, ok, at FROM cli_audit ORDER BY id DESC LIMIT ?`,
+        `SELECT id, profile, argv, class, exit_code, ms, ok, at FROM cli_audit ORDER BY id DESC LIMIT ?`,
       )
       .all(limit)
       .map(r => ({ ...r, argv: safe(r.argv) })),
-    tools: db
-      .query<Record<string, any>, [number]>(
-        `SELECT id, turn_id, name, mutates, ok, ms, error, at FROM agent_tool_calls ORDER BY at DESC LIMIT ?`,
-      )
-      .all(limit),
   })
 })
 

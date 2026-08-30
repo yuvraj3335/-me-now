@@ -1,7 +1,6 @@
 /**
- * The brief's routing rules are mandatory. A model can be told to load a
- * baseline skill and simply not do it, which is why routing happens in code —
- * and why it needs tests that fail when someone edits the rules out.
+ * The two indexes a brief is assembled from: the skill catalogs it names, and
+ * the repository registry that decides which repository it may name at all.
  *
  * These run against the real catalogs on disk. If a skill is missing locally
  * the assertion that needs it is skipped rather than failed, so the suite
@@ -12,19 +11,14 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import {
   reindexSkills, listSkills, getSkill, loadSkill, loadSkillReference, CATALOG_SURFACE,
 } from '../src/server/skills/catalog'
-import { routeSkills } from '../src/server/skills/route'
 import { rescan, listRepos, resolveCanonical, searchRepos } from '../src/server/registry/scan'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-let hasCatalogB = false
-let hasCatalogC = false
 
 beforeAll(() => {
   reindexSkills()
   rescan()
-  hasCatalogB = listSkills('B').length > 0
-  hasCatalogC = listSkills('C').length > 0
 })
 
 describe('skill index', () => {
@@ -71,74 +65,6 @@ describe('skill index', () => {
   })
 })
 
-describe('mandatory routing rules', () => {
-  test('CLI investigations always load the toolbelt first', () => {
-    if (!hasCatalogB) return
-    for (const mode of ['support', 'account', 'api', 'mappings', 'sync', 'webhooks'] as const) {
-      const r = routeSkills({ mode, prompt: 'the sync is failing for acme' })
-      expect(r.baseline, `${mode} lost its baseline`).toBe('B/truto-cli-toolbelt')
-    }
-  })
-
-  test('anything that could mutate also loads the safe-admin operator', () => {
-    if (!hasCatalogB || !getSkill('B/truto-safe-admin-operator')) return
-    const r = routeSkills({ mode: 'support', prompt: 'update the environment integration override for acme' })
-    expect(r.forced).toContain('B/truto-safe-admin-operator')
-  })
-
-  test('a read-only question does not drag in the mutation skill', () => {
-    if (!hasCatalogB) return
-    const r = routeSkills({ mode: 'support', prompt: 'why did acme see a 500 yesterday' })
-    expect(r.forced).not.toContain('B/truto-safe-admin-operator')
-  })
-
-  test('a *Service.ts change forces the ginger guardrails', () => {
-    if (!hasCatalogC || !getSkill('C/ginger-migration-guardrails')) return
-    const r = routeSkills({ mode: 'engineering', prompt: 'add a field to syncJobService.ts' })
-    expect(r.forced).toContain('C/ginger-migration-guardrails')
-  })
-
-  test('an API contract change forces the platform checklist', () => {
-    if (!hasCatalogC || !getSkill('C/platform-change-checklist')) return
-    const r = routeSkills({ mode: 'engineering', prompt: 'add a new query param to the public api' })
-    expect(r.forced).toContain('C/platform-change-checklist')
-  })
-
-  test('path-scoped rule files are demanded before editing', () => {
-    const cli = routeSkills({ mode: 'engineering', prompt: 'change the output format', files: ['cli/src/x.ts'] })
-    expect(cli.repoRules).toContain('cli/CLAUDE.md')
-    const sync = routeSkills({ mode: 'engineering', prompt: 'fix pagination', files: ['src/sync-job/v4.ts'] })
-    expect(sync.repoRules).toContain('src/sync-job/CLAUDE.md')
-  })
-
-  test('routing stays small — one baseline, one specialist', () => {
-    const r = routeSkills({ mode: 'support', prompt: 'acme salesforce contacts sync is failing' })
-    const total = [r.baseline, r.specialist, ...r.forced].filter(Boolean).length
-    expect(total).toBeLessThanOrEqual(3)
-  })
-
-  test('every routed skill actually exists in the index', () => {
-    for (const mode of ['triage', 'support', 'sync', 'engineering', 'incident'] as const) {
-      const r = routeSkills({ mode, prompt: 'something is broken for a customer' })
-      for (const id of [r.baseline, r.specialist, ...r.forced].filter(Boolean) as string[]) {
-        expect(getSkill(id), `${mode} routed to missing skill ${id}`).not.toBeNull()
-      }
-    }
-  })
-
-  test('routing explains itself', () => {
-    const r = routeSkills({ mode: 'sync', prompt: 'sync job v4 keeps failing' })
-    expect(r.rules.length).toBeGreaterThan(0)
-  })
-})
-
-/**
- * The registry is tested against a workspace this file builds, not against
- * whatever happens to be checked out on the machine running the suite. The
- * previous version asserted `listRepos().length > 0`, which passed on the
- * author's laptop and said nothing at all — and the worktree assertions below
- * silently skipped wherever no worktree existed.
- */
 describe('repository registry', () => {
   const root = process.env.WAKE_WORKSPACE_ROOT!
 

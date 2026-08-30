@@ -11,8 +11,6 @@ import { Empty, spring } from '../components/primitives'
 import { useStill } from '../lib/motion'
 import { SOURCE_LABEL } from '../components/sources'
 import { openLaunch } from '../lib/launch'
-import { addAttachment } from '../lib/agent'
-import { navigate } from '../App'
 import { registerPaletteActions } from '../components/palette'
 
 /**
@@ -65,11 +63,6 @@ export function Home() {
 
   const excerptOf = (c: CardT) =>
     [c.why, c.excerpt, ...c.sources.map(s => `${SOURCE_LABEL[s.source]}: ${s.title}`)].filter(Boolean).join('\n')
-
-  const ask = (c: CardT) => {
-    addAttachment({ kind: 'card', ref: c.group_key, title: c.title, excerpt: excerptOf(c), url: c.url })
-    navigate('/agent')
-  }
 
   const launch = (c: CardT) =>
     openLaunch(
@@ -141,7 +134,6 @@ export function Home() {
     onDone: done,
     onSnooze: snooze,
     onTask: setTaskFrom,
-    onAsk: ask,
     onLaunch: launch,
   })
 
@@ -174,7 +166,7 @@ export function Home() {
             key={now.length}
             initial={still ? false : { opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={spring}
             className={`text-[40px] leading-none font-medium tnum tracking-[-0.03em]
-              ${now.length ? 'text-accent' : 'text-fg-mute'}`}
+              ${now.length ? 'text-accent-ink' : 'text-fg-mute'}`}
           >
             {now.length}
           </motion.span>
@@ -230,7 +222,7 @@ export function Home() {
                 <div className="pt-3">
                   {parked.map(c => (
                     <Card key={c.group_key} card={c} onOpen={setOpenCard} onDone={done} onSnooze={snooze}
-                      onTask={setTaskFrom} onAsk={ask} onLaunch={launch} />
+                      onTask={setTaskFrom} onLaunch={launch} />
                   ))}
                 </div>
               </motion.div>

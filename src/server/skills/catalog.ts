@@ -15,17 +15,15 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { db, now } from '../db'
-import { SKILL_PATHS, ENABLE_META_SKILLS } from '../env'
+import { SKILL_PATHS } from '../env'
 
-export type Catalog = 'A' | 'B' | 'C' | 'D' | 'E'
+export type Catalog = 'A' | 'B' | 'C'
 
 /** Which tool surface a catalog's advice is written for. */
 export const CATALOG_SURFACE: Record<Catalog, string> = {
   A: 'platform_mcp',
   B: 'truto_cli',
   C: 'repo_engineering',
-  D: 'monitoring_mcp',
-  E: 'cursor',
 }
 
 export type Skill = {
@@ -246,7 +244,7 @@ export function listSkills(catalog?: Catalog): Skill[] {
   const rows = catalog
     ? db.query<Record<string, any>, [string]>(`SELECT * FROM skills WHERE catalog = ? ORDER BY name`).all(catalog)
     : db.query<Record<string, any>, []>(`SELECT * FROM skills ORDER BY catalog, name`).all()
-  return rows.map(hydrate).filter(s => ENABLE_META_SKILLS || s.catalog !== 'E')
+  return rows.map(hydrate)
 }
 
 export function getSkill(id: string): Skill | null {

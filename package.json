@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.122.0",
     "hono": "^4.6.14",
     "web-push": "^3.6.7"
   },

@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, type PanInfo } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useRef, useState } from 'react'
-import { Check, Clock, ListPlus, Pin, Sparkles, Terminal } from 'lucide-react'
+import { Check, Clock, ListPlus, Pin, Terminal } from 'lucide-react'
 import type { Card as CardT } from '../lib/types'
 import { ago } from '../lib/time'
 import { SOURCE_LABEL, SourceDot } from './sources'
@@ -15,12 +15,11 @@ export type CardActions = {
   onDone: (c: CardT) => void
   onSnooze: (c: CardT) => void
   onTask?: (c: CardT) => void
-  onAsk?: (c: CardT) => void
   onLaunch?: (c: CardT) => void
 }
 
 export function Card({
-  card, focused, onOpen, onDone, onSnooze, onTask, onAsk, onLaunch,
+  card, focused, onOpen, onDone, onSnooze, onTask, onLaunch,
 }: CardActions & { card: CardT; focused?: boolean }) {
   const x = useMotionValue(0)
   const still = useStill()
@@ -106,7 +105,7 @@ export function Card({
               <Dot />
               <time className="tnum">{ago(card.ts)}</time>
               {card.tasks.length > 0 && (
-                <><Dot /><span className="text-accent/80">
+                <><Dot /><span className="text-accent-ink/80">
                   {card.tasks.length} task{card.tasks.length > 1 ? 's' : ''}
                 </span></>
               )}
@@ -125,7 +124,7 @@ export function Card({
             </div>
           </div>
 
-          {pinned && <Pin size={12} className="text-accent shrink-0 mt-1.5" />}
+          {pinned && <Pin size={12} className="text-accent-ink shrink-0 mt-1.5" />}
         </div>
 
         {/* Row actions. Hidden until hover or keyboard focus so a scanning read
@@ -136,8 +135,7 @@ export function Card({
             ${focused ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}`}
           onClick={e => e.stopPropagation()}
         >
-          {onAsk && <RowAction icon={<Sparkles size={12} />} label="Ask Wake" onClick={() => onAsk(card)} />}
-          {onLaunch && <RowAction icon={<Terminal size={12} />} label="Open in Claude Code" onClick={() => onLaunch(card)} />}
+          {onLaunch && <RowAction icon={<Terminal size={12} />} label="Open in Claude" onClick={() => onLaunch(card)} />}
           {onTask && <RowAction icon={<ListPlus size={12} />} label="Task" onClick={() => onTask(card)} />}
           <RowAction icon={<Clock size={12} />} label="Later" onClick={() => onSnooze(card)} />
           <RowAction icon={<Check size={12} />} label="Done" onClick={() => onDone(card)} />

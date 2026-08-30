@@ -12,6 +12,7 @@ import { scaleBand, scaleLinear, scaleSqrt } from 'd3-scale'
 import { area, curveMonotoneX, line } from 'd3-shape'
 import { useId, useState } from 'react'
 
+/** Chart marks are surfaces, so they use the surface amber, not the text one. */
 const ACCENT = 'var(--color-accent)'
 
 /* ------------------------------ bar chart -------------------------------- */

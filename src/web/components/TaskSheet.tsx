@@ -187,8 +187,8 @@ export function TaskSheet({
               <div key={n.id}
                 className="group relative rounded-[10px] px-3 py-2.5 text-[13px] leading-relaxed"
                 style={{
-                  background: `color-mix(in oklab, ${n.color ?? '#e9a23b'} 12%, var(--color-ink-800))`,
-                  boxShadow: `inset 2px 0 0 ${n.color ?? '#e9a23b'}`,
+                  background: `color-mix(in oklab, ${n.color ?? 'var(--color-accent)'} 12%, var(--color-ink-800))`,
+                  boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}`,
                 }}>
                 {/* Editable in place: click the text, type, blur to save. A note
                     you cannot correct is a note you stop trusting. */}

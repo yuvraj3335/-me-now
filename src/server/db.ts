@@ -215,13 +215,13 @@ CREATE INDEX IF NOT EXISTS sync_runs_source ON sync_runs(source, started_at DESC
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 
 -- ===========================================================================
--- AGENT. Everything below this line is the operations assistant: the workspace
--- registry it reasons over, the skill catalogs it routes through, the durable
--- turns it runs, and the audit trail every mutation leaves behind.
+-- THE WORKSPACE. What Wake indexes so a brief can name a real repository and a
+-- real skill, and the audit trail of everything it ran or handed over.
 --
--- These tables are deliberately disjoint from "cards"/"card_state" above. The
--- card pipeline stays deterministic and model-free; nothing the agent writes
--- can reach it.
+-- Wake used to run a model in-process, with tables for conversations, turns,
+-- events and approvals. It does not any more: "Open in Claude" hands a packed
+-- brief to Claude under your own login, so there is no loop here to narrate and
+-- no credential here to hold. Migration 4 drops what that left behind.
 -- ===========================================================================
 
 -- One row per git repository discovered under the workspace root.
@@ -254,7 +254,7 @@ CREATE INDEX IF NOT EXISTS repos_name ON repos(name);
 -- stored here, which is what keeps "manifest-first" true rather than aspirational.
 CREATE TABLE IF NOT EXISTS skills (
   id            TEXT PRIMARY KEY,          -- "<catalog>/<name>"
-  catalog       TEXT NOT NULL,             -- A|B|C|D|E
+  catalog       TEXT NOT NULL,             -- A|B|C
   name          TEXT NOT NULL,
   title         TEXT,
   description   TEXT,
@@ -269,95 +269,12 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 CREATE INDEX IF NOT EXISTS skills_catalog ON skills(catalog);
 
-CREATE TABLE IF NOT EXISTS conversations (
-  id          TEXT PRIMARY KEY,
-  title       TEXT NOT NULL DEFAULT 'New conversation',
-  mode        TEXT NOT NULL DEFAULT 'triage',
-  repo_path   TEXT,                        -- pinned repo for engineering mode
-  profile     TEXT,                        -- pinned truto profile
-  cc_session  TEXT,                        -- Claude Code session id, for --resume
-  model       TEXT,
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL,
-  archived_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id         TEXT PRIMARY KEY,
-  conv_id    TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  seq        INTEGER NOT NULL,
-  role       TEXT NOT NULL,                -- user | assistant
-  body       TEXT NOT NULL DEFAULT '',
-  segments   TEXT NOT NULL DEFAULT '[]',   -- rendered turn segments, JSON
-  created_at INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS messages_conv_seq ON messages(conv_id, seq);
-
--- A turn is durable: it survives a browser reload, a disconnect and a restart.
-CREATE TABLE IF NOT EXISTS turns (
-  id             TEXT PRIMARY KEY,
-  conv_id        TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  state          TEXT NOT NULL,            -- running | done | error | cancelled | interrupted
-  mode           TEXT NOT NULL,
-  prompt         TEXT NOT NULL,
-  cc_session     TEXT,
-  pid            INTEGER,
-  skills_used    TEXT NOT NULL DEFAULT '[]',
-  last_seq       INTEGER NOT NULL DEFAULT 0,
-  cost_usd       REAL,
-  input_tokens   INTEGER,
-  output_tokens  INTEGER,
-  context_tokens INTEGER,
-  num_turns      INTEGER,
-  error          TEXT,
-  started_at     INTEGER NOT NULL,
-  heartbeat_at   INTEGER NOT NULL,
-  finished_at    INTEGER
-);
-CREATE INDEX IF NOT EXISTS turns_conv  ON turns(conv_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS turns_state ON turns(state) WHERE state = 'running';
-
--- The event log the SSE endpoint tails. "seq" is per-turn and gap-free, which is
--- what makes "?after=<seq>" a correct resume rather than a best guess.
-CREATE TABLE IF NOT EXISTS turn_events (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
-  seq     INTEGER NOT NULL,
-  type    TEXT NOT NULL,
-  payload TEXT NOT NULL DEFAULT '{}',
-  at      INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS turn_events_seq ON turn_events(turn_id, seq);
-
--- A blocked tool call. The MCP tool waits on this row; the UI resolves it.
-CREATE TABLE IF NOT EXISTS approvals (
-  id          TEXT PRIMARY KEY,
-  turn_id     TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
-  conv_id     TEXT NOT NULL,
-  kind        TEXT NOT NULL,               -- mutation | provider_read | question | engineering
-  tool        TEXT NOT NULL,
-  title       TEXT NOT NULL,
-  detail      TEXT,                        -- human-readable diff / command
-  payload     TEXT NOT NULL DEFAULT '{}',
-  risk        TEXT NOT NULL DEFAULT 'mutation',
-  state       TEXT NOT NULL DEFAULT 'pending', -- pending | approved | denied | expired
-  answer      TEXT,                        -- for questions: the chosen answer
-  fingerprint TEXT,                        -- state at approval time; a change invalidates it
-  created_at  INTEGER NOT NULL,
-  resolved_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS approvals_pending ON approvals(state, created_at) WHERE state = 'pending';
-CREATE INDEX IF NOT EXISTS approvals_turn ON approvals(turn_id);
-
 -- Every command the adapter ran, whether or not it mutated anything.
 CREATE TABLE IF NOT EXISTS cli_audit (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  turn_id     TEXT,
   profile     TEXT,
   argv        TEXT NOT NULL,               -- redacted, JSON array
   class       TEXT NOT NULL,               -- read | provider_read | mutation | high_risk
-  approval_id TEXT,
   exit_code   INTEGER,
   ms          INTEGER,
   ok          INTEGER NOT NULL DEFAULT 0,
@@ -403,7 +320,24 @@ db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at INTEGER NOT NULL
 )`)
 
-type Migration = { id: number; name: string; sql: string }
+/**
+ * A migration is SQL, code, or both.
+ *
+ * Code is not a convenience: SQLite has no `DROP COLUMN IF EXISTS`, and a
+ * migration that removes a column the baseline no longer creates would fail on a
+ * fresh database while succeeding on an old one. That is the same
+ * fresh-versus-upgraded divergence migrations exist to prevent, so the check has
+ * to happen at runtime.
+ */
+type Migration = { id: number; name: string; sql?: string; run?: () => void }
+
+const hasColumn = (table: string, column: string) =>
+  db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all().some(c => c.name === column)
+
+/** Idempotent column removal, for a column the baseline may or may not create. */
+function dropColumn(table: string, column: string) {
+  if (hasColumn(table, column)) db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+}
 
 const MIGRATIONS: Migration[] = [
   {
@@ -434,10 +368,8 @@ CREATE INDEX IF NOT EXISTS agent_tool_calls_turn ON agent_tool_calls(turn_id, at
 -- both unreadable and lets a retention policy on one quietly delete the other.
 CREATE TABLE IF NOT EXISTS audit_events (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind     TEXT NOT NULL,                 -- mail.send | slack.post | truto.apply | claude.launch | …
-  actor    TEXT NOT NULL DEFAULT 'user',  -- user | agent
-  turn_id  TEXT,
-  conv_id  TEXT,
+  kind     TEXT NOT NULL,                 -- mail.send | claude.pack | claude.handoff | …
+  actor    TEXT NOT NULL DEFAULT 'user',
   target   TEXT,                          -- what it acted on, in one line
   detail   TEXT,                          -- redacted JSON
   ok       INTEGER NOT NULL DEFAULT 1,
@@ -504,26 +436,20 @@ CREATE TABLE IF NOT EXISTS mail_messages (
 );
 CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages(thread_key, seq);
 
--- A launch pack: what Wake handed to a Claude Code session, and the session it
--- started. The session id is minted here and passed with --session-id, so the
--- resume command shown in the UI is the real one rather than a hopeful guess.
+-- A brief and the objects packed into it. Nothing here records a process,
+-- because Wake starts none: "opened" means the link was produced.
 CREATE TABLE IF NOT EXISTS launch_packs (
   id            TEXT PRIMARY KEY,
   template      TEXT NOT NULL,
   title         TEXT NOT NULL,
   cwd           TEXT NOT NULL,
   repo_name     TEXT,
-  session_id    TEXT,                     -- Claude Code session uuid
-  resumed_from  TEXT,
-  status        TEXT NOT NULL,            -- draft | launching | running | done | error
+  status        TEXT NOT NULL,            -- draft | opened
   first_message TEXT NOT NULL DEFAULT '',
   skills        TEXT NOT NULL DEFAULT '[]',
   pack_path     TEXT,
-  pid           INTEGER,
-  error         TEXT,
   created_at    INTEGER NOT NULL,
-  launched_at   INTEGER,
-  finished_at   INTEGER
+  launched_at   INTEGER                   -- when the link was produced
 );
 CREATE INDEX IF NOT EXISTS launch_packs_created ON launch_packs(created_at DESC);
 
@@ -578,6 +504,39 @@ CREATE INDEX IF NOT EXISTS voice_notes_created ON voice_notes(created_at DESC);
     // inspection: nothing has written to that table since migration 2 ran.
     sql: `DROP TABLE IF EXISTS eng_sessions;`,
   },
+  {
+    id: 4,
+    name: 'remove-the-agent',
+    // Wake ran a model in-process, with an Anthropic key of its own. It does
+    // not any more — "Open in Claude" hands a packed brief to Claude under the
+    // login you already have, which is both simpler and one fewer credential to
+    // hold. These tables and columns have no reader left.
+    //
+    // The conversation history goes with them. That is the intended loss: it is
+    // a transcript of a feature that no longer exists, and keeping an
+    // unreachable copy of it is how a schema becomes a museum.
+    sql: `
+DROP TABLE IF EXISTS turn_events;
+DROP TABLE IF EXISTS approvals;
+DROP TABLE IF EXISTS agent_tool_calls;
+DROP TABLE IF EXISTS turns;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS conversations;
+
+DELETE FROM kv WHERE k = 'agent:anthropic_key';
+
+-- A pack left mid-flight by the old launcher has no process behind it now.
+UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened');
+`,
+    run() {
+      // Guarded, because a database created after this release never had them.
+      for (const c of ['turn_id', 'approval_id']) dropColumn('cli_audit', c)
+      for (const c of ['turn_id', 'conv_id']) dropColumn('audit_events', c)
+      for (const c of ['session_id', 'resumed_from', 'pid', 'error', 'finished_at']) {
+        dropColumn('launch_packs', c)
+      }
+    },
+  },
 ]
 
 const applied = new Set(
@@ -588,7 +547,8 @@ for (const m of MIGRATIONS) {
   // Each migration is one transaction: a half-applied schema is worse than an
   // unapplied one, because the next boot would skip the half it thinks ran.
   db.transaction(() => {
-    db.exec(m.sql)
+    if (m.sql) db.exec(m.sql)
+    m.run?.()
     db.query(`INSERT INTO schema_migrations (id, name, applied_at) VALUES (?,?,?)`)
       .run(m.id, m.name, Date.now())
   })()
@@ -615,26 +575,21 @@ export function logEvent(kind: string, fields: { group_key?: string; task_id?: s
 
 /**
  * The security audit log. Separate from `logEvent` on purpose: that one feeds
- * Pulse, this one answers "what did this system do to the outside world, and who
- * asked for it".
+ * Pulse, this one answers "what did this system do to the outside world".
  */
 export function audit(kind: string, fields: {
-  actor?: 'user' | 'agent'
-  turn_id?: string | null
-  conv_id?: string | null
+  actor?: string
   target?: string | null
   detail?: unknown
   ok?: boolean
   error?: string | null
 } = {}) {
   db.query(
-    `INSERT INTO audit_events (kind, actor, turn_id, conv_id, target, detail, ok, error, at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO audit_events (kind, actor, target, detail, ok, error, at)
+     VALUES (?,?,?,?,?,?,?)`,
   ).run(
     kind,
     fields.actor ?? 'user',
-    fields.turn_id ?? null,
-    fields.conv_id ?? null,
     fields.target ?? null,
     fields.detail === undefined ? null : JSON.stringify(fields.detail),
     fields.ok === false ? 0 : 1,

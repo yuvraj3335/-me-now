@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle, ArrowLeft, ChevronDown, CornerUpLeft, CornerUpRight, Forward,
   Image as ImageIcon, Loader2, Mail as MailIcon, Paperclip, PenLine, RefreshCw,
-  Search, Send, Sparkles, Terminal, X,
+  Search, Send, Terminal, X,
 } from 'lucide-react'
 import {
   displayName, mailApi, splitAddrs, useMailState,
@@ -24,8 +24,6 @@ import {
 import { Button, Chip, Empty, Field, Sheet, inputClass } from '../components/primitives'
 import { ago, timeOfDay } from '../lib/time'
 import { openLaunch } from '../lib/launch'
-import { addAttachment } from '../lib/agent'
-import { navigate } from '../App'
 import { registerPaletteActions } from '../components/palette'
 import { Mic } from '../components/voice'
 
@@ -250,7 +248,7 @@ function ThreadRow({
       <div className="mt-0.5 text-[12px] text-fg-mute truncate">{thread.snippet}</div>
       {(multiAccount || thread.toMe) && (
         <div className="mt-1 flex items-center gap-1.5 text-[10.5px] text-fg-mute">
-          {thread.toMe && <span className="text-accent/80">to you</span>}
+          {thread.toMe && <span className="text-accent-ink/80">to you</span>}
           {multiAccount && <span className="truncate">{thread.account}</span>}
         </div>
       )}
@@ -323,22 +321,7 @@ function ThreadView({
         <span className="grow" />
         <Button
           variant="ghost"
-          title="Ask the Wake agent about this thread"
-          onClick={() => {
-            addAttachment({
-              kind: 'mail',
-              ref: `${thread.account}:${thread.threadId}`,
-              title: thread.subject,
-              excerpt,
-            })
-            navigate('/agent')
-          }}
-        >
-          <Sparkles size={13} /> Ask Wake
-        </Button>
-        <Button
-          variant="ghost"
-          title="Pack this thread for a Claude Code session"
+          title="Pack this thread and open it in Claude"
           onClick={() =>
             openLaunch(
               [{ kind: 'mail', ref: `${thread.account}:${thread.threadId}`, title: thread.subject, excerpt, why: 'the thread this is about' }],

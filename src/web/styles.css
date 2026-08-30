@@ -9,26 +9,43 @@
   that is allowed to appear rarely. Space and type carry the hierarchy.
 */
 @theme {
-  /* Ground. Very slightly warm, so it reads as ink rather than as a switched-off
-     screen; pure #000 makes the accent look neon and the type look harsh. */
+  /*
+    Every colour is declared here so Tailwind generates the utility, and every
+    colour is then *redefined* per theme in the block below. The values here are
+    the dark ones, which is what a first paint before any script runs will use.
+
+    The utilities emit `var(--color-x)`, so overriding the variable in a scoped
+    selector re-themes the whole app without a second set of classes.
+  */
   --color-ink-950: #08080a;
   --color-ink-900: #0a0a0c;
-  --color-ink-850: #0e0e11;
-  --color-ink-800: #131317;
-  --color-ink-700: #1b1b20;
-  --color-ink-600: #26262d;
+  --color-ink-850: #101014;
+  --color-ink-800: #17171c;
+  --color-ink-700: #212128;
+  --color-ink-600: #33333d;
 
-  /* Type. Three stops is enough; more becomes mush at small sizes. */
-  --color-fg:      #ededf0;
-  --color-fg-dim:  #8f8f99;
-  --color-fg-mute: #5c5c66;
+  --color-fg:      #f2f2f5;
+  --color-fg-dim:  #b4b4c0;
+  --color-fg-mute: #8a8a96;
 
-  /* The one accent — dawn amber. Used for the Now count, focus, and the primary
-     action, and essentially nowhere else. */
+  /*
+    The accent is two tokens, because one colour cannot do both jobs.
+
+    `accent` is the SURFACE amber — a button, a chart bar, an unread dot. It
+    stays bright in both themes, with dark ink on top.
+
+    `accent-ink` is the same accent used as TEXT on the page ground. #e9a23b on
+    white is 2.0:1, so light mode needs a darker amber there. Darkening the
+    surface instead would turn the primary button brown.
+  */
   --color-accent:      #e9a23b;
+  --color-accent-ink:  #e9a23b;
   --color-accent-soft: #3a2a12;
+  --color-on-accent:   #14141a;
+  /* The dim behind a sheet. Dark in both themes: a scrim that went white in
+     light mode would brighten the page instead of receding it. */
+  --color-scrim:       #08080a;
 
-  /* Source hues. Muted on purpose: they identify, they do not decorate. */
   --color-src-slack:  #b58ee0;
   --color-src-github: #8fa4c4;
   --color-src-gmail:  #d98a86;
@@ -47,9 +64,132 @@
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@layer base {
-  :root { color-scheme: dark; }
+/*
+  ---------------------------------------------------------------------------
+  Themes.
 
+  Three states, not two: an explicit choice stamps `data-theme` on <html>, and
+  the default — no attribute — follows the operating system. That is why the
+  media query is guarded with `:not([data-theme])`; without it, choosing light
+  on a machine set to dark would be overridden by the system every time.
+
+  Contrast is not a matter of taste here. The previous dark palette put muted
+  text at #5c5c66 on #0a0a0c, which is 3.0:1 — under the 4.5:1 minimum for body
+  text, at 11px, for the labels that carry most of the meaning on this app. Every
+  pair below clears AA against its own ground, and the numbers are written down
+  so the next edit has something to check against rather than an opinion.
+  ---------------------------------------------------------------------------
+*/
+
+@layer base {
+  /* Dark: the default, and what the tokens above already hold. */
+  :root,
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+
+    --color-ink-950: #08080a;
+    --color-ink-900: #0a0a0c;   /* the page */
+    --color-ink-850: #101014;   /* sheets, raised cards */
+    --color-ink-800: #17171c;   /* hover, inputs */
+    --color-ink-700: #212128;   /* solid buttons */
+    --color-ink-600: #33333d;   /* separators, scrollbars */
+
+    --color-fg:      #f2f2f5;   /* 17.7:1 */
+    --color-fg-dim:  #b4b4c0;   /*  9.6:1 */
+    --color-fg-mute: #8a8a96;   /*  5.8:1 — was 3.0:1 */
+
+    --color-accent:      #e9a23b;
+    --color-accent-ink:  #e9a23b;  /* 9.1:1 on the page */
+    --color-accent-soft: #3a2a12;
+    --color-on-accent:   #14141a;  /* 8.5:1 on the accent */
+    --color-scrim:       #08080a;
+
+    --color-src-slack:  #c2a3e8;
+    --color-src-github: #9db1ce;
+    --color-src-gmail:  #e29d99;
+    --color-src-sentry: #dd9ab0;
+    --color-src-claude: #dcb28e;
+
+    --color-ok:   #6bd39a;
+    --color-warn: #e9a23b;
+    --color-bad:  #ef9494;
+  }
+
+  /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
+     page itself is off-white and a sheet is pure white. */
+  :root[data-theme='light'] {
+    color-scheme: light;
+
+    --color-ink-950: #14141a;   /* still dark: it is the scrim and the button ink */
+    --color-ink-900: #f7f7f9;
+    --color-ink-850: #ffffff;
+    --color-ink-800: #edeef2;
+    --color-ink-700: #e3e4ea;
+    --color-ink-600: #c2c2ce;
+
+    --color-fg:      #16161a;   /* 16.9:1 */
+    --color-fg-dim:  #4a4a55;   /*  8.2:1 */
+    --color-fg-mute: #6b6b78;   /*  4.9:1 */
+
+    /* The surface amber is unchanged — a bright button with dark ink reads the
+       same in both themes. Only the TEXT amber darkens, because #e9a23b on
+       white is 2.0:1. */
+    --color-accent:      #e9a23b;
+    --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
+    --color-accent-soft: #fdf1dd;
+    --color-on-accent:   #241703;  /* 9.0:1 on the accent */
+    --color-scrim:       #14141a;
+
+    --color-src-slack:  #6d3fa0;
+    --color-src-github: #3c5680;
+    --color-src-gmail:  #a83b36;
+    --color-src-sentry: #9c3459;
+    --color-src-claude: #8a5320;
+
+    --color-ok:   #157f4d;
+    --color-warn: #8a5300;
+    --color-bad:  #b3261e;
+  }
+
+  /* No explicit choice: follow the system. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+
+      --color-ink-950: #14141a;
+      --color-ink-900: #f7f7f9;
+      --color-ink-850: #ffffff;
+      --color-ink-800: #edeef2;
+      --color-ink-700: #e3e4ea;
+      --color-ink-600: #c2c2ce;
+
+      --color-fg:      #16161a;
+      --color-fg-dim:  #4a4a55;
+      --color-fg-mute: #6b6b78;
+
+      /* The surface amber is unchanged — a bright button with dark ink reads the
+         same in both themes. Only the TEXT amber darkens, because #e9a23b on
+         white is 2.0:1. */
+      --color-accent:      #e9a23b;
+      --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
+      --color-accent-soft: #fdf1dd;
+      --color-on-accent:   #241703;  /* 9.0:1 on the accent */
+      --color-scrim:       #14141a;
+
+      --color-src-slack:  #6d3fa0;
+      --color-src-github: #3c5680;
+      --color-src-gmail:  #a83b36;
+      --color-src-sentry: #9c3459;
+      --color-src-claude: #8a5320;
+
+      --color-ok:   #157f4d;
+      --color-warn: #8a5300;
+      --color-bad:  #b3261e;
+    }
+  }
+}
+
+@layer base {
   html {
     background: var(--color-ink-900);
     /* Stop the iOS rubber-band from revealing white behind the app. */
@@ -123,6 +263,12 @@
         color-mix(in oklab, var(--color-accent) 7%, transparent),
         transparent 70%);
   }
+  /* On white the same wash reads as a stain rather than as light, and the
+     accent it is mixed from is a dark amber there. Kept for dark only. */
+  :root[data-theme='light'] .dawn-light { display: none; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) .dawn-light { display: none; }
+  }
 }
 
 @layer utilities {
@@ -131,10 +277,10 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
   /*
-    Mail and Agent are working surfaces, not reading columns: a thread list beside
-    a thread, or history beside a conversation beside an inspector. Forcing them
-    into the 760px column would waste two thirds of a laptop screen, so the shell
-    switches on this class instead of every page re-deriving its own width.
+    Mail is a working surface, not a reading column: a thread list beside a
+    thread. Forcing it into the 760px column would waste two thirds of a laptop
+    screen, so the shell switches on this class instead of every page re-deriving
+    its own width.
   */
   .column  { max-width: 760px; margin-inline: auto; }
   .bleed   { max-width: none; margin-inline: 0; }

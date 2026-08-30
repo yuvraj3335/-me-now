@@ -1,9 +1,12 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-    <meta name="theme-color" content="#0a0a0b" />
+    <!-- The browser chrome follows the theme too, so a light-mode phone does not
+         wear a black status bar. -->
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0c" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f9" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Wake" />
@@ -12,6 +15,18 @@
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>Wake</title>
+    <!--
+      Applied before the first paint, and deliberately before the stylesheet
+      loads. Doing this from React means one frame of the wrong palette on every
+      cold load — a white flash on a phone opened at 7am, which is the one moment
+      this app exists for.
+    -->
+    <script>
+      try {
+        var t = localStorage.getItem('wake:theme')
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t)
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

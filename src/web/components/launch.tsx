@@ -1,27 +1,30 @@
 /**
- * The Open in Claude Code sheet.
+ * The Open in Claude sheet.
  *
- * Three decisions, then a handoff. Which template, which objects, which
- * directory — shown as removable chips rather than a brand name, because
+ * Three decisions, then a hand-off. Which template, which objects, which
+ * repository — shown as removable chips rather than a brand name, because
  * "Slack" is not a thing a session can read and `C05…:1724…` is.
  *
- * What comes back is deliberately unglamorous: a session id, a working
- * directory, and the exact command to rejoin it in a terminal. No attempt is
- * made to focus a desktop app, because nothing here has verified that such a
- * handoff exists on this machine — and a button that silently does nothing is
- * worse than a command you can paste.
+ * Two steps on purpose, and the second one is a real link.
+ *
+ * Preparing the brief and opening it are separate because you should be able to
+ * read what is about to be sent — how much of it fits, what got trimmed — before
+ * it goes. And because the thing that opens it has to be an actual `<a>`: on a
+ * phone, `https://claude.ai/…` is a universal link, and only a genuine link
+ * navigation hands it to the Claude app. A button that calls `window.open`
+ * after an await lands in the browser instead, which is the one outcome this
+ * whole change exists to avoid.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Check, Copy, ExternalLink, FileText, FolderGit2, Loader2, Play, Terminal, X,
+  ArrowUpRight, Check, Copy, ExternalLink, FileText, FolderGit2, Loader2, Scissors, Terminal, X,
 } from 'lucide-react'
 import { Button, Chip, Field, Sheet, inputClass } from './primitives'
 import {
   closeLaunch, launchApi, removeFromLaunch, useLaunchBasket,
-  type LaunchState, type Pack, type PackItem,
+  type Handoff, type LaunchState, type PackItem,
 } from '../lib/launch'
-import { ago } from '../lib/time'
 import { Mic } from './voice'
 
 const KIND_LABEL: Record<string, string> = {
@@ -32,7 +35,7 @@ const KIND_LABEL: Record<string, string> = {
 export function LaunchSheet() {
   const basket = useLaunchBasket()
   return (
-    <Sheet open={basket.open} onClose={closeLaunch} title="Open in Claude Code">
+    <Sheet open={basket.open} onClose={closeLaunch} title="Open in Claude">
       {basket.open && <LaunchBody items={basket.items} preferred={basket.template} />}
     </Sheet>
   )
@@ -44,10 +47,8 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
   const [template, setTemplate] = useState(preferred ?? 'blank')
   const [cwd, setCwd] = useState<string | null>(null)
   const [instruction, setInstruction] = useState('')
-  const [resume, setResume] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<Pack | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [result, setResult] = useState<Handoff | null>(null)
 
   useEffect(() => {
     launchApi.state().then(setMeta).catch(e => setErr((e as Error).message))
@@ -55,38 +56,18 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
 
   const chosen = useMemo(() => meta?.templates.find(t => t.id === template) ?? null, [meta, template])
 
-  // The template's default repo pre-fills the directory, and a resumed session
-  // overrides it with its own — continuing a session somewhere else is almost
-  // never what anyone means.
+  // The template's default repository pre-fills the field it is about.
   useEffect(() => {
-    if (resume) {
-      const s = meta?.sessions.find(x => x.id === resume)
-      if (s) return setCwd(s.cwd)
-    }
     if (!chosen?.defaultRepo) return
     const repo = meta?.repos.find(r => r.name === chosen.defaultRepo)
     if (repo) setCwd(repo.path)
-  }, [chosen?.id, resume, meta])
+  }, [chosen?.id, meta])
 
   if (err) return <p className="text-[13px] text-bad py-6">{err}</p>
   if (!meta) return <p className="text-[13px] text-fg-mute py-6">Reading this machine…</p>
+  if (result) return <Result handoff={result} />
 
-  if (!meta.status.ok) {
-    return (
-      <div className="py-4">
-        <p className="text-[13.5px] text-fg leading-relaxed">Claude Code is not usable from here.</p>
-        <p className="text-[12.5px] text-fg-mute mt-2 leading-relaxed">{meta.status.reason}</p>
-        <p className="text-[11.5px] text-fg-mute mt-3">
-          Wake looked for <code className="font-mono">{meta.status.binary}</code>
-          {meta.status.version ? ` and found ${meta.status.version}` : ' and could not run it'}.
-        </p>
-      </div>
-    )
-  }
-
-  if (result) return <Result pack={result} copied={copied} setCopied={setCopied} />
-
-  const go = async () => {
+  const prepare = async () => {
     setBusy(true)
     setErr(null)
     try {
@@ -95,12 +76,8 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
         cwd,
         instruction: instruction.trim() || undefined,
         items,
-        resumeSessionId: resume,
       })
-      await launchApi.launch(pack.id)
-      // Re-read rather than trusting the launch response: the session id is
-      // confirmed by the child's own init message a moment later.
-      setResult(await launchApi.pack(pack.id))
+      setResult(await launchApi.open(pack.id))
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -137,32 +114,20 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
           </div>
         ) : (
           <p className="text-[12.5px] text-fg-mute">
-            Nothing attached. The session gets the instruction and the directory only.
+            Nothing attached. The brief carries the instruction and the repository only.
           </p>
         )}
       </Field>
 
-      <Field label="Where it runs" hint="Only repositories in the workspace registry can host a session.">
-        <select
-          value={cwd ?? ''}
-          onChange={e => setCwd(e.target.value || null)}
-          className={inputClass}
-        >
-          <option value="">Workspace root</option>
+      <Field
+        label="Repository this is about"
+        hint="Named in the brief so the session knows where the code lives. Only repositories in the workspace registry can be named."
+      >
+        <select value={cwd ?? ''} onChange={e => setCwd(e.target.value || null)} className={inputClass}>
+          <option value="">Not about one repository</option>
           {meta.repos.map(r => (
             <option key={r.path} value={r.path}>
               {r.name}{r.role !== 'canonical' ? ` (${r.role})` : ''}{r.dirty ? ` · ${r.dirty} dirty` : ''}
-            </option>
-          ))}
-        </select>
-      </Field>
-
-      <Field label="Continue a session" hint="Leave blank to start a fresh one.">
-        <select value={resume ?? ''} onChange={e => setResume(e.target.value || null)} className={inputClass}>
-          <option value="">New session</option>
-          {meta.sessions.slice(0, 20).map(s => (
-            <option key={s.id} value={s.id}>
-              {s.title.slice(0, 60)} · {s.project} · {ago(s.lastTs)}
             </option>
           ))}
         </select>
@@ -191,82 +156,86 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
 
       {err && <p className="text-[12.5px] text-bad mb-3">{err}</p>}
 
-      <Button variant="accent" className="w-full" onClick={go} disabled={busy}>
-        {busy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-        {busy ? 'Starting…' : resume ? 'Continue the session' : 'Open in Claude Code'}
+      <Button variant="accent" className="w-full" onClick={prepare} disabled={busy}>
+        {busy ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+        {busy ? 'Packing…' : 'Prepare the brief'}
       </Button>
     </div>
   )
 }
 
-/** The honest result: what exists now, and how to reach it. */
-function Result({ pack, copied, setCopied }: { pack: Pack; copied: boolean; setCopied: (v: boolean) => void }) {
-  const [live, setLive] = useState(pack)
-
-  // The status moves from running to done on its own; polling briefly means the
-  // sheet shows what actually happened rather than freezing on "running".
-  useEffect(() => {
-    if (live.status !== 'running') return
-    const t = setInterval(async () => {
-      try {
-        setLive(await launchApi.pack(pack.id))
-      } catch {
-        clearInterval(t)
-      }
-    }, 4_000)
-    return () => clearInterval(t)
-  }, [live.status, pack.id])
-
-  const cmd = live.resumeCommand ?? ''
+/**
+ * What was packed, and the link that opens it.
+ *
+ * The anchor is the whole point of this panel, so it is the largest thing in it
+ * and it says where it goes. Everything else answers "is this complete?" before
+ * you tap it.
+ */
+function Result({ handoff }: { handoff: Handoff }) {
+  const [copied, setCopied] = useState(false)
 
   return (
     <div className="pt-1 pb-2">
-      <div className="flex items-center gap-2 mb-4">
-        <span className={`w-2 h-2 rounded-full ${
-          live.status === 'running' ? 'bg-accent' : live.status === 'done' ? 'bg-ok' : 'bg-bad'
-        }`} />
-        <span className="text-[14px] text-fg">
-          {live.status === 'running' ? 'Session running' : live.status === 'done' ? 'Session finished' : 'Session failed'}
-        </span>
-        {live.status === 'running' && <Loader2 size={13} className="animate-spin text-fg-mute" />}
+      <a
+        href={handoff.url}
+        target="_blank"
+        rel="noreferrer"
+        className="w-full inline-flex items-center justify-center gap-2 min-h-12 rounded-[12px]
+                   bg-accent text-on-accent font-medium text-[15px] hover:brightness-110 transition"
+      >
+        <Terminal size={16} /> Open in Claude <ArrowUpRight size={15} />
+      </a>
+
+      <p className="mt-2.5 text-[11.5px] text-fg-mute leading-relaxed">
+        Opens the Claude app on a phone and a new tab on a laptop, signed in as you already are.
+        Wake holds no credential for it and starts nothing of its own.
+      </p>
+
+      <div className="mt-4">
+        <Row label="Repository" value={handoff.cwd} mono icon={<FolderGit2 size={12} />} />
+        <Row
+          label="Brief"
+          value={
+            handoff.trimmed
+              ? `${handoff.sent.toLocaleString()} of ${handoff.total.toLocaleString()} characters`
+              : `${handoff.total.toLocaleString()} characters, whole`
+          }
+        />
       </div>
 
-      <Row label="Session" value={live.session_id ?? '(not reported)'} mono />
-      <Row label="Directory" value={live.cwd} mono icon={<FolderGit2 size={12} />} />
-      {live.error && <p className="text-[12.5px] text-bad my-3 leading-relaxed whitespace-pre-wrap">{live.error}</p>}
-
-      {cmd && (
-        <div className="mt-4">
-          <div className="text-[11px] uppercase tracking-[0.08em] text-fg-mute mb-2">Rejoin it in a terminal</div>
-          <button
-            onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true) }}
-            className="w-full flex items-center gap-2 bg-ink-800 rounded-[10px] px-3 py-2.5 text-left
-                       hover:bg-ink-700 transition-colors"
-          >
-            <Terminal size={13} className="text-fg-mute shrink-0" />
-            <code className="text-[12px] font-mono text-fg-dim truncate grow">{cmd}</code>
-            {copied ? <Check size={13} className="text-ok shrink-0" /> : <Copy size={13} className="text-fg-mute shrink-0" />}
-          </button>
-          <p className="text-[11.5px] text-fg-mute mt-2 leading-relaxed">
-            That session is on the machine Wake runs on, under Claude Code’s own permissions.
-            Wake did not widen them and cannot answer its prompts for you.
-          </p>
-        </div>
+      {handoff.trimmed && (
+        <p className="mt-2 flex items-start gap-1.5 text-[12px] text-warn leading-relaxed">
+          <Scissors size={12} className="mt-0.5 shrink-0" />
+          Too long for a link, so the brief says so inside itself and asks before assuming
+          anything is missing. The whole thing is below.
+        </p>
       )}
 
-      <div className="mt-4 flex gap-1.5">
+      <div className="mt-4 flex flex-wrap gap-1.5">
         <a
-          href={launchApi.packFileUrl(pack.id)}
+          href={launchApi.packFileUrl(handoff.packId)}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 min-h-9 px-3 rounded-[10px] text-[13.5px]
                      text-fg-dim hover:text-fg hover:bg-ink-800 transition-colors"
         >
-          <FileText size={14} /> Open the pack <ExternalLink size={12} className="text-fg-mute" />
+          <FileText size={14} /> Read the whole brief <ExternalLink size={12} className="text-fg-mute" />
         </a>
-        {live.status === 'running' && (
-          <Button variant="ghost" onClick={() => void launchApi.stop(pack.id)}>Stop</Button>
-        )}
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            try {
+              const text = await fetch(launchApi.packFileUrl(handoff.packId)).then(r => r.text())
+              await navigator.clipboard?.writeText(text)
+              setCopied(true)
+            } catch {
+              setCopied(false)
+            }
+          }}
+        >
+          {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
+          {copied ? 'Copied' : 'Copy it'}
+        </Button>
       </div>
     </div>
   )
@@ -275,7 +244,7 @@ function Result({ pack, copied, setCopied }: { pack: Pack; copied: boolean; setC
 function Row({ label, value, mono, icon }: { label: string; value: string; mono?: boolean; icon?: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-3 py-1.5">
-      <span className="text-[11.5px] text-fg-mute w-[72px] shrink-0">{label}</span>
+      <span className="text-[11.5px] text-fg-mute w-[78px] shrink-0">{label}</span>
       <span className={`text-[12.5px] text-fg-dim truncate ${mono ? 'font-mono' : ''}`}>
         {icon}{value}
       </span>

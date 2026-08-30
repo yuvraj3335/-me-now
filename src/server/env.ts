@@ -69,59 +69,24 @@ export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: 
 export const IS_DEV = str('NODE_ENV') !== 'production'
 
 /* -------------------------------------------------------------------------- */
-/* Agent                                                                      */
+/* Workspace                                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** Root the repository registry scans. Nothing outside it is reachable. */
+/** Root the repository registry scans. Nothing outside it can be named in a brief. */
 export const WORKSPACE_ROOT = str('WAKE_WORKSPACE_ROOT', `${homedir()}/work`)
 
-/**
- * Two engines, deliberately not one (DECISIONS.md #14).
- *
- *   - the Wake Agent, the chat inside this app, runs on the Anthropic SDK with
- *     a key Wake holds. Wake owns its tool loop, so approvals can block inside a
- *     tool rather than being asked for in a prompt.
- *   - "Open in Claude Code" launches the `claude` binary already signed in on
- *     this machine. Wake packs context and starts a session; it does not become
- *     Claude Code.
- *
- * Collapsing them would mean either an in-app chat Wake cannot gate, or a
- * launcher that re-implements a CLI that already exists.
- */
-export const CLAUDE_BIN = str('WAKE_CLAUDE_BIN', 'claude')
 export const TRUTO_BIN = str('WAKE_TRUTO_BIN', `${homedir()}/.truto/bin/truto`)
-
-/** Env is the fallback; Settings writes the durable one into `kv`. */
-export const ANTHROPIC_KEY_ENV = str('ANTHROPIC_API_KEY') || str('WAKE_ANTHROPIC_API_KEY')
-export const AGENT_MODEL = str('WAKE_AGENT_MODEL', 'claude-opus-5')
-/** Steps, not "turns": one step is one model reply plus the tools it asked for. */
-export const AGENT_MAX_STEPS = num('WAKE_AGENT_MAX_STEPS', 40)
-export const AGENT_MAX_TOKENS = num('WAKE_AGENT_MAX_TOKENS', 16_000)
-export const AGENT_TIMEOUT_MS = num('WAKE_AGENT_TIMEOUT_MS', 25 * 60_000)
-/** No output for this long while the run is alive means a stalled stream. */
-export const AGENT_STALL_MS = num('WAKE_AGENT_STALL_MS', 5 * 60_000)
-/** Ceiling on tool output handed back to the model, per call. */
-export const AGENT_TOOL_RESULT_MAX = num('WAKE_AGENT_TOOL_RESULT_MAX', 24_000)
-
-/** How long a blocked tool waits on a human before giving up. */
-export const APPROVAL_TIMEOUT_MS = num('WAKE_APPROVAL_TIMEOUT_MS', 30 * 60_000)
 
 export const CLI_TIMEOUT_MS = num('WAKE_CLI_TIMEOUT_MS', 120_000)
 /** Hard cap on captured subprocess output, per stream. */
 export const CLI_MAX_OUTPUT = num('WAKE_CLI_MAX_OUTPUT', 512 * 1024)
 
-/** Skill catalogs, manifest-first. Catalog E is off unless explicitly enabled. */
+/** Skill catalogs, manifest-first. Named in a brief; never inlined into one. */
 export const SKILL_PATHS = {
   truto: str('WAKE_SKILLS_TRUTO', `${homedir()}/work/truto-skills`),
   cursor: str('WAKE_SKILLS_CURSOR', `${homedir()}/work/Cursor-skills/.cursor/skills`),
   repo: str('WAKE_SKILLS_REPO', `${homedir()}/work/truto/.claude/skills`),
 }
-export const ENABLE_META_SKILLS = str('WAKE_ENABLE_META_SKILLS') === '1'
-
-/** truto-monitoring lives behind its own MCP; Wake never copies its data. */
-export const MONITORING_MCP_URL = str('WAKE_MONITORING_MCP_URL')
-export const PLATFORM_MCP_URL = str('WAKE_PLATFORM_MCP_URL', 'https://api.truto.one/platform/mcp')
-export const PLATFORM_MCP_TOKEN = str('WAKE_PLATFORM_MCP_TOKEN')
 
 /**
  * Ceiling on output Wake will parse into memory. Separate from CLI_MAX_OUTPUT,
@@ -131,17 +96,39 @@ export const PLATFORM_MCP_TOKEN = str('WAKE_PLATFORM_MCP_TOKEN')
 export const CLI_MAX_PARSE = num('WAKE_CLI_MAX_PARSE', 8 * 1024 * 1024)
 
 /* -------------------------------------------------------------------------- */
-/* Open in Claude Code                                                        */
+/* Open in Claude                                                             */
 /* -------------------------------------------------------------------------- */
 
 /**
- * A launch may only start inside the workspace root. The registry is the
- * allowlist — a path that is not a repository Wake scanned is not a place a
- * session can be opened, which is what stops a template's `cwd` slot from
- * becoming an arbitrary directory.
+ * A brief may only name a repository the registry scanned. The registry is the
+ * allowlist — which is what stops a template's `cwd` slot from becoming an
+ * arbitrary directory in text a session will act on.
  */
-export const LAUNCH_TIMEOUT_MS = num('WAKE_LAUNCH_TIMEOUT_MS', 6 * 60 * 60_000)
 export const PACK_DIR = str('WAKE_PACK_DIR', `${DATA_DIR}/packs`)
+
+/**
+ * Where "Open in Claude" sends you.
+ *
+ * `claude.ai/new` prefills a fresh conversation from `?q=`. It is a universal
+ * link, so a phone opens the Claude app and a laptop opens a tab — both already
+ * signed in, because the credential is yours and Wake never sees it.
+ *
+ * Configurable because this is somebody else's URL shape, and a personal tool
+ * whose only hand-off is hard-coded is one product change away from a dead
+ * button.
+ */
+export const HANDOFF_URL = str('WAKE_HANDOFF_URL', 'https://claude.ai/new')
+export const HANDOFF_PARAM = str('WAKE_HANDOFF_PARAM', 'q')
+
+/**
+ * How much of a brief the link may carry.
+ *
+ * A prefilled prompt travels in the query string, and every hop between here and
+ * Claude has its own limit — the browser, Cloudflare, the origin. 12k characters
+ * is comfortably inside all of them and holds a real Slack thread. Anything
+ * longer is trimmed *and said to be trimmed*, in the brief itself and on screen.
+ */
+export const HANDOFF_MAX_CHARS = num('WAKE_HANDOFF_MAX_CHARS', 12_000)
 
 /* -------------------------------------------------------------------------- */
 /* Voice                                                                      */

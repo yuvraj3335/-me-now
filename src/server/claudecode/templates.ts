@@ -26,8 +26,18 @@ export type Template = {
   instruction: string
 }
 
+/**
+ * The clause every template shares.
+ *
+ * It no longer claims the CLI and the checkouts are "on this machine" — the
+ * brief now opens wherever you are signed in to Claude, which may be a phone.
+ * Saying otherwise sent sessions looking for a working directory they did not
+ * have. What is still true, and is the whole point of packing, is that every
+ * identifier the work needs is already below.
+ */
 const NO_REPASTE =
-  'Solve this. The Truto CLI is on this machine and authenticated; the repositories are checked out here. Every identifier you need is in the context below — do not ask me to re-paste any of it.'
+  'Every identifier you need is in the context below — do not ask me to re-paste any of it. ' +
+  'If you have a checkout of the repository named above, work in it; if not, reason from what is here and tell me what you would need.'
 
 export const TEMPLATES: Template[] = [
   {
@@ -129,12 +139,14 @@ method the customer actually uses needs it — name the method.`,
   },
   {
     id: 'continue-session',
-    label: 'Continue a session',
-    blurb: 'Pick up a Claude Code session that is already underway.',
+    label: 'Continue earlier work',
+    blurb: 'Carry a session already underway on the DevBox into a fresh conversation.',
     slots: ['session', 'note'],
     defaultRepo: null,
     skills: [],
-    instruction: `Continue this session. The new context is below; everything else you already have.`,
+    instruction: `Pick up the work below. It comes from a Claude Code session on my DevBox, quoted
+here as context — you are not resuming that session, you are continuing the work
+in a new one. Say where you think it got to before you carry on.`,
   },
   {
     id: 'blank',

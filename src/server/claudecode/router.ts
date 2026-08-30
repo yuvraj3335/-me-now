@@ -1,18 +1,20 @@
 /**
- * "Open in Claude Code" over HTTP.
+ * "Open in Claude" over HTTP.
  *
- * Two steps on purpose. `POST /packs` writes the pack and returns what it
- * contains; `POST /packs/:id/launch` starts the session. Splitting them means
- * the person can read exactly what is about to be handed over — which objects,
- * which directory, which instruction — before anything runs, and the pack file
- * on disk is the same text the session received.
+ * Two steps on purpose. `POST /packs` writes the brief and returns what it
+ * contains; `POST /packs/:id/open` marks it handed over and returns the link.
+ * Splitting them means you can read exactly what is about to be sent — which
+ * objects, which instruction, how much of it fits — before anything leaves, and
+ * the file on disk is the same text the link carries.
  */
 
 import { Hono } from 'hono'
 import { audit, db } from '../db'
 import { listSessions } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
-import { buildPack, getPack, launcherStatus, launchPack, listPacks, resolveCwd, stopLaunch } from './launch'
+import { buildPack, getPack, listPacks, openPack, resolveCwd } from './launch'
+import { handoffTarget } from './handoff'
+import { HANDOFF_MAX_CHARS } from '../env'
 import { TEMPLATES } from './templates'
 
 export const claudecode = new Hono()
@@ -21,7 +23,10 @@ const bad = (m: string) => ({ error: m })
 
 claudecode.get('/state', c =>
   c.json({
-    status: launcherStatus(),
+    // Where a hand-off goes and how much it can carry. Both are shown rather
+    // than assumed: "why was my brief trimmed" should be answerable from the
+    // screen, not from the source.
+    handoff: { url: handoffTarget(), maxChars: HANDOFF_MAX_CHARS },
     templates: TEMPLATES.map(t => ({
       id: t.id,
       label: t.label,
@@ -31,8 +36,8 @@ claudecode.get('/state', c =>
       defaultRepo: t.defaultRepo,
       instruction: t.instruction,
     })),
-    // Only repositories the registry scanned can host a session, so the picker
-    // shows exactly the set the server will accept.
+    // Only repositories the registry scanned can be named in a brief, so the
+    // picker shows exactly the set the server will accept.
     repos: listRepos().map(r => ({ name: r.name, path: r.path, role: r.role, branch: r.branch, dirty: r.dirty })),
     sessions: listSessions(30, 30),
     packs: listPacks(20),
@@ -49,7 +54,6 @@ claudecode.post('/packs', async c => {
     cwd: b.cwd ?? null,
     instruction: b.instruction,
     items: Array.isArray(b.items) ? b.items : [],
-    resumeSessionId: b.resumeSessionId ?? null,
   })
   if ('error' in built) return c.json(bad(built.error), 400)
   audit('claude.pack', { target: built.title, detail: { template: built.template, cwd: built.cwd, items: built.items.length } })
@@ -63,7 +67,7 @@ claudecode.get('/packs/:id', c => {
   return p ? c.json(p) : c.json(bad('no such pack'), 404)
 })
 
-/** The pack file itself, so "Open pack" shows the real text that was handed over. */
+/** The brief itself, so "open the pack" shows the real text that was handed over. */
 claudecode.get('/packs/:id/file', async c => {
   const p = getPack(c.req.param('id'))
   if (!p?.pack_path) return c.json(bad('no such pack'), 404)
@@ -72,19 +76,17 @@ claudecode.get('/packs/:id/file', async c => {
   return c.newResponse(await file.text(), 200, { 'Content-Type': 'text/markdown; charset=utf-8' })
 })
 
-claudecode.post('/packs/:id/launch', c => {
-  const r = launchPack(c.req.param('id'))
-  return r.launched ? c.json(r) : c.json(bad(r.error ?? 'could not launch'), 409)
+claudecode.post('/packs/:id/open', c => {
+  const r = openPack(c.req.param('id'))
+  return 'error' in r ? c.json(bad(r.error), 404) : c.json(r)
 })
-
-claudecode.post('/packs/:id/stop', c => c.json({ stopped: stopLaunch(c.req.param('id')) }))
 
 claudecode.delete('/packs/:id', c => {
   db.query(`DELETE FROM launch_packs WHERE id = ?`).run(c.req.param('id'))
   return c.json({ ok: true })
 })
 
-/** Used by the launch sheet to validate a chosen directory before offering Open. */
+/** Used by the launch sheet to validate a chosen repository before offering Open. */
 claudecode.get('/cwd', c => {
   const r = resolveCwd(c.req.query('path'))
   return r.ok ? c.json({ ok: true, path: r.path, repo: r.repo }) : c.json({ ok: false, error: r.error })
