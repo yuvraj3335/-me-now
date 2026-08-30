@@ -324,8 +324,15 @@ function ThreadView({
           title="Pack this thread and open it in Claude"
           onClick={() =>
             openLaunch(
-              [{ kind: 'mail', ref: `${thread.account}:${thread.threadId}`, title: thread.subject, excerpt, why: 'the thread this is about' }],
-              'mail-thread',
+              [{
+                kind: 'mail',
+                ref: `${thread.account}:${thread.threadId}`,
+                title: thread.subject,
+                excerpt,
+                why: 'the thread this is about',
+                meta: { account: thread.account, from: thread.from?.addr ?? null, messages: messages.length },
+              }],
+              { template: 'mail-thread', title: thread.subject },
             )
           }
         >

@@ -44,10 +44,16 @@ export function Button({
  * panel on a laptop. Same content, so nothing is built twice.
  */
 export function Sheet({
-  open, onClose, title, children, footer,
+  open, onClose, title, children, footer, wide,
 }: {
   open: boolean; onClose: () => void; title?: string
   children: ReactNode; footer?: ReactNode
+  /**
+   * A reading width rather than a control width. 460px is right for a form of
+   * short fields; it is wrong for anything you have to actually read, and a
+   * brief reviewed through a 460px column of monospace is not reviewed.
+   */
+  wide?: boolean
 }) {
   useEffect(() => {
     if (!open) return
@@ -74,8 +80,8 @@ export function Sheet({
           />
           <motion.div
             role="dialog" aria-modal="true" aria-label={title}
-            className="relative w-full sm:max-w-[460px] bg-ink-850 sm:rounded-2xl
-                       rounded-t-2xl shadow-2xl max-h-[88vh] flex flex-col pad-bottom"
+            className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} bg-ink-850
+                       sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[88vh] flex flex-col pad-bottom`}
             initial={{ y: '100%', opacity: 0.6, scale: 1 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: '100%', opacity: 0.6 }}

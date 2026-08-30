@@ -98,8 +98,13 @@ describe('the hand-off has to be a real link', () => {
     // navigation hands it to the Claude app; `window.open(url)` after an await
     // lands in Safari instead, which is exactly what this change was for.
     const sheet = read('src/web/components/launch.tsx')
-    expect(sheet).toMatch(/<a\s[^>]*href=\{handoff\.url\}/)
+    // An anchor with a real href and target=_blank, not a button that navigates.
+    // The variable name is not the contract; the element is.
+    const anchor = /<a\b[\s\S]{0,400}?href=\{[^}]*\.url\}[\s\S]{0,400}?target="_blank"/
+    expect(sheet, 'the Open control is no longer a real link').toMatch(anchor)
     expect(sheet, 'the hand-off went back to a scripted open').not.toMatch(/window\.open\s*\(/)
+    // preventDefault on that click would cancel the navigation the link exists for.
+    expect(sheet, 'the hand-off cancels its own navigation').not.toMatch(/preventDefault/)
   })
 
   test('the server never spawns the claude binary', () => {
@@ -116,6 +121,28 @@ describe('the hand-off has to be a real link', () => {
         expect(m[1], `${f}: spawns claude`).not.toMatch(/['"`]claude/)
       }
     }
+  })
+})
+
+describe('the brief is reviewable before it goes', () => {
+  const sheet = read('src/web/components/launch.tsx')
+
+  test('the text handed over is the text in the editor', () => {
+    // Wake renders a first draft; what goes is what was approved. A link built
+    // from anything other than the edited field would make the review theatre.
+    expect(sheet).toMatch(/handoffFor\(brief,/)
+    expect(sheet).toMatch(/launchApi\.open\(packId, brief\)/)
+  })
+
+  test('the brief and the instruction can both be dictated', () => {
+    expect([...sheet.matchAll(/<Mic\b/g)].length, 'a Mic went missing').toBeGreaterThanOrEqual(2)
+  })
+
+  test('the count comes from the same code the link does', () => {
+    // Two implementations of "how much fits" drift, and the failure is the worst
+    // kind: the editor says it all fits and the link quietly carries less.
+    expect(sheet).toContain("from '../../shared/handoff'")
+    expect(read('src/server/claudecode/handoff.ts')).toContain("from '../../shared/handoff'")
   })
 })
 

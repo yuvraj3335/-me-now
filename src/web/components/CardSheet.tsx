@@ -9,6 +9,7 @@ import { ago, atHour, timeOfDay } from '../lib/time'
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, Sheet } from './primitives'
 import { openLaunch } from '../lib/launch'
+import { cardContext, cardTitle, repoHintFor, templateFor } from '../lib/cardContext'
 
 const SNOOZE = [
   { label: 'Later today', at: () => Date.now() + 4 * 3.6e6 },
@@ -30,18 +31,6 @@ export function CardSheet({
 
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
 
-  /** What either hand-off carries: why it is on you, plus every place it was seen. */
-  const excerpt = [
-    card.why,
-    card.excerpt,
-    ...card.sources.map(s => `${SOURCE_LABEL[s.source]}: ${s.title}`),
-  ].filter(Boolean).join('\n')
-
-  const template = card.sources.some(s => s.source === 'sentry') ? 'sentry-issue'
-    : card.sources.some(s => s.source === 'slack') ? 'slack-thread'
-    : card.sources.some(s => s.source === 'gmail') ? 'mail-thread'
-    : card.sources.some(s => s.source === 'claude') ? 'continue-session'
-    : 'blank'
   const resumeCmd = card.sources.find(s => s.source === 'claude')?.meta?.resume_cmd as string | undefined
   const hasSlack = card.sources.some(s => s.source === 'slack')
 
@@ -147,17 +136,11 @@ export function CardSheet({
             className="w-full"
             onClick={() => {
               onClose()
-              openLaunch(
-                [{
-                  kind: card.sources.some(s => s.source === 'claude') ? 'session' : 'card',
-                  ref: card.sources.find(s => s.source === 'claude')?.meta?.session_id ?? card.group_key,
-                  title: card.title,
-                  url: card.url,
-                  excerpt,
-                  why: 'the card this is about',
-                }],
-                template,
-              )
+              openLaunch(cardContext(card), {
+                template: templateFor(card),
+                repoHint: repoHintFor(card),
+                title: cardTitle(card),
+              })
             }}
           >
             <Terminal size={14} /> Open in Claude

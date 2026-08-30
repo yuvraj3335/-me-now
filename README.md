@@ -65,9 +65,17 @@ The one thing to know before reading any of the code: **Wake packs context, and
 then gets out of the way.**
 
 Pick a card, a mail thread, a Sentry issue. Pick a template — customer incident,
-sync-job failure, mapping, blank. Wake renders one self-contained brief: the
-instruction, the repository it concerns, the skills worth loading, and every
-object quoted and fenced as data. Then it hands you a link.
+sync-job failure, mapping, blank. Add or drop skills. Wake renders one
+self-contained brief: what you need, the repository it concerns, the skills to
+load first, and every object quoted and fenced as data — one entry per place the
+thing was seen, so a card deduped across Slack, GitHub and Sentry arrives as
+three sets of identifiers rather than one blob.
+
+**Then it shows you the brief and lets you edit it.** That is the step that
+matters: what goes is what you approved, not what Wake happened to render. The
+character count is live and honest, dictation drops text at the cursor, and the
+stored copy, the file on disk and the link all become the edited version. Then it
+hands you a link.
 
 That link is `https://claude.ai/new?q=<the brief>`. On a phone it is a universal
 link, so it opens the Claude app; on a laptop it opens a tab. Either way it is

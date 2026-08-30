@@ -589,3 +589,76 @@ stops the deploy instead of silently discarding an edit someone made on the box.
 And the restart is last, so a failing build leaves the previous `dist/` in place
 and the service untouched — a bad push costs a red log line rather than a dark
 screen on someone's phone.
+
+## 29. The brief is a draft, and the draft was bad
+
+Wake renders the brief; **you** approve it. The review step is an editable field,
+not a preview — dictation included, because a sentence of context is exactly the
+thing you think of on the way to the button.
+
+The link is built in the browser from what is in that field, using the same
+`handoffFor` the server runs (`src/shared/handoff.ts`). One implementation, not
+two: the alternative drifts, and the failure mode is the worst kind — the editor
+says it all fits and the link quietly carries less. It also keeps the Open control
+a real `<a>` with a live `href`, which is what hands a universal link to the
+Claude app on a phone.
+
+Whatever is in the field at the moment you tap becomes the record: the row, the
+file on disk, and the link. A stored copy of the draft Wake happened to render
+first is not an audit trail.
+
+### Why it needed a rewrite
+
+A real brief came back like this, and every fault is visible at once:
+
+```
+# fix(mfa): make the login MFA token purpose-strict so 2FA cannot be...
+Packed by Wake at … · template `blank` · cwd `/home/yuvraj/work`
+## Instruction
+Every identifier you need is in the context below — …
+## Context
+### 1. Wake card — fix(mfa): …
+- ref: `subject:fix(mfa): make the login mfa token purpose-strict…`
+> The block below is quoted from an external system.
+```text
+you were just working on this
+# fix(mfa): … Packed by Wake at … template `blank` … ## Instruction Solve this...
+Claude Code: fix(mfa): …
+Claude Code: fix(mfa): …
+```
+```
+
+No skills. The workspace root instead of the repository. A generic instruction.
+A UI label quoted as evidence. The title restated three times. And, worst, an
+entire earlier Wake brief nested inside the quote.
+
+All of it came from one line:
+
+```js
+[c.why, c.excerpt, ...c.sources.map(s => `${LABEL[s.source]}: ${s.title}`)].join('\n')
+```
+
+Five separate faults, now five separate fixes (`web/lib/cardContext.ts`):
+
+1. **`why` is a UI label**, not evidence. "you were just working on this" is what
+   the card says to *you*; it belongs on the entry as `why it is here`, not in
+   the quoted block.
+2. **The source titles were the card's own title**, repeated once per source.
+3. **The excerpt of a Claude Code session is that session's last prompt** — and
+   when the session was started from Wake, that prompt *is* a Wake brief. So the
+   brief nested inside itself, carrying a stale title and no facts.
+   `stripNestedBrief` cuts on the header Wake writes, which is a marker Wake
+   controls rather than a heuristic, and says plainly that it removed something.
+4. **A card seen in three places collapsed into one blob** — wasting the entire
+   point of the dedup engine. It is now one context entry per source.
+5. **Everything a source knew was thrown away**: the channel, the PR number, the
+   Sentry project, the session's working directory. Those are stated as facts a
+   session can act on rather than buried in prose. The session's own `cwd` is why
+   a brief no longer says `/home/yuvraj/work` about work in `truto`.
+
+Two more, from the same output. Template inference had no `claude` branch, so a
+session card fell through to `blank` — and `blank` names no skills, which is why
+the brief arrived with none. And skills are chosen in the composer now rather
+than fixed by the template, because a blank brief about a sync job still wants
+the sync-job validator. The catalog prefix is stripped when they are written out:
+`B/` is Wake's own index talking, and a session has never heard of it.

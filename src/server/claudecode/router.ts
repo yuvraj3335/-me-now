@@ -13,8 +13,8 @@ import { audit, db } from '../db'
 import { listSessions } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
 import { buildPack, getPack, listPacks, openPack, resolveCwd } from './launch'
-import { handoffTarget } from './handoff'
-import { HANDOFF_MAX_CHARS } from '../env'
+import { handoffConfig } from './handoff'
+import { listSkills } from '../skills/catalog'
 import { TEMPLATES } from './templates'
 
 export const claudecode = new Hono()
@@ -23,10 +23,10 @@ const bad = (m: string) => ({ error: m })
 
 claudecode.get('/state', c =>
   c.json({
-    // Where a hand-off goes and how much it can carry. Both are shown rather
-    // than assumed: "why was my brief trimmed" should be answerable from the
-    // screen, not from the source.
-    handoff: { url: handoffTarget(), maxChars: HANDOFF_MAX_CHARS },
+    // The browser builds the link itself as you edit, so it needs the whole
+    // config rather than a summary of it — one implementation of "how much
+    // fits", in src/shared/handoff.ts, used on both sides.
+    handoff: handoffConfig(),
     templates: TEMPLATES.map(t => ({
       id: t.id,
       label: t.label,
@@ -39,6 +39,15 @@ claudecode.get('/state', c =>
     // Only repositories the registry scanned can be named in a brief, so the
     // picker shows exactly the set the server will accept.
     repos: listRepos().map(r => ({ name: r.name, path: r.path, role: r.role, branch: r.branch, dirty: r.dirty })),
+    // Metadata only, and small: the composer offers these as chips so a brief
+    // can name a skill its template did not think of.
+    skills: listSkills().map(s => ({
+      id: s.id,
+      name: s.name,
+      catalog: s.catalog,
+      whenToUse: s.when_to_use?.slice(0, 200) ?? null,
+      mutating: !!s.mutating,
+    })),
     sessions: listSessions(30, 30),
     packs: listPacks(20),
   }),
@@ -54,6 +63,7 @@ claudecode.post('/packs', async c => {
     cwd: b.cwd ?? null,
     instruction: b.instruction,
     items: Array.isArray(b.items) ? b.items : [],
+    skills: Array.isArray(b.skills) ? b.skills.map(String) : undefined,
   })
   if ('error' in built) return c.json(bad(built.error), 400)
   audit('claude.pack', { target: built.title, detail: { template: built.template, cwd: built.cwd, items: built.items.length } })
@@ -76,8 +86,13 @@ claudecode.get('/packs/:id/file', async c => {
   return c.newResponse(await file.text(), 200, { 'Content-Type': 'text/markdown; charset=utf-8' })
 })
 
-claudecode.post('/packs/:id/open', c => {
-  const r = openPack(c.req.param('id'))
+/**
+ * Hand it over. The body may carry the edited brief, which becomes the record:
+ * the row, the file and the link all move to what was actually approved.
+ */
+claudecode.post('/packs/:id/open', async c => {
+  const b = await c.req.json<{ brief?: string }>().catch(() => ({}) as { brief?: string })
+  const r = openPack(c.req.param('id'), typeof b.brief === 'string' ? b.brief : undefined)
   return 'error' in r ? c.json(bad(r.error), 404) : c.json(r)
 })
 

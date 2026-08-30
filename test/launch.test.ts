@@ -10,7 +10,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildPack, getPack, openPack, resolveCwd } from '../src/server/claudecode/launch'
+import { buildPack, getPack, openPack, resolveCwd, stripNestedBrief } from '../src/server/claudecode/launch'
 import { handoffFor } from '../src/server/claudecode/handoff'
 import { HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../src/server/env'
 import { TEMPLATES, getTemplate } from '../src/server/claudecode/templates'
@@ -195,5 +195,133 @@ describe('the hand-off', () => {
     const pack = getPack(built.id)!
     expect(pack.items.map((i: any) => i.ref)).toEqual(['a', 'b'])
     expect(pack.status).toBe('draft')
+  })
+})
+
+/**
+ * The brief Wake writes, and the loop it used to fall into.
+ *
+ * A real one came back looking like this — every fault visible at once:
+ *
+ *     # fix(mfa): make the login MFA token purpose-strict so 2FA cannot be...
+ *     Packed by Wake at … · template `blank` · cwd `/home/yuvraj/work`
+ *     ## Instruction
+ *     Every identifier you need is in the context below — …
+ *     ## Context
+ *     ### 1. Wake card — fix(mfa): …
+ *     - ref: `subject:fix(mfa): make the login mfa token purpose-strict…`
+ *     ```text
+ *     you were just working on this
+ *     # fix(mfa): … Packed by Wake at … template `blank` … ## Instruction Solve…
+ *     Claude Code: fix(mfa): …
+ *     Claude Code: fix(mfa): …
+ *     ```
+ *
+ * No skills, the workspace root instead of the repository, a UI label quoted as
+ * evidence, the title restated three times, and — the real fault — an entire
+ * earlier Wake brief nested inside the quote.
+ */
+describe('the brief', () => {
+  test('an earlier Wake brief is cut out of a quote rather than nested', () => {
+    const nested = [
+      'you were just working on this',
+      '',
+      '# fix(mfa): make the login MFA token purpose-strict',
+      '',
+      'Packed by Wake at 2026-08-30T04:35:28.181Z · template `blank`',
+      '',
+      '## Instruction',
+      'Solve this.',
+    ].join('\n')
+
+    const out = stripNestedBrief(nested)
+    expect(out).toContain('you were just working on this')
+    expect(out, 'the nested brief survived').not.toContain('Packed by Wake at')
+    expect(out, 'the nested brief survived').not.toContain('## Instruction')
+    expect(out).toContain("this tool's own output")
+  })
+
+  test('a quote that is nothing but an old brief says so instead of being empty', () => {
+    const out = stripNestedBrief('# Something\n\nPacked by Wake at 2026-08-30T04:35:28.181Z · template `blank`\n')
+    expect(out).toContain('nothing quotable')
+  })
+
+  test('ordinary text is left completely alone', () => {
+    const real = 'our salesforce sync stopped bringing in contacts since tuesday, can someone look?'
+    expect(stripNestedBrief(real)).toBe(real)
+    // A brief is only Wake's if it has the header Wake writes.
+    expect(stripNestedBrief('# A heading\n\nsome prose')).toBe('# A heading\n\nsome prose')
+  })
+
+  test('a source’s facts are stated as facts, not buried in prose', () => {
+    const built = buildPack({
+      template: 'slack-thread',
+      title: 'Acme sync stopped',
+      cwd: join(root, 'truto'),
+      items: [{
+        kind: 'slack',
+        ref: 'C05ABC:1724567890.001',
+        title: '#acme-support',
+        excerpt: 'the sync stopped on tuesday',
+        why: 'a direct request',
+        meta: { channel: '#acme-support', reads_like: 'a direct request' },
+      }],
+    })
+    if ('error' in built) throw new Error(built.error)
+
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain('- channel: #acme-support')
+    expect(body).toContain('- reads_like: a direct request')
+    // The repository is named in a sentence, not as a `cwd` metadata crumb.
+    expect(body).toContain('**truto**')
+    expect(body).toContain('## What I need')
+  })
+
+  test('skills are named when the template has them, and when the composer adds one', () => {
+    const fromTemplate = buildPack({ template: 'slack-thread', items: [] })
+    if ('error' in fromTemplate) throw new Error(fromTemplate.error)
+    expect(readFileSync(fromTemplate.packPath, 'utf8')).toContain('truto-cli-toolbelt')
+
+    // `blank` names none — which is how a brief arrived with no skills at all.
+    // The composer can now supply them regardless of the template.
+    const added = buildPack({ template: 'blank', items: [], skills: ['B/truto-sync-job-validator'] })
+    if ('error' in added) throw new Error(added.error)
+    const body = readFileSync(added.packPath, 'utf8')
+    expect(body).toContain('## Skills to load first')
+    expect(body).toContain('`truto-sync-job-validator`')
+    // The bare name — "B/" is Wake's index talking, and a session cannot act on it.
+    expect(body, 'the catalog prefix leaked into the brief').not.toContain('B/truto-sync-job-validator')
+    expect(body, 'a skill body was inlined instead of named').not.toContain('## When to use')
+  })
+
+  test('an explicit empty skill list means empty, not "fall back to the template"', () => {
+    const built = buildPack({ template: 'slack-thread', items: [], skills: [] })
+    if ('error' in built) throw new Error(built.error)
+    expect(readFileSync(built.packPath, 'utf8')).not.toContain('## Skills to load first')
+  })
+
+  test('the edited brief is what gets recorded and linked', () => {
+    const built = buildPack({ template: 'blank', items: [{ kind: 'note', ref: 'n1' }] })
+    if ('error' in built) throw new Error(built.error)
+
+    const edited = '# My own words\n\nDo the thing I actually asked for.'
+    const r = openPack(built.id, edited)
+    if ('error' in r) throw new Error(r.error)
+
+    // The link, the row and the file all move to what was approved.
+    expect(decodeURIComponent(new URL(r.url).searchParams.get(HANDOFF_PARAM)!)).toBe(edited)
+    expect(getPack(built.id)!.first_message).toBe(edited)
+    expect(readFileSync(built.packPath, 'utf8')).toBe(edited)
+  })
+
+  test('a secret typed into the editor is still redacted before it is stored', () => {
+    // The editor is a text field, so it is also a way to paste a token by
+    // accident. The write path redacts regardless of where the text came from.
+    const built = buildPack({ template: 'blank', items: [] })
+    if ('error' in built) throw new Error(built.error)
+
+    openPack(built.id, 'Authorization: Bearer sk-ant-abcdefghijklmnopqrstuvwxyz012345')
+    expect(getPack(built.id)!.first_message).not.toContain('sk-ant-abcdefghijklmnopqrstuvwxyz012345')
+    expect(readFileSync(built.packPath, 'utf8')).toContain('redacted')
   })
 })

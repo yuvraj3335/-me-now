@@ -18,6 +18,8 @@ export type PackItem = {
   url?: string | null
   excerpt?: string | null
   why?: string | null
+  /** Facts worth stating as facts: a channel, a PR number, a session's cwd. */
+  meta?: Record<string, string | number | boolean | null> | null
 }
 
 export type Template = {
@@ -30,10 +32,15 @@ export type Template = {
   instruction: string
 }
 
-/** Where a brief goes, and how much of one the link can carry. */
-export type HandoffTarget = { url: string; maxChars: number }
+/**
+ * Where a brief goes, how it is prefilled, and how much of one fits.
+ *
+ * The whole config, not a summary: the browser builds the link itself as you
+ * edit the brief, using the same `handoffFor` the server does.
+ */
+export type HandoffTarget = import('../../shared/handoff').HandoffConfig
 
-/** What came back when a brief was handed over. */
+/** What the server recorded when a brief was handed over. */
 export type Handoff = {
   packId: string
   url: string
@@ -68,8 +75,11 @@ export type Pack = {
   skills?: string[]
 }
 
+export type Skill = { id: string; name: string; catalog: string; whenToUse: string | null; mutating: boolean }
+
 export type LaunchState = {
   handoff: HandoffTarget
+  skills: Skill[]
   templates: Template[]
   repos: Array<{ name: string; path: string; role: string; branch: string | null; dirty: number }>
   sessions: Session[]
@@ -94,9 +104,15 @@ export const launchApi = {
     cwd?: string | null
     instruction?: string
     items: PackItem[]
+    skills?: string[]
   }) => req<Pack>('/packs', { method: 'POST', body: JSON.stringify(b) }),
-  /** Mark a brief handed over and get the link that opens it in Claude. */
-  open: (id: string) => req<Handoff>(`/packs/${id}/open`, { method: 'POST' }),
+  /**
+   * Record what was actually handed over. `brief` is the edited text, which
+   * becomes the stored copy and the file on disk — a record of the draft Wake
+   * happened to render first is not an audit trail.
+   */
+  open: (id: string, brief?: string) =>
+    req<Handoff>(`/packs/${id}/open`, { method: 'POST', body: JSON.stringify({ brief }) }),
   pack: (id: string) => req<Pack>(`/packs/${id}`),
   packs: () => req<{ packs: Pack[] }>('/packs'),
   packFileUrl: (id: string) => `/api/claude/packs/${id}/file`,
@@ -104,9 +120,16 @@ export const launchApi = {
 
 /* ----------------------------- the open basket ---------------------------- */
 
-type Basket = { open: boolean; items: PackItem[]; template: string | null }
+type Basket = {
+  open: boolean
+  items: PackItem[]
+  template: string | null
+  /** The repository the card knew about, so the brief does not default to ~/work. */
+  repoHint: string | null
+  title: string | null
+}
 
-let basket: Basket = { open: false, items: [], template: null }
+let basket: Basket = { open: false, items: [], template: null, repoHint: null, title: null }
 const listeners = new Set<() => void>()
 const set = (p: Partial<Basket>) => {
   basket = { ...basket, ...p }
@@ -122,10 +145,23 @@ export function useLaunchBasket() {
 }
 
 /** Add objects and open the sheet. Duplicate refs collapse rather than stack. */
-export function openLaunch(items: PackItem[], template?: string) {
+export function openLaunch(
+  items: PackItem[],
+  opts: { template?: string; repoHint?: string | null; title?: string | null } = {},
+) {
   const seen = new Set(basket.items.map(i => `${i.kind}:${i.ref}`))
   const merged = [...basket.items, ...items.filter(i => !seen.has(`${i.kind}:${i.ref}`))]
-  set({ open: true, items: merged, template: template ?? basket.template })
+  set({
+    open: true,
+    items: merged,
+    template: opts.template ?? basket.template,
+    repoHint: opts.repoHint ?? basket.repoHint,
+    title: opts.title ?? basket.title,
+  })
 }
 export const removeFromLaunch = (ref: string) => set({ items: basket.items.filter(i => i.ref !== ref) })
 export const closeLaunch = () => set({ open: false })
+
+/** Empty it. A brief handed over should not leave its objects in the basket. */
+export const resetLaunch = () =>
+  set({ open: false, items: [], template: null, repoHint: null, title: null })

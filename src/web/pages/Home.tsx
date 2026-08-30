@@ -11,6 +11,7 @@ import { Empty, spring } from '../components/primitives'
 import { useStill } from '../lib/motion'
 import { SOURCE_LABEL } from '../components/sources'
 import { openLaunch } from '../lib/launch'
+import { cardContext, cardTitle, repoHintFor, templateFor } from '../lib/cardContext'
 import { registerPaletteActions } from '../components/palette'
 
 /**
@@ -61,17 +62,14 @@ export function Home() {
   const done = async (c: CardT) => { drop(c.group_key); await actions.doneCard(c.group_key); void reload() }
   const snooze = async (c: CardT) => { drop(c.group_key); await actions.snooze(c.group_key, atHour(1, 9)); void reload() }
 
-  const excerptOf = (c: CardT) =>
-    [c.why, c.excerpt, ...c.sources.map(s => `${SOURCE_LABEL[s.source]}: ${s.title}`)].filter(Boolean).join('\n')
-
+  // One context entry per place the card was seen, each with its own facts —
+  // see lib/cardContext.ts for what the one-line version used to produce.
   const launch = (c: CardT) =>
-    openLaunch(
-      [{ kind: 'card', ref: c.group_key, title: c.title, url: c.url, excerpt: excerptOf(c), why: 'the card this is about' }],
-      c.sources.some(s => s.source === 'sentry') ? 'sentry-issue'
-        : c.sources.some(s => s.source === 'slack') ? 'slack-thread'
-        : c.sources.some(s => s.source === 'gmail') ? 'mail-thread'
-        : 'blank',
-    )
+    openLaunch(cardContext(c), {
+      template: templateFor(c),
+      repoHint: repoHintFor(c),
+      title: cardTitle(c),
+    })
 
   /**
    * j/k over the visible rows, Enter to open.
