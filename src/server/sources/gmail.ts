@@ -11,6 +11,7 @@ import { McpSession, HttpTransport } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
 import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
+import { plainBody, plainText } from '../mail/sanitize'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
 const sessions = new Map<string, McpSession>()
@@ -123,10 +124,14 @@ export const gmail: SourceAdapter = {
         if (!id) continue
 
         const last = th.messages?.[th.messages.length - 1]
-        const subject = th.subject ?? last?.subject ?? '(no subject)'
-        const senderRaw = th.sender ?? last?.sender ?? last?.from ?? ''
-        const snippet = th.snippet ?? last?.snippet ?? ''
-        const body = last?.plaintextBody ?? ''
+        // Through the mail normaliser's own decode, not raw. Google returns
+        // HTML-escaped text and marketing mail pads it with invisible joiners,
+        // and a card's title and excerpt are rendered as text on four surfaces:
+        // `Jobber let&#39;s you send quotes` was a live row.
+        const subject = plainText(th.subject ?? last?.subject) || '(no subject)'
+        const senderRaw = plainText(th.sender ?? last?.sender ?? last?.from)
+        const snippet = plainText(th.snippet ?? last?.snippet)
+        const body = plainBody(last?.plaintextBody ?? '')
         const ts = Date.parse(th.date ?? last?.date ?? '') || Date.now()
 
         // Directly addressed beats bulk: a thread with me in To: is on me, a

@@ -12,7 +12,7 @@
  * disk — is the only way this code can be tested at all on this machine.
  */
 
-import { htmlToText, sanitizeEmailHtml } from './sanitize'
+import { htmlToText, plainBody, plainText, sanitizeEmailHtml } from './sanitize'
 
 export type Address = { name: string | null; addr: string }
 
@@ -47,7 +47,9 @@ export type MailThread = {
 }
 
 export const parseAddress = (raw: unknown): Address | null => {
-  const s = typeof raw === 'string' ? raw.trim() : ''
+  // A display name arrives escaped like every other field — `Burns &amp;
+  // McDonnell` was the sender on a live row — so it is decoded on the way in.
+  const s = plainText(raw)
   if (!s) return null
   const angle = /<([^>]+)>/.exec(s)
   if (angle) {
@@ -113,8 +115,12 @@ export function normalizeThread(account: string, raw: any, myAddresses: string[]
     id: `${account}:${threadId}`,
     account,
     threadId,
-    subject: String(raw.subject ?? last.subject ?? first.subject ?? '(no subject)'),
-    snippet: String(raw.snippet ?? last.snippet ?? first.snippet ?? '').slice(0, 400),
+    // Decoded and de-padded here, once. A snippet reaches a list row, a card
+    // excerpt, a Now row and a detail pane, and every one of those renders text
+    // — so `let&#39;s` and ten combining grapheme joiners printed literally on
+    // four surfaces from one escape in one field.
+    subject: plainText(raw.subject ?? last.subject ?? first.subject) || '(no subject)',
+    snippet: plainText(raw.snippet ?? last.snippet ?? first.snippet).slice(0, 400),
     from: parseAddress(raw.sender ?? last.sender ?? last.from ?? raw.from),
     to,
     labels,
@@ -138,10 +144,13 @@ export function normalizeMessage(raw: any, index: number): MailMessage {
     from: parseAddress(raw?.sender ?? raw?.from),
     to: parseAddresses(raw?.toRecipients ?? raw?.to),
     cc: parseAddresses(raw?.ccRecipients ?? raw?.cc),
-    subject: raw?.subject ?? null,
+    subject: raw?.subject == null ? null : plainText(raw.subject),
     ts: asTs(raw?.date, raw?.internalDate),
-    // Plain text is preferred; HTML is only rendered for mail that has nothing else.
-    text: rawText || (rawHtml ? htmlToText(rawHtml) : ''),
+    // Plain text is preferred; HTML is only rendered for mail that has nothing
+    // else. Either way the body is decoded exactly once — `htmlToText` already
+    // ends in `plainBody`, so this branch does not run it twice and `&amp;lt;`
+    // cannot decay into a tag on the second pass.
+    text: rawText ? plainBody(rawText) : (rawHtml ? htmlToText(rawHtml) : ''),
     html: clean.html || null,
     blockedImages: clean.blockedImages,
     attachments: (Array.isArray(raw?.attachments) ? raw.attachments : []).map((a: any) => ({

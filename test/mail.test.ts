@@ -13,7 +13,9 @@ import {
   BOXES, cursorOf, forwardSubject, isBox, listOf, normalizeMessage, normalizeThread,
   parseAddress, parseAddresses, queryFor, quoteFor, replyRecipients, replySubject,
 } from '../src/server/mail/normalize'
-import { sanitizeEmailHtml, splitQuoted, htmlToText } from '../src/server/mail/sanitize'
+import {
+  decodeEntities, htmlToText, plainBody, plainText, sanitizeEmailHtml, splitQuoted,
+} from '../src/server/mail/sanitize'
 import { sendFingerprintPayload, validateDraft } from '../src/server/mail/service'
 import { onlyDeclared } from '../src/server/mail/gmail'
 import { issueConfirmation, useConfirmation } from '../src/server/security'
@@ -190,6 +192,56 @@ describe('sanitizing email HTML', () => {
     const { body, quoted } = splitQuoted('my reply\n\nOn Tuesday, Ada <a@b.c> wrote:\n> original')
     expect(body).toBe('my reply')
     expect(quoted).toContain('original')
+  })
+})
+
+describe('mail text is decoded once, where it is made', () => {
+  /**
+   * All three strings below were read off `/api/state` on the live box, and all
+   * three were rendered verbatim — in a card excerpt, in a Now row and in the
+   * detail pane — because Google escapes its snippets and every surface that
+   * shows one renders text rather than markup. Fixing it in a view component
+   * would have meant fixing it in four of them and remembering for the fifth.
+   */
+  const JOBBER = 'Jobber let&#39;s you send quotes in minutes, not hours'
+  const BURNS = 'Section Manager at Burns &amp; McDonnell India \u034f \u034f \u034f \u034f \u034f'
+  const ANYTHING = 'you don&#39;t need to do anything'
+
+  test('the escapes off the live board are gone from the text', () => {
+    expect(plainText(JOBBER)).toBe("Jobber let's you send quotes in minutes, not hours")
+    expect(plainText(ANYTHING)).toBe("you don't need to do anything")
+    expect(plainText(BURNS)).toBe('Section Manager at Burns & McDonnell India')
+  })
+
+  test('a snippet carries neither the escape nor the padding onto a card', () => {
+    // The exact path: a thread from the Gmail MCP becomes a list row, and the
+    // same normaliser feeds the card excerpt behind Now.
+    const t = normalizeThread('me@example.com', {
+      threadId: 't1', subject: JOBBER, snippet: BURNS, sender: 'Burns &amp; McDonnell <hr@example.com>',
+    }, ME)!
+    expect(t.subject).not.toContain('&#39;')
+    expect(t.snippet).not.toContain('&amp;')
+    expect(t.snippet).not.toContain('\u034f')
+    expect(t.snippet.endsWith('India')).toBe(true)
+    expect(t.from!.name).toBe('Burns & McDonnell')
+  })
+
+  test('a body keeps its line breaks and loses its padding', () => {
+    const m = normalizeMessage({ id: 'm1', plaintextBody: 'line one \u034f \u034f\nline  two' }, 0)
+    expect(m.text).toBe('line one\nline  two')
+  })
+
+  test('the decode is one pass, so an escaped entity stays text', () => {
+    // `&amp;lt;` is a message that is talking *about* `&lt;`. Decoding until it
+    // settles would turn it into a tag the sender never wrote.
+    expect(decodeEntities('&amp;lt;script&amp;gt;')).toBe('&lt;script&gt;')
+    // And the HTML fallback must not decode a second time on top of that.
+    expect(htmlToText('<p>&amp;lt;b&amp;gt;</p>')).toBe('&lt;b&gt;')
+  })
+
+  test('an entity that names nothing is left as written', () => {
+    expect(plainText('100 &widget; wide')).toBe('100 &widget; wide')
+    expect(plainBody('&#xZZ; &#99999999;')).toBe('&#xZZ; &#99999999;')
   })
 })
 

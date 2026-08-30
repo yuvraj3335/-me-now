@@ -14,6 +14,7 @@ import { runSearch, discoverTools, readThread, clean } from './slack'
 import { sessionFor as gmailSession } from './gmail'
 import { getSession as sentrySession, findIssuesTool, orgSlug, parseSentryIssues } from './sentry'
 import { GMAIL_ACCOUNTS } from '../env'
+import { plainText } from '../mail/sanitize'
 
 export type SearchHit = {
   source: string
@@ -59,9 +60,12 @@ export async function searchGmail(query: string, limit = 15): Promise<SearchHit[
         const m = t.messages?.[0] ?? {}
         out.push({
           source: 'gmail',
-          title: t.subject ?? m.subject ?? '(no subject)',
-          actor: m.sender ?? m.from ?? t.sender,
-          excerpt: t.snippet ?? m.snippet,
+          // The same decode the poller uses. A hit and a polled card describe
+          // one thread, so they must not disagree about whether its subject
+          // contains an apostrophe or the five characters that escape one.
+          title: plainText(t.subject ?? m.subject) || '(no subject)',
+          actor: plainText(m.sender ?? m.from ?? t.sender) || undefined,
+          excerpt: plainText(t.snippet ?? m.snippet) || undefined,
           ts: Date.parse(m.date ?? t.date ?? '') || undefined,
           ref: t.threadId ?? t.id,
           url: t.threadId ? `https://mail.google.com/mail/u/0/#all/${t.threadId}` : undefined,

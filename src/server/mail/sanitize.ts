@@ -91,22 +91,97 @@ export function sanitizeEmailHtml(input: string): Sanitized {
 const escapeAttr = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+/* ------------------------------- plain text -------------------------------- */
+
+/**
+ * Mail text is escaped HTML even when it is sold as plain text.
+ *
+ * Gmail's own snippets come back escaped — `let&#39;s`, `Burns &amp; McDonnell`
+ * — and Wake printed them verbatim into a row title, a card excerpt, a Now row
+ * and a detail pane, because every one of those renders text rather than markup.
+ * The decode belongs here, where the text is made, and not in four view
+ * components that would each have to remember.
+ */
+const NAMED: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  hellip: '…', mdash: '—', ndash: '–', laquo: '«', raquo: '»',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', sbquo: '‚', bdquo: '„',
+  middot: '·', bull: '•', dagger: '†', prime: '′', minus: '−',
+  trade: '™', copy: '©', reg: '®', deg: '°', plusmn: '±', times: '×', divide: '÷',
+  euro: '€', pound: '£', yen: '¥', cent: '¢', sect: '§', para: '¶',
+  frac12: '½', frac14: '¼', frac34: '¾', shy: '', zwj: '', zwnj: '',
+}
+
+/**
+ * One pass, deliberately.
+ *
+ * A replacement is not rescanned, so `&amp;lt;` decodes to `&lt;` and stops
+ * there. Decoding until it settles would turn text that merely *describes* an
+ * entity into the character it names — which is how an escaped `&amp;#39;` in
+ * quoted mail becomes an apostrophe that was never in the message.
+ */
+export function decodeEntities(input: string): string {
+  if (!input.includes('&')) return input
+  return input.replace(/&(#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});/g, (whole, body: string) => {
+    if (body[0] !== '#') return NAMED[body] ?? NAMED[body.toLowerCase()] ?? whole
+    const code = body[1] === 'x' || body[1] === 'X'
+      ? parseInt(body.slice(2), 16)
+      : parseInt(body.slice(1), 10)
+    // Surrogates, out-of-range points and C0 controls are not text a mail client
+    // meant to show; leaving the entity as written is the honest fallback.
+    if (!Number.isFinite(code) || code > 0x10ffff) return whole
+    if (code >= 0xd800 && code <= 0xdfff) return whole
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a) return whole
+    return String.fromCodePoint(code)
+  })
+}
+
+/**
+ * The padding marketing mail uses to pull a preview line out to a fixed length.
+ *
+ * U+034F COMBINING GRAPHEME JOINER, repeated between spaces, is the common one —
+ * it renders as nothing in a mail client and as a stack of boxes in anything
+ * that does not special-case it. Zero-width spaces, joiners, soft hyphens and
+ * byte-order marks do the same job. Bidi overrides are deliberately not in this
+ * set: they are load-bearing in right-to-left mail.
+ */
+const INVISIBLE =
+  /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180e\u200b-\u200f\u2060-\u2064\u206a-\u206f\u3164\ufeff\uffa0]/g
+
+/** Strip the padding, then the horizontal whitespace it leaves at line ends. */
+const stripInvisible = (s: string) =>
+  s.replace(INVISIBLE, '').replace(/[^\S\n]+$/gm, '')
+
+/**
+ * A one-line value: a subject, a snippet, a display name, a card title.
+ *
+ * Every whitespace run collapses, because none of these is ever rendered with
+ * its line breaks intact and a snippet that wraps in the data wraps twice on
+ * screen.
+ */
+export const plainText = (input: unknown): string =>
+  typeof input === 'string' ? stripInvisible(decodeEntities(input)).replace(/\s+/g, ' ').trim() : ''
+
+/**
+ * A message body, whose line breaks are the only formatting it has.
+ *
+ * Indentation is left alone — a plain-text mail that quotes code is the case a
+ * whitespace collapse ruins — so this only removes the invisibles and the
+ * trailing runs they leave behind.
+ */
+export const plainBody = (input: string): string =>
+  stripInvisible(decodeEntities(input)).replace(/\n{3,}/g, '\n\n').trim()
+
 /** A readable plain-text rendering, for mail that only shipped HTML. */
 export function htmlToText(input: string): string {
-  return input
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(DROP_WITH_CONTENT, '')
-    .replace(/<\/(p|div|tr|li|h[1-6]|blockquote)>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return plainBody(
+    input
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(DROP_WITH_CONTENT, '')
+      .replace(/<\/(p|div|tr|li|h[1-6]|blockquote)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ''),
+  )
 }
 
 /**
