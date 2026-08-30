@@ -751,3 +751,19 @@ describe('a chart is drawn only when there is a chart to draw', () => {
       .toBeLessThanOrEqual(4)
   })
 })
+
+describe('one surface spends the accent once', () => {
+  test('the task trigger hands its fill to the sheet it opened', () => {
+    // With the sheet up the probe found `+ Task` and `Add task` both painted in
+    // the accent. The commit earns it; a trigger already pressed and sitting
+    // behind a scrim does not.
+    const work = read('src/web/pages/Work.tsx')
+    expect(work, 'the page stopped noticing that a sheet is up')
+      .toMatch(/const sheetOpen = creating \|\| editing !== null \|\| goalEditing !== null/)
+    expect(work, 'the trigger went back to being unconditionally amber')
+      .toMatch(/variant=\{sheetOpen \? 'default' : 'primary'\}/)
+    // The commit keeps it.
+    expect(read('src/web/components/TaskSheet.tsx'), 'the commit lost its fill')
+      .toMatch(/variant="primary"/)
+  })
+})

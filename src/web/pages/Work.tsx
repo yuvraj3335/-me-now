@@ -47,6 +47,10 @@ export function Work() {
   const [goalEditing, setGoalEditing] = useState<Goal | null | 'new'>(null)
   const [showDone, setShowDone] = useState(false)
 
+  /** Any of the three sheets this page owns. While one is up it holds the
+   *  surface, and with it the single primary. */
+  const sheetOpen = creating || editing !== null || goalEditing !== null
+
   const tasks = state?.tasks ?? []
   const goals = state?.goals ?? []
   const reminders = state?.reminders ?? []
@@ -141,8 +145,15 @@ export function Work() {
           ))}
         </span>
         {/* The one primary in the product, and the only place amber marks a
-            commit rather than a decision. */}
-        <Button size="md" variant="primary"
+            commit rather than a decision.
+
+            It hands the amber over while its sheet is open. One primary per
+            surface is the rule, and a sheet is the surface once it is up: the
+            fill belongs to `Add task`, the button that actually commits. This
+            one had already been pressed and is sitting behind a scrim with
+            nothing left to ask for, so it spends the accent twice on one screen
+            for a control that cannot be reached. */}
+        <Button size="md" variant={sheetOpen ? 'default' : 'primary'}
           onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
           <Plus size={14} /> {tab === 'tasks' ? 'Task' : 'Goal'}
         </Button>
