@@ -9,7 +9,7 @@ import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import type { RawCard, SourceAdapter } from './types'
+import { NotConnected, type RawCard, type SourceAdapter } from './types'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
 const TAIL_BYTES = 512 * 1024
@@ -137,6 +137,11 @@ function clip(s: string | null | undefined, max: number): string | undefined {
 
 export type SessionFile = { path: string; id: string; project: string; mtime: number }
 
+/** Whether the transcript directory this source reads exists and is readable. */
+export function claudeProjectsReadable(): boolean {
+  try { readdirSync(CLAUDE_PROJECTS_DIR); return true } catch { return false }
+}
+
 /**
  * Transcript files in the window, newest first. Nothing is opened here — a
  * readdir and a stat each — which is what lets `sessionExcerpt` look one up by
@@ -251,6 +256,10 @@ export const claudeSessions: SourceAdapter = {
   },
 
   async fetch() {
+    // A directory that is not there is not an empty one. Both produce zero
+    // sessions; only the second is a poll that actually happened.
+    if (!claudeProjectsReadable()) throw new NotConnected('claude')
+
     const cards: RawCard[] = []
     // The card pile is the one caller that wants the poll lookback applied.
     const window = Math.min(LOOKBACK_DAYS, SESSION_WINDOW_DAYS)
