@@ -6,6 +6,10 @@ import { notify, runReminders, vapidPublicKey } from './push'
 import { readThread } from './sources/slack'
 import { analytics } from './analytics'
 import { connections } from './connections'
+import { mail } from './mail/router'
+import { voice } from './voice/router'
+import { claudecode } from './claudecode/router'
+import { settings } from './settings'
 
 export const api = new Hono()
 
@@ -379,6 +383,10 @@ api.post('/reminders/tick', async c => { await runReminders(); return c.json({ o
 
 api.route('/analytics', analytics)
 api.route('/connections', connections)
+api.route('/mail', mail)
+api.route('/voice', voice)
+api.route('/claude', claudecode)
+api.route('/settings', settings)
 
 api.get('/sources', async c =>
   c.json(await Promise.all(ADAPTERS.map(async a => ({

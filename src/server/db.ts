@@ -213,7 +213,388 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 CREATE INDEX IF NOT EXISTS sync_runs_source ON sync_runs(source, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+
+-- ===========================================================================
+-- AGENT. Everything below this line is the operations assistant: the workspace
+-- registry it reasons over, the skill catalogs it routes through, the durable
+-- turns it runs, and the audit trail every mutation leaves behind.
+--
+-- These tables are deliberately disjoint from "cards"/"card_state" above. The
+-- card pipeline stays deterministic and model-free; nothing the agent writes
+-- can reach it.
+-- ===========================================================================
+
+-- One row per git repository discovered under the workspace root.
+CREATE TABLE IF NOT EXISTS repos (
+  path            TEXT PRIMARY KEY,        -- canonical absolute path
+  name            TEXT NOT NULL,
+  remote          TEXT,
+  branch          TEXT,
+  default_branch  TEXT,
+  dirty           INTEGER NOT NULL DEFAULT 0,
+  ahead           INTEGER NOT NULL DEFAULT 0,
+  behind          INTEGER NOT NULL DEFAULT 0,
+  language        TEXT,
+  package_manager TEXT,
+  summary         TEXT,                    -- first meaningful README line
+  claude_md       TEXT NOT NULL DEFAULT '[]', -- paths, JSON array
+  cursor_rules    TEXT NOT NULL DEFAULT '[]',
+  skills          TEXT NOT NULL DEFAULT '[]', -- repo-local skill ids
+  topics          TEXT NOT NULL DEFAULT '[]', -- curated routing keywords
+  commands        TEXT NOT NULL DEFAULT '{}', -- {test,typecheck,build,dev}
+  role            TEXT NOT NULL DEFAULT 'canonical', -- canonical|worktree|fork|poc|archived|content
+  upstream        TEXT,                    -- for worktrees: the canonical repo path
+  last_commit_at  INTEGER,
+  scanned_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS repos_role ON repos(role);
+CREATE INDEX IF NOT EXISTS repos_name ON repos(name);
+
+-- Skill metadata only. Bodies are read through the loader on demand and never
+-- stored here, which is what keeps "manifest-first" true rather than aspirational.
+CREATE TABLE IF NOT EXISTS skills (
+  id            TEXT PRIMARY KEY,          -- "<catalog>/<name>"
+  catalog       TEXT NOT NULL,             -- A|B|C|D|E
+  name          TEXT NOT NULL,
+  title         TEXT,
+  description   TEXT,
+  when_to_use   TEXT,
+  surface       TEXT,                      -- which tool surface it targets
+  requires      TEXT NOT NULL DEFAULT '[]',-- prerequisite skill ids, JSON array
+  mutating      INTEGER NOT NULL DEFAULT 0,-- needs truto-safe-admin-operator alongside
+  path          TEXT NOT NULL,             -- file to load lazily
+  sha           TEXT,                      -- content hash at index time
+  bytes         INTEGER NOT NULL DEFAULT 0,
+  indexed_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS skills_catalog ON skills(catalog);
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL DEFAULT 'New conversation',
+  mode        TEXT NOT NULL DEFAULT 'triage',
+  repo_path   TEXT,                        -- pinned repo for engineering mode
+  profile     TEXT,                        -- pinned truto profile
+  cc_session  TEXT,                        -- Claude Code session id, for --resume
+  model       TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  archived_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id         TEXT PRIMARY KEY,
+  conv_id    TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  seq        INTEGER NOT NULL,
+  role       TEXT NOT NULL,                -- user | assistant
+  body       TEXT NOT NULL DEFAULT '',
+  segments   TEXT NOT NULL DEFAULT '[]',   -- rendered turn segments, JSON
+  created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS messages_conv_seq ON messages(conv_id, seq);
+
+-- A turn is durable: it survives a browser reload, a disconnect and a restart.
+CREATE TABLE IF NOT EXISTS turns (
+  id             TEXT PRIMARY KEY,
+  conv_id        TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  state          TEXT NOT NULL,            -- running | done | error | cancelled | interrupted
+  mode           TEXT NOT NULL,
+  prompt         TEXT NOT NULL,
+  cc_session     TEXT,
+  pid            INTEGER,
+  skills_used    TEXT NOT NULL DEFAULT '[]',
+  last_seq       INTEGER NOT NULL DEFAULT 0,
+  cost_usd       REAL,
+  input_tokens   INTEGER,
+  output_tokens  INTEGER,
+  context_tokens INTEGER,
+  num_turns      INTEGER,
+  error          TEXT,
+  started_at     INTEGER NOT NULL,
+  heartbeat_at   INTEGER NOT NULL,
+  finished_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS turns_conv  ON turns(conv_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS turns_state ON turns(state) WHERE state = 'running';
+
+-- The event log the SSE endpoint tails. "seq" is per-turn and gap-free, which is
+-- what makes "?after=<seq>" a correct resume rather than a best guess.
+CREATE TABLE IF NOT EXISTS turn_events (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+  seq     INTEGER NOT NULL,
+  type    TEXT NOT NULL,
+  payload TEXT NOT NULL DEFAULT '{}',
+  at      INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS turn_events_seq ON turn_events(turn_id, seq);
+
+-- A blocked tool call. The MCP tool waits on this row; the UI resolves it.
+CREATE TABLE IF NOT EXISTS approvals (
+  id          TEXT PRIMARY KEY,
+  turn_id     TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+  conv_id     TEXT NOT NULL,
+  kind        TEXT NOT NULL,               -- mutation | provider_read | question | engineering
+  tool        TEXT NOT NULL,
+  title       TEXT NOT NULL,
+  detail      TEXT,                        -- human-readable diff / command
+  payload     TEXT NOT NULL DEFAULT '{}',
+  risk        TEXT NOT NULL DEFAULT 'mutation',
+  state       TEXT NOT NULL DEFAULT 'pending', -- pending | approved | denied | expired
+  answer      TEXT,                        -- for questions: the chosen answer
+  fingerprint TEXT,                        -- state at approval time; a change invalidates it
+  created_at  INTEGER NOT NULL,
+  resolved_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS approvals_pending ON approvals(state, created_at) WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS approvals_turn ON approvals(turn_id);
+
+-- Every command the adapter ran, whether or not it mutated anything.
+CREATE TABLE IF NOT EXISTS cli_audit (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  turn_id     TEXT,
+  profile     TEXT,
+  argv        TEXT NOT NULL,               -- redacted, JSON array
+  class       TEXT NOT NULL,               -- read | provider_read | mutation | high_risk
+  approval_id TEXT,
+  exit_code   INTEGER,
+  ms          INTEGER,
+  ok          INTEGER NOT NULL DEFAULT 0,
+  stdout_head TEXT,
+  stderr_head TEXT,
+  at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cli_audit_at ON cli_audit(at DESC);
+
+-- A backup taken before an admin write, so a bad apply is reversible.
+CREATE TABLE IF NOT EXISTS admin_backups (
+  id         TEXT PRIMARY KEY,
+  resource   TEXT NOT NULL,
+  ref        TEXT NOT NULL,
+  profile    TEXT,
+  before     TEXT NOT NULL,                -- redacted snapshot, JSON
+  after      TEXT,
+  applied_at INTEGER,
+  at         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS admin_backups_at ON admin_backups(at DESC);
+
+-- Claude Code sessions launched against a repository.
+CREATE TABLE IF NOT EXISTS eng_sessions (
+  id         TEXT PRIMARY KEY,
+  conv_id    TEXT,
+  repo_path  TEXT NOT NULL,
+  branch     TEXT,
+  dirty_at_start INTEGER NOT NULL DEFAULT 0,
+  cc_session TEXT,
+  state      TEXT NOT NULL,                -- running | done | error | cancelled
+  task       TEXT NOT NULL,
+  files      TEXT NOT NULL DEFAULT '[]',
+  error      TEXT,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS eng_sessions_repo ON eng_sessions(repo_path, started_at DESC);
+
 `)
+
+/* ==========================================================================
+ * MIGRATIONS
+ *
+ * Everything above is the baseline schema, written with CREATE IF NOT EXISTS so
+ * it is safe to re-run. Everything a later version adds goes below, numbered and
+ * recorded, because "add another CREATE to the boot block" stops working the
+ * moment a change is not idempotent — an ALTER, a backfill, a DROP. The runner
+ * is four lines; the discipline is the point.
+ * ======================================================================== */
+
+db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+  id      INTEGER PRIMARY KEY,
+  name    TEXT NOT NULL,
+  applied_at INTEGER NOT NULL
+)`)
+
+type Migration = { id: number; name: string; sql: string }
+
+const MIGRATIONS: Migration[] = [
+  {
+    id: 1,
+    name: 'operations-console',
+    sql: `
+-- Every tool call a turn made, with what it cost and whether a human gated it.
+-- turn_events already carries these for the UI; this is the queryable form the
+-- inspector and the audit view read, without parsing JSON payloads.
+CREATE TABLE IF NOT EXISTS agent_tool_calls (
+  id          TEXT PRIMARY KEY,
+  turn_id     TEXT NOT NULL,
+  conv_id     TEXT,
+  name        TEXT NOT NULL,
+  cls         TEXT,                       -- read | provider_read | mutation | high_risk
+  mutates     INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER,
+  ms          INTEGER,
+  approval_id TEXT,
+  error       TEXT,
+  at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_tool_calls_turn ON agent_tool_calls(turn_id, at);
+
+-- The SECURITY audit log. Deliberately not the "events" table: that one feeds
+-- the Pulse page, it is written by the card pipeline on every poll, and
+-- mixing "a task moved to done" with "an email was sent to a customer" makes
+-- both unreadable and lets a retention policy on one quietly delete the other.
+CREATE TABLE IF NOT EXISTS audit_events (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind     TEXT NOT NULL,                 -- mail.send | slack.post | truto.apply | claude.launch | …
+  actor    TEXT NOT NULL DEFAULT 'user',  -- user | agent
+  turn_id  TEXT,
+  conv_id  TEXT,
+  target   TEXT,                          -- what it acted on, in one line
+  detail   TEXT,                          -- redacted JSON
+  ok       INTEGER NOT NULL DEFAULT 1,
+  error    TEXT,
+  at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_events_at   ON audit_events(at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_kind ON audit_events(kind, at DESC);
+
+-- A confirmation token bound to the exact arguments it was granted for. The
+-- fingerprint is what makes "edit the body after approving" fail closed: a
+-- changed body hashes differently, so the token no longer describes the send.
+CREATE TABLE IF NOT EXISTS confirmations (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  summary     TEXT,
+  state       TEXT NOT NULL DEFAULT 'issued',  -- issued | used | expired
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  used_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS confirmations_expiry ON confirmations(expires_at);
+
+-- Mail cache. Metadata for a list page; bodies only for threads actually opened,
+-- with a TTL. Copying a mailbox into SQLite would be a second, stale mailbox.
+CREATE TABLE IF NOT EXISTS mail_threads (
+  id           TEXT PRIMARY KEY,          -- "<account>:<threadId>"
+  account      TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  subject      TEXT NOT NULL DEFAULT '',
+  snippet      TEXT,
+  from_name    TEXT,
+  from_addr    TEXT,
+  to_addrs     TEXT NOT NULL DEFAULT '[]',
+  labels       TEXT NOT NULL DEFAULT '[]',
+  unread       INTEGER NOT NULL DEFAULT 0,
+  starred      INTEGER NOT NULL DEFAULT 0,
+  to_me        INTEGER NOT NULL DEFAULT 0,
+  msg_count    INTEGER NOT NULL DEFAULT 1,
+  ts           INTEGER NOT NULL,
+  body_fetched_at INTEGER,
+  fetched_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mail_threads_account ON mail_threads(account, ts DESC);
+CREATE INDEX IF NOT EXISTS mail_threads_ts      ON mail_threads(ts DESC);
+
+CREATE TABLE IF NOT EXISTS mail_messages (
+  id          TEXT PRIMARY KEY,           -- "<account>:<messageId>"
+  thread_key  TEXT NOT NULL REFERENCES mail_threads(id) ON DELETE CASCADE,
+  account     TEXT NOT NULL,
+  message_id  TEXT NOT NULL,
+  rfc_id      TEXT,
+  from_name   TEXT,
+  from_addr   TEXT,
+  to_addrs    TEXT NOT NULL DEFAULT '[]',
+  cc_addrs    TEXT NOT NULL DEFAULT '[]',
+  subject     TEXT,
+  text_body   TEXT,
+  html_body   TEXT,                       -- sanitized at write time, never raw
+  attachments TEXT NOT NULL DEFAULT '[]', -- metadata only; Wake stores no blobs
+  ts          INTEGER NOT NULL,
+  seq         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages(thread_key, seq);
+
+-- A launch pack: what Wake handed to a Claude Code session, and the session it
+-- started. The session id is minted here and passed with --session-id, so the
+-- resume command shown in the UI is the real one rather than a hopeful guess.
+CREATE TABLE IF NOT EXISTS launch_packs (
+  id            TEXT PRIMARY KEY,
+  template      TEXT NOT NULL,
+  title         TEXT NOT NULL,
+  cwd           TEXT NOT NULL,
+  repo_name     TEXT,
+  session_id    TEXT,                     -- Claude Code session uuid
+  resumed_from  TEXT,
+  status        TEXT NOT NULL,            -- draft | launching | running | done | error
+  first_message TEXT NOT NULL DEFAULT '',
+  skills        TEXT NOT NULL DEFAULT '[]',
+  pack_path     TEXT,
+  pid           INTEGER,
+  error         TEXT,
+  created_at    INTEGER NOT NULL,
+  launched_at   INTEGER,
+  finished_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS launch_packs_created ON launch_packs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS launch_pack_items (
+  id      TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES launch_packs(id) ON DELETE CASCADE,
+  kind    TEXT NOT NULL,                  -- card | mail | slack | sentry | notion | github | session | note
+  ref     TEXT NOT NULL,
+  title   TEXT,
+  url     TEXT,
+  excerpt TEXT,
+  why     TEXT,
+  sort    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS launch_pack_items_pack ON launch_pack_items(pack_id, sort);
+
+-- Voice notes. The audio lives on disk under the data dir; this is the index.
+CREATE TABLE IF NOT EXISTS voice_notes (
+  id           TEXT PRIMARY KEY,
+  filename     TEXT NOT NULL,
+  mime         TEXT NOT NULL,
+  bytes        INTEGER NOT NULL,
+  duration_ms  INTEGER,
+  title        TEXT,
+  transcript   TEXT,
+  transcript_state TEXT NOT NULL DEFAULT 'none', -- none | client | server | failed
+  transcript_error TEXT,
+  task_id      TEXT,
+  card_group   TEXT,
+  pack_id      TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS voice_notes_created ON voice_notes(created_at DESC);
+`,
+  },
+  {
+    id: 2,
+    name: 'drop-eng-sessions',
+    // Engineering sessions were Wake spawning Claude Code ad hoc. "Open in
+    // Claude Code" is the same act, productised — one pack, one persisted
+    // session id, one resume command — so keeping a second, half-implemented
+    // path would mean two answers to "where did that session go".
+    sql: `DROP TABLE IF EXISTS eng_sessions;`,
+  },
+]
+
+const applied = new Set(
+  db.query<{ id: number }, []>(`SELECT id FROM schema_migrations`).all().map(r => r.id),
+)
+for (const m of MIGRATIONS) {
+  if (applied.has(m.id)) continue
+  // Each migration is one transaction: a half-applied schema is worse than an
+  // unapplied one, because the next boot would skip the half it thinks ran.
+  db.transaction(() => {
+    db.exec(m.sql)
+    db.query(`INSERT INTO schema_migrations (id, name, applied_at) VALUES (?,?,?)`)
+      .run(m.id, m.name, Date.now())
+  })()
+}
 
 export function kvGet(k: string): string | null {
   const r = db.query<{ v: string }, [string]>(`SELECT v FROM kv WHERE k = ?`).get(k)
@@ -231,6 +612,36 @@ export function logEvent(kind: string, fields: { group_key?: string; task_id?: s
     fields.source ?? null,
     fields.at ?? Date.now(),
     fields.meta === undefined ? null : JSON.stringify(fields.meta),
+  )
+}
+
+/**
+ * The security audit log. Separate from `logEvent` on purpose: that one feeds
+ * Pulse, this one answers "what did this system do to the outside world, and who
+ * asked for it".
+ */
+export function audit(kind: string, fields: {
+  actor?: 'user' | 'agent'
+  turn_id?: string | null
+  conv_id?: string | null
+  target?: string | null
+  detail?: unknown
+  ok?: boolean
+  error?: string | null
+} = {}) {
+  db.query(
+    `INSERT INTO audit_events (kind, actor, turn_id, conv_id, target, detail, ok, error, at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  ).run(
+    kind,
+    fields.actor ?? 'user',
+    fields.turn_id ?? null,
+    fields.conv_id ?? null,
+    fields.target ?? null,
+    fields.detail === undefined ? null : JSON.stringify(fields.detail),
+    fields.ok === false ? 0 : 1,
+    fields.error ?? null,
+    Date.now(),
   )
 }
 

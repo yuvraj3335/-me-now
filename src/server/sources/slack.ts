@@ -23,7 +23,7 @@ const getSession = () =>
 type Tools = { search?: string; readThread?: string; myUserId?: string }
 let toolCache: { at: number; tools: Tools } | null = null
 
-async function discoverTools(): Promise<Tools> {
+export async function discoverTools(): Promise<Tools> {
   if (toolCache && Date.now() - toolCache.at < 30 * 60_000) return toolCache.tools
   const all = await getSession().listTools()
   const byName = (re: RegExp) => all.find(t => re.test(t.name))?.name
@@ -148,7 +148,7 @@ const clean = (t: string) =>
 
 /* ------------------------------ adapter ------------------------------- */
 
-async function runSearch(tool: string, query: string, limit = 20): Promise<SlackHit[]> {
+export async function runSearch(tool: string, query: string, limit = 20): Promise<SlackHit[]> {
   const r = await getSession().callJson<any>(tool, {
     query,
     sort: 'timestamp',
@@ -168,7 +168,9 @@ export const slack: SourceAdapter = {
   async status() {
     const { token, via } = await resolveToken('slack')
     if (!token) {
-      return { ok: false, detail: 'not connected — connect on the Connections page, or run: claude mcp login slack' }
+      // Product copy, not a command. Settings offers Connect, and keeps the
+      // terminal route behind a disclosure for when that is the faster answer.
+      return { ok: false, detail: 'Wake reads DMs, mentions and asks addressed to you. Connect it to start.' }
     }
     try {
       const t = await discoverTools()

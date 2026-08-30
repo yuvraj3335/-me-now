@@ -55,11 +55,18 @@ journalctl --user -u wake -f          # one line per request, plus each poll sum
 curl -s localhost:8585/healthz        # card count and uptime
 ```
 
-A healthy poll line looks like:
+A healthy boot looks like:
 
 ```
+agent: 43 repos, 28 skills indexed, key via settings (…a1b2)
+claude code: 2.1.233 (Claude Code)
 ingest: 22 groups (+0 new) · slack=14 github=4 gmail=0 sentry=0 claude=18
 ```
+
+`key MISSING` on the first line means the Agent cannot run — add one in
+Settings → Agent. A `claude code:` line that names a reason instead of a version
+means "Open in Claude Code" is unavailable, and the launch sheet will say the
+same thing rather than failing at the click.
 
 A source reporting `=err` names its error on the same line, and Settings shows
 the same thing in plain words.
@@ -75,17 +82,30 @@ loginctl enable-linger yuvraj
 Without this, Wake stops when your last SSH session ends — which is exactly when
 you would want it still polling.
 
-## The two things that are not in git
+## The things that are not in git
 
-- **`.env`** — copy from `.env.example`. Every value has a working default; only
-  `WAKE_PUBLIC_URL` genuinely needs setting.
-- **`~/.local/share/wake/wake.sqlite`** — your tasks, goals, notes, reminders,
-  acknowledgements and the whole activity log the Pulse page is built from.
-  Worth backing up; nothing else on the box is irreplaceable.
+- **`.env`** — copy from `.env.example`. Every value has a working default except
+  the Agent's API key, and only `WAKE_PUBLIC_URL` genuinely needs setting.
+- **`~/.local/share/wake/wake.sqlite`** — tasks, goals, notes, reminders,
+  acknowledgements, agent conversations, launch packs, the mail cache and the
+  whole activity log the Pulse page is built from.
+- **`~/.local/share/wake/voice/`** — the audio for every voice note. The database
+  indexes these; it does not contain them.
+- **`~/.local/share/wake/packs/`** — the briefs handed to Claude Code sessions.
+  Regenerable in principle, but they are the record of what was handed over.
+
+Back up before every deploy that carries a migration:
 
 ```bash
-sqlite3 ~/.local/share/wake/wake.sqlite ".backup '/tmp/wake-backup.sqlite'"
+sqlite3 ~/.local/share/wake/wake.sqlite ".backup '/tmp/wake-backup-$(date +%F).sqlite'"
 ```
+
+## Migrations
+
+Schema changes are numbered and recorded in `schema_migrations`, applied at boot
+inside a transaction each. There is nothing to run by hand — start the new
+version and check the log. A failed migration leaves the row unwritten, so the
+next boot retries it rather than skipping a half-applied change.
 
 ## Notes
 

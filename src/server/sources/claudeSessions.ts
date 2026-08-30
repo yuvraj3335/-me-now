@@ -122,6 +122,96 @@ function titleFromPrompt(prompt: string, limit = 72): string {
   return (lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
 }
 
+/* --------------------------- shared session scan -------------------------- */
+
+export type SessionFile = { path: string; id: string; project: string; mtime: number }
+
+/**
+ * Recent Claude Code transcripts on this machine, newest first.
+ *
+ * Shared by the card adapter and by "Open in Claude Code", because a session
+ * list that disagreed with the Open pile would be a second answer to the same
+ * question.
+ */
+export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_DAYS): Array<{ file: SessionFile; info: SessionInfo }> {
+  let projects: string[]
+  try { projects = readdirSync(CLAUDE_PROJECTS_DIR) } catch { return [] }
+
+  const cutoff = Date.now() - Math.min(LOOKBACK_DAYS, windowDays) * 864e5
+  const files: SessionFile[] = []
+
+  for (const p of projects) {
+    let entries: string[]
+    try { entries = readdirSync(`${CLAUDE_PROJECTS_DIR}/${p}`) } catch { continue }
+    for (const f of entries) {
+      if (!f.endsWith('.jsonl')) continue
+      const path = `${CLAUDE_PROJECTS_DIR}/${p}/${f}`
+      let mtime: number
+      try { mtime = statSync(path).mtimeMs } catch { continue }
+      if (mtime < cutoff) continue
+      files.push({ path, id: f.replace(/\.jsonl$/, ''), project: p, mtime })
+    }
+  }
+
+  files.sort((a, b) => b.mtime - a.mtime)
+  return files.slice(0, limit).map(file => ({ file, info: parseSession(file.path, file.id, file.project, file.mtime) }))
+}
+
+/** Session metadata in the shape the launcher's picker and tools want. */
+export function listSessions(limit = 30, windowDays = 30) {
+  return scanSessions(limit, windowDays).map(({ file, info }) => {
+    const cwd = info.cwd ?? file.project.replace(/^-/, '/').replace(/-/g, '/')
+    const prompt = cleanPrompt(info.lastPrompt)
+    return {
+      id: info.id,
+      title: info.title ?? (prompt ? titleFromPrompt(prompt) : null) ?? `Session in ${basename(cwd) || file.project}`,
+      cwd,
+      project: basename(cwd) || file.project,
+      lastPrompt: prompt,
+      turns: info.userTurns,
+      lastTs: info.lastTs,
+      path: file.path,
+      pr: info.pr,
+    }
+  })
+}
+
+/**
+ * The last few exchanges of one transcript, as plain text.
+ *
+ * Session bodies are the user's own words and their agent's replies, so this is
+ * never called without an explicit confirmation from the person asking — see
+ * the `claude_session_excerpt` tool.
+ */
+export function sessionExcerpt(id: string, maxChars = 12_000): { found: boolean; cwd?: string; text?: string } {
+  const hit = scanSessions(200, 3650).find(s => s.info.id === id)
+  if (!hit) return { found: false }
+
+  let raw: string
+  try { raw = readTail(hit.file.path, TAIL_BYTES) } catch { return { found: false } }
+
+  const lines: string[] = []
+  for (const line of raw.split('\n')) {
+    if (line.charCodeAt(0) !== 123) continue
+    let d: any
+    try { d = JSON.parse(line) } catch { continue }
+    if (d.type !== 'user' && d.type !== 'assistant') continue
+    const content = d.message?.content
+    const text = Array.isArray(content)
+      ? content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n')
+      : typeof content === 'string' ? content : ''
+    if (!text.trim()) continue
+    lines.push(`${d.type === 'user' ? 'You' : 'Claude'}: ${text.trim()}`)
+  }
+
+  const text = lines.join('\n\n')
+  return {
+    found: true,
+    cwd: hit.info.cwd ?? undefined,
+    text: text.length > maxChars ? text.slice(-maxChars) : text,
+  }
+}
+
 export const claudeSessions: SourceAdapter = {
   name: 'claude',
   label: 'Claude Code',
@@ -136,30 +226,8 @@ export const claudeSessions: SourceAdapter = {
   },
 
   async fetch() {
-    let projects: string[]
-    try { projects = readdirSync(CLAUDE_PROJECTS_DIR) } catch { return [] }
-
-    const cutoff = Date.now() - Math.min(LOOKBACK_DAYS, SESSION_WINDOW_DAYS) * 864e5
-    const files: Array<{ path: string; id: string; project: string; mtime: number }> = []
-
-    for (const p of projects) {
-      let entries: string[]
-      try { entries = readdirSync(`${CLAUDE_PROJECTS_DIR}/${p}`) } catch { continue }
-      for (const f of entries) {
-        if (!f.endsWith('.jsonl')) continue
-        const path = `${CLAUDE_PROJECTS_DIR}/${p}/${f}`
-        let mtime: number
-        try { mtime = statSync(path).mtimeMs } catch { continue }
-        if (mtime < cutoff) continue
-        files.push({ path, id: f.replace(/\.jsonl$/, ''), project: p, mtime })
-      }
-    }
-
-    files.sort((a, b) => b.mtime - a.mtime)
-
     const cards: RawCard[] = []
-    for (const f of files.slice(0, MAX_SESSIONS)) {
-      const s = parseSession(f.path, f.id, f.project, f.mtime)
+    for (const { file: f, info: s } of scanSessions(MAX_SESSIONS, SESSION_WINDOW_DAYS)) {
 
       // A stub or a one-shot question is not work you are in the middle of.
       if (s.userTurns < MIN_TURNS && !s.title) continue
@@ -199,6 +267,10 @@ export const claudeSessions: SourceAdapter = {
         ],
         meta: {
           project: projectName,
+          // Named explicitly rather than left to be re-derived from source_id:
+          // "Open in Claude Code" resumes on this, and a card whose group merged
+          // with a PR no longer has the session id in its group key.
+          session_id: s.id,
           cwd,
           resume_cmd: `claude --resume ${s.id}`,
           turns: s.userTurns,

@@ -14,7 +14,7 @@ import type { RawCard, Ref, SourceAdapter } from './types'
 
 const sessions = new Map<string, McpSession>()
 
-function sessionFor(account: string): McpSession {
+export function sessionFor(account: string): McpSession {
   let s = sessions.get(account)
   if (!s) {
     // Per-account credentials, falling back to a single shared "gmail" token so
@@ -72,7 +72,12 @@ export const gmail: SourceAdapter = {
       return { ok: true, detail: 'connected (single account)', via: shared.via }
     }
     if (!live.length) {
-      return { ok: false, detail: 'not connected — see SETUP.md for the Gmail step' }
+      return {
+        ok: false,
+        detail:
+          'Google expects a token Wake cannot obtain on its own, so this one needs a direct connection ' +
+          'rather than a claude.ai connector.',
+      }
     }
     return { ok: true, detail: `connected: ${live.join(', ')}`, via: per.find(p => p.token)?.via }
   },

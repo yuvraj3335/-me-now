@@ -10,12 +10,12 @@ import { extractRefs } from '../dedup'
 import type { RawCard, Ref, SourceAdapter } from './types'
 
 let session: McpSession | null = null
-const getSession = () =>
+export const getSession = () =>
   (session ??= new McpSession('sentry', new HttpTransport(MCP_SERVERS.sentry!.url, tokenGetter('sentry'))))
 
 let toolCache: { at: number; find?: string } | null = null
 
-async function findIssuesTool(): Promise<string | undefined> {
+export async function findIssuesTool(): Promise<string | undefined> {
   if (toolCache && Date.now() - toolCache.at < 30 * 60_000) return toolCache.find
   const all = await getSession().listTools()
   const find =
@@ -57,7 +57,9 @@ export const sentry: SourceAdapter = {
   async status() {
     const { token, via } = await resolveToken('sentry')
     if (!token) {
-      return { ok: false, detail: 'not connected — connect here, or run: claude mcp login sentry' }
+      // Sentry supports dynamic client registration, so Connect really is all
+      // it takes — worth saying, because the other two are not like that.
+      return { ok: false, detail: 'Unresolved issues assigned to you, and issues waiting for review. Connect needs no setup.' }
     }
     try {
       const find = await findIssuesTool()

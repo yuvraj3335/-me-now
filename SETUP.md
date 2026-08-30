@@ -119,6 +119,13 @@ to, so one working inbox does not have to wait for the second.
 promotions and social. A thread with you in `To:` lands in Now; one you are
 merely cc'd on lands in Open.
 
+**And what the Mail page needs.** Cards only need a token; the Mail client needs
+the same token *and* a server that offers the right tools. Wake asks it
+(`tools/list`) rather than assuming, so if the connection can read but not send,
+Send is disabled and Settings names the tools that were actually advertised. As
+of this deployment Gmail is a claude.ai connector, so none of it is reachable and
+Mail says exactly that — see `DECISIONS.md` #22.
+
 ## Notifications on your phone
 
 Settings → *Turn on notifications*.
@@ -130,3 +137,53 @@ in Settings rather than leaving a toggle that silently does nothing.
 
 *Send a test* confirms the round trip and reports how many devices are
 registered.
+
+---
+
+## The Wake Agent's API key
+
+The chat inside Wake runs on the Anthropic API, not on the `claude` CLI. Add a
+key in **Settings → Agent**; it is stored on the box, never returned to the
+browser, and never passed to a subprocess.
+
+Without one, the Agent page says so and offers the settings link rather than
+looking like a chat that ignores you.
+
+`ANTHROPIC_API_KEY` in `.env` works too, and Settings will tell you which of the
+two answered.
+
+> This is a *different credential* from the one "Open in Claude Code" uses. That
+> feature runs the `claude` binary already signed in on this machine, and Wake
+> deliberately strips `ANTHROPIC_API_KEY` from the environment it hands that
+> process — otherwise Claude Code would prefer the key over its own login and
+> quietly move your sessions onto Wake's billing.
+
+## Open in Claude Code
+
+Nothing to connect. It needs two things on the machine Wake runs on:
+
+1. The `claude` binary, signed in. Settings → Claude Code shows the version it
+   found and whether it can tell you are signed in. On macOS that login lives in
+   the keychain, which Wake does not read, so it reports "cannot tell" rather
+   than guessing "no".
+2. Repositories under `WAKE_WORKSPACE_ROOT` (default `~/work`). A session can
+   only be opened in a repository the registry scanned — that allowlist is what
+   stops a template's directory field from becoming an arbitrary path.
+
+Packs are written to `<data dir>/packs` as Markdown plus JSON, redacted, and are
+readable from the result sheet.
+
+## Voice
+
+Recording and live dictation are the browser's own APIs, so there is nothing to
+connect and nothing leaves the machine. On Firefox there is no built-in speech
+recognition, so dictation says so and recording still works.
+
+Transcribing a *stored* note is the one part that needs a service, because
+Anthropic has no transcription endpoint. Point `WAKE_STT_URL` at an
+OpenAI-compatible `/audio/transcriptions` endpoint and set `WAKE_STT_KEY`.
+Without it, notes are kept and playable and simply have no transcript — which is
+the honest outcome, and better than a made-up one.
+
+Recordings live in `<data dir>/voice`. They are counted in Settings → Voice, and
+Settings will tell you if the index points at a file that is no longer there.

@@ -1,12 +1,15 @@
 import { AnimatePresence, Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
-import { useMemo, useState } from 'react'
-import { Bell, Circle, CircleCheck, CircleDot, Plus, Target } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Bell, Circle, CircleCheck, CircleDot, Mic, Plus, Target } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { shortDate, until } from '../lib/time'
 import { Button, Chip, Empty, Field, Sheet, inputClass, spring } from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
+import { Recorder, VoicePlayer } from '../components/voice'
+import { voiceApi, type VoiceNote } from '../lib/voice'
+import { SOURCE_LABEL } from '../components/sources'
 
 type Tab = 'tasks' | 'goals'
 
@@ -21,6 +24,17 @@ export function Work() {
   const tasks = state?.tasks ?? []
   const goals = state?.goals ?? []
   const reminders = state?.reminders ?? []
+
+  /**
+   * Provenance, resolved once per render rather than per row: a task carries the
+   * group key it was made from, and the card is what turns that key into "from
+   * Slack — Acme's sync stopped". Cards churn; the task does not, so a task
+   * whose card is gone simply loses the line rather than breaking.
+   */
+  const cardByGroup = useMemo(() => {
+    const all = [...(state?.now ?? []), ...(state?.open ?? []), ...(state?.parked ?? [])]
+    return new Map(all.map(c => [c.group_key, c]))
+  }, [state?.now, state?.open, state?.parked])
 
   const doing = useMemo(() => tasks.filter(t => t.status === 'doing'), [tasks])
   const todo = useMemo(() => tasks.filter(t => t.status === 'todo'), [tasks])
@@ -80,6 +94,7 @@ export function Work() {
               <Reorder.Group axis="y" values={doing} onReorder={commitOrder} className="space-y-0">
                 {doing.map(t => (
                   <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
+                    origin={cardByGroup.get(t.source_card_group ?? '')}
                     onCycle={cycle} onEdit={setEditing} />
                 ))}
               </Reorder.Group>
@@ -91,11 +106,12 @@ export function Work() {
               <Reorder.Group axis="y" values={todo} onReorder={commitOrder} className="space-y-0">
                 {todo.map(t => (
                   <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
+                    origin={cardByGroup.get(t.source_card_group ?? '')}
                     onCycle={cycle} onEdit={setEditing} />
                 ))}
               </Reorder.Group>
             ) : (
-              <Empty>Nothing queued. Add a task, or make one from a card on Now.</Empty>
+              <EmptyDesk />
             )}
           </Group>
 
@@ -112,6 +128,7 @@ export function Work() {
                     <div className="pt-2">
                       {done.slice(0, 40).map(t => (
                         <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
+                          origin={cardByGroup.get(t.source_card_group ?? '')}
                           onCycle={cycle} onEdit={setEditing} static />
                       ))}
                     </div>
@@ -124,6 +141,8 @@ export function Work() {
       ) : (
         <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
       )}
+
+      {tab === 'tasks' && <VoiceNotes />}
 
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
       <TaskSheet open={!!editing} onClose={() => setEditing(null)} task={editing} />
@@ -143,9 +162,10 @@ function Group({ label, children, accent }: { label: string; children: React.Rea
 }
 
 function TaskRow({
-  task, goals, reminders, onCycle, onEdit, static: isStatic,
+  task, goals, reminders, origin, onCycle, onEdit, static: isStatic,
 }: {
   task: Task; goals: Goal[]; reminders: any[]
+  origin?: { title: string; url: string; sources: Array<{ source: keyof typeof SOURCE_LABEL }> }
   onCycle: (t: Task) => void; onEdit: (t: Task) => void; static?: boolean
 }) {
   const goal = goals.find(g => g.id === task.goal_id)
@@ -187,6 +207,18 @@ function TaskRow({
             )}
             {reminder && <Bell size={11} className="text-accent/70" />}
             {!!task.notes?.length && <span>{task.notes.length} note{task.notes.length > 1 ? 's' : ''}</span>}
+            {origin && (
+              <a
+                href={origin.url.startsWith('http') ? origin.url : undefined}
+                target="_blank"
+                rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-fg-mute hover:text-fg-dim transition-colors"
+                title={origin.title}
+              >
+                from {SOURCE_LABEL[origin.sources[0]?.source ?? 'github']}
+              </a>
+            )}
           </div>
         )}
       </div>
@@ -327,5 +359,83 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
         <Target size={12} /> Link tasks to this goal from any task's editor.
       </p>
     </Sheet>
+  )
+}
+
+/**
+ * The empty desk.
+ *
+ * "Nothing queued" is true and useless. What someone wants at an empty desk is
+ * the two ways work gets in — and one of them (make a task from a card) is the
+ * habit that makes the rest of Wake worth having.
+ */
+function EmptyDesk() {
+  return (
+    <div className="py-10">
+      <p className="text-[14px] text-fg-dim leading-relaxed">A clear desk.</p>
+      <p className="mt-1.5 text-[13px] text-fg-mute leading-relaxed max-w-[46ch]">
+        Work arrives two ways: press <span className="text-fg-dim">+ Task</span> above, or open something on
+        Now and turn it into one — a task made from a card keeps a link back to it and survives the card
+        disappearing.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Voice notes, alongside written ones.
+ *
+ * They live here rather than on their own page because a note is a note: the
+ * only difference is that this one was easier to make while walking.
+ */
+function VoiceNotes() {
+  const [notes, setNotes] = useState<VoiceNote[]>([])
+  const [stt, setStt] = useState<{ available: boolean; reason: string } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const load = () =>
+    voiceApi
+      .list()
+      .then(d => { setNotes(d.notes); setStt(d.stt) })
+      .catch(e => setErr((e as Error).message))
+
+  useEffect(() => { void load() }, [])
+
+  return (
+    <section className="mt-10">
+      <div className="flex items-baseline gap-2 mb-3">
+        <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute">Voice notes</h2>
+        {notes.length > 0 && <span className="tnum text-[12px] text-fg-mute">{notes.length}</span>}
+        <Mic size={12} className="text-fg-mute ml-auto" />
+      </div>
+
+      <Recorder onSaved={n => setNotes(prev => [n, ...prev])} />
+
+      {err && <p className="mt-2 text-[12.5px] text-bad">{err}</p>}
+      {stt && !stt.available && notes.some(n => !n.transcript) && (
+        <p className="mt-2 text-[11.5px] text-fg-mute leading-relaxed max-w-[54ch]">
+          Some notes have no transcript. {stt.reason}
+        </p>
+      )}
+
+      <div className="mt-3">
+        {notes.map(n => (
+          <VoicePlayer
+            key={n.id}
+            note={n}
+            onDelete={async () => {
+              await voiceApi.remove(n.id)
+              setNotes(prev => prev.filter(x => x.id !== n.id))
+            }}
+          />
+        ))}
+        {!notes.length && (
+          <p className="text-[12.5px] text-fg-mute py-3 leading-relaxed">
+            Nothing recorded. A voice note stays on this machine; nothing is uploaded unless you attach it
+            to something you send.
+          </p>
+        )}
+      </div>
+    </section>
   )
 }

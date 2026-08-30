@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowUpRight, Check, Clock, Copy, Inbox, ListPlus, MessageSquare, Pin, PinOff,
-  SquareCheck, UserMinus,
+  Sparkles, SquareCheck, Terminal, UserMinus,
 } from 'lucide-react'
 import type { Card as CardT } from '../lib/types'
 import { actions, reload } from '../lib/api'
 import { ago, atHour, timeOfDay } from '../lib/time'
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, Sheet } from './primitives'
+import { openLaunch } from '../lib/launch'
+import { addAttachment } from '../lib/agent'
+import { navigate } from '../App'
 
 const SNOOZE = [
   { label: 'Later today', at: () => Date.now() + 4 * 3.6e6 },
@@ -28,6 +31,19 @@ export function CardSheet({
   if (!card) return null
 
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
+
+  /** What either hand-off carries: why it is on you, plus every place it was seen. */
+  const excerpt = [
+    card.why,
+    card.excerpt,
+    ...card.sources.map(s => `${SOURCE_LABEL[s.source]}: ${s.title}`),
+  ].filter(Boolean).join('\n')
+
+  const template = card.sources.some(s => s.source === 'sentry') ? 'sentry-issue'
+    : card.sources.some(s => s.source === 'slack') ? 'slack-thread'
+    : card.sources.some(s => s.source === 'gmail') ? 'mail-thread'
+    : card.sources.some(s => s.source === 'claude') ? 'continue-session'
+    : 'blank'
   const resumeCmd = card.sources.find(s => s.source === 'claude')?.meta?.resume_cmd as string | undefined
   const hasSlack = card.sources.some(s => s.source === 'slack')
 
@@ -123,6 +139,41 @@ export function CardSheet({
             )}
           </div>
         )}
+
+        {/* The two hand-offs, side by side and named differently on purpose:
+            one asks the agent inside Wake, the other opens a session on the
+            machine. They are not the same thing. */}
+        <div className="mt-5 grid grid-cols-2 gap-1.5">
+          <Button
+            variant="solid"
+            onClick={() => {
+              addAttachment({ kind: 'card', ref: card.group_key, title: card.title, excerpt, url: card.url })
+              onClose()
+              navigate('/agent')
+            }}
+          >
+            <Sparkles size={14} /> Ask Wake
+          </Button>
+          <Button
+            variant="solid"
+            onClick={() => {
+              onClose()
+              openLaunch(
+                [{
+                  kind: card.sources.some(s => s.source === 'claude') ? 'session' : 'card',
+                  ref: card.sources.find(s => s.source === 'claude')?.meta?.session_id ?? card.group_key,
+                  title: card.title,
+                  url: card.url,
+                  excerpt,
+                  why: 'the card this is about',
+                }],
+                template,
+              )
+            }}
+          >
+            <Terminal size={14} /> Open in Claude Code
+          </Button>
+        </div>
 
         <div className="mt-5">
           <SectionLabel>Move to</SectionLabel>

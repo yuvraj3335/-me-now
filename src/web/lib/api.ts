@@ -109,6 +109,10 @@ export const actions = {
   pushSubscribe: (subscription: unknown, label?: string) => post('/push/subscribe', { subscription, label }),
   pushUnsubscribe: (endpoint: string) => post('/push/unsubscribe', { endpoint }),
   pushTest: () => post<{ sent: boolean; devices: number }>('/push/test'),
+  pushStatus: () =>
+    req<{ devices: Array<{ endpoint: string; ua: string | null; label: string | null; created_at: number; last_ok_at: number | null }> }>(
+      '/push/status',
+    ),
 }
 
 /** Poll while the tab is visible; stop entirely when it is not. */

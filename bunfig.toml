@@ -1,0 +1,6 @@
+[test]
+# Every test file shares one process, so whichever one imports `db` first fixes
+# the database path for all of them. Setting it in a preload — before any module
+# graph exists — is what keeps a test run from writing into the live SQLite file
+# under ~/.local/share/wake.
+preload = ["./test/setup.ts"]

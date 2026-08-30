@@ -2,6 +2,8 @@ import { Hono } from 'hono'
 import { existsSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { api } from './api'
+import { agentApi, bootAgent } from './agentApi'
+import { originGuard, sweepConfirmations } from './security'
 import { HOST, PORT, POLL_INTERVAL_MS, PUBLIC_URL, REMINDER_TICK_MS, IS_DEV } from './env'
 import { ingest } from './ingest'
 import { runReminders } from './push'
@@ -21,6 +23,9 @@ app.use('*', async (c, next) => {
   }
 })
 
+// Cloudflare Access proves who is asking; this proves which page asked.
+app.use('*', originGuard())
+
 app.onError((err, c) => {
   console.error(`error on ${c.req.method} ${c.req.path}:`, err)
   return c.json({ error: err.message }, 500)
@@ -35,6 +40,7 @@ app.get('/healthz', c =>
 )
 
 app.route('/api', api)
+app.route('/api/agent', agentApi)
 
 /* ------------------------------- static --------------------------------- */
 
@@ -100,7 +106,19 @@ if (!process.env.WAKE_NO_SCHEDULER) {
     )
   })
   every(REMINDER_TICK_MS, 'reminders', runReminders)
+  // Spent and expired confirmation tokens are noise in a table that should only
+  // ever contain live ones.
+  every(6 * 3.6e6, 'confirmations', async () => { sweepConfirmations() })
 }
+
+const boot = bootAgent()
+console.log(
+  `agent: ${boot.repos} repos, ${boot.skills} skills indexed, key ${boot.key.present ? `via ${boot.key.via} (…${boot.key.last4})` : 'MISSING — Settings → Agent'}` +
+  (boot.interrupted ? `, ${boot.interrupted} interrupted turn(s) closed` : '') +
+  (boot.expired ? `, ${boot.expired} orphaned approval(s) expired` : '') +
+  (boot.packs ? `, ${boot.packs} interrupted launch(es) closed` : ''),
+)
+console.log(`claude code: ${boot.launcher.ok ? boot.launcher.version : boot.launcher.reason}`)
 
 console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${IS_DEV ? '  [dev]' : ''}`)
 

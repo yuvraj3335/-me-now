@@ -25,15 +25,3 @@ export function SourceDot({ source, size = 6 }: { source: SourceName; size?: num
     />
   )
 }
-
-/** Shown when several sources collapsed into one card — the dedup made visible. */
-export function SourceTrail({ sources }: { sources: SourceName[] }) {
-  const unique = [...new Set(sources)]
-  if (unique.length < 2) return null
-  return (
-    <span className="inline-flex items-center gap-1" title={unique.map(s => SOURCE_LABEL[s]).join(' + ')}>
-      {unique.map(s => <SourceDot key={s} source={s} size={5} />)}
-      <span className="text-fg-mute text-[11.5px] ml-0.5">{unique.length} sources</span>
-    </span>
-  )
-}

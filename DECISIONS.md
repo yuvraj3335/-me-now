@@ -73,13 +73,28 @@ Credentials resolve in a chain, best-available-wins (`src/server/mcp/creds.ts`):
    for a claude.ai connector, per the evidence above
 3. A static token from the environment — the escape hatch
 
-## 3. No Claude model anywhere in the data path — enforced, not just intended
+## 3. No model in the CARD data path — narrowed, and still enforced
 
-The brief says Wake must not use a model to fetch or summarize. It doesn't, and
-this is a structural property rather than a promise: Wake has no Anthropic SDK
-dependency and no API key in its environment. Every field on every card is
-either copied verbatim from a tool result or computed by deterministic code you
-can read. "Why it is on me" is a rule firing, not a generated sentence.
+This decision used to read "no Claude model anywhere", enforced structurally by
+having no Anthropic dependency and no API key. Wake now has an agent, so that
+sentence is no longer true and keeping it would be a lie by omission.
+
+What survives is the half that was actually load-bearing: **nothing a model
+produces can reach a card**. The ingest path, the reference extraction, the
+union-find dedup and the pile rules are the same deterministic code they were,
+and the agent's tables (`conversations`, `turns`, `turn_events`, `approvals`, …)
+are disjoint from `cards` and `card_state`. No agent tool writes to them. So the
+guarantee you actually rely on at 7am — that your Now pile is a rule firing and
+not a generated sentence — is intact, and "why is this on me" is still answerable
+by reading code.
+
+**Updated again.** Wake now does carry the Anthropic SDK and a key — see #14 for
+why the engine changed. The guarantee that survives is the same one, and it is
+structural rather than promised: the agent's tables (`conversations`, `turns`,
+`turn_events`, `approvals`, `agent_tool_calls`, `launch_packs`, …) are disjoint
+from `cards` and `card_state`, and no tool in `src/server/agent/tools.ts` writes
+to either. A test asserts no tool is shell-shaped; nothing asserts a model
+cannot reach a card, because nothing gives it a way to try.
 
 ## 4. Dedup is union-find over extracted references, not fuzzy similarity
 
@@ -123,13 +138,59 @@ So I use the real libraries one layer down — `d3-scale` for the scales and
 `motion`. Same math, no imposed chrome, and the bars/lines can be animated as
 first-class motion elements instead of via a chart library's animation prop.
 
-## 7. Read-only against the world is enforced by scope, not by discipline
+## 7. Writes are gated and audited, not impossible
 
-Wake requests only read scopes from Slack, only calls read tools on Gmail, and
-uses `gh` with the token it already has. The MCP client has a **write-tool
-denylist** (`src/server/mcp/client.ts`) that refuses to invoke any tool whose name
-matches send/post/create/update/delete/trash/archive patterns, so a future edit
-that adds a write call fails loudly instead of quietly messaging your colleagues.
+This used to say Wake was read-only, enforced by a denylist in the MCP client
+that refused any tool whose *name* looked like a mutation. That was the right
+call for a read-only aggregator and the wrong shape for an operations console:
+the whole point of the agent is to be able to fix something.
+
+A name-matching denylist was also the wrong mechanism. It refuses
+`accounts_update` and waves through `truto proxy -X DELETE`, because it reads
+identifiers rather than intent.
+
+What replaced it is a classifier over the actual command
+(`src/server/truto/classify.ts`), with four tiers:
+
+| Tier | Example | Treatment |
+|---|---|---|
+| read | `integrations list` | runs |
+| provider read | `unified crm contacts` | runs, and is **disclosed** as reaching a live customer account |
+| mutation | `integrations update` | blocks for approval |
+| high-risk | `proxy -m delete`, `batch` | blocks for approval, marked as touching a third party |
+
+Two properties matter more than the tiers:
+
+- **Unknown fails closed.** An unrecognised command is a mutation. A classifier
+  that guesses "probably a read" on something it has not seen is the one bug
+  that would let an unreviewed write through.
+- **The gate is in the code path, not the prompt.** `truto_apply` calls
+  `requestApproval` and *blocks* — the model does not choose to ask. A model that
+  decided to skip the question still cannot get past it.
+
+Around the gate sits the sequence the brief asked for: preflight read, redacted
+backup, diff, approval, staleness re-check against a fingerprint, apply once,
+verification read, audit row. If the preflight fails, nothing is applied — that
+path has been exercised against a real 404 and refused rather than proceeding.
+
+**Outbound communication used to be impossible rather than gated. That changed
+for mail, and only for mail.**
+
+A console with an inbox that cannot reply is a reader, not a console. So Send
+exists, and it is gated by something stronger than a prompt: a confirmation
+token bound to a hash of the exact message — account, recipients, subject, body.
+Edit the body after approving and the hash no longer matches, so the approval is
+dead and a new one has to be granted against the new text. Tokens are
+single-use, expire, and are checked in exactly one function (`security.ts`).
+
+The read-only denylist in the MCP client stays, because the card ingest must
+never write. Sending goes through `callWriteTool`, a door with a name on it, and
+a test asserts exactly one module calls it. Writing that test is what found
+`modify_message` — Gmail's own mutation for marking read and relabelling — sailing
+through a denylist that only knew words like "send" and "delete".
+
+Slack remains un-sendable: Wake requests no Slack write scope, so `slack_draft`
+produces a draft and says so. Never "posted".
 
 ## 8. Gmail ships as an adapter behind a documented setup step
 
@@ -187,3 +248,222 @@ nothing. This is an Apple constraint, not an implementation gap. Wake ships a
 real service worker, a real manifest, and VAPID web push, and the Connections
 page tells you plainly to install to Home Screen on iPhone before enabling
 notifications rather than letting the toggle silently do nothing.
+
+## 14. Two engines, and the reasons they are not one
+
+**Reversed.** The first version drove the in-app chat with `claude -p`, on the
+argument that authentication, caching and compaction came free. They do. But a
+chat and a launcher are different products, and running both on one engine made
+each one worse:
+
+- **The chat needs a gate Wake owns.** A mutating tool has to *block* on a human,
+  durably, resumably, mid-turn. Driving Claude Code as a subprocess meant that
+  gate lived behind an MCP server Wake ran for itself, minting a per-turn token,
+  answering JSON-RPC, and returning a `405` to a GET it had no use for — a lot of
+  machinery whose only job was to let Wake wait on a click inside its own
+  process. Owning the loop makes it a promise.
+- **The launcher must be Claude Code, exactly.** The whole value of "open this in
+  Claude Code" is that the session is real: it lands in `~/.claude/projects`, it
+  has the repositories and the CLI, and `claude --resume <id>` in a terminal
+  picks it up with full interactive permissions. Wrapping that in Wake's own
+  loop would produce something that looked like Claude Code and was not.
+
+So there are two, deliberately:
+
+| | Wake Agent | Open in Claude Code |
+|---|---|---|
+| engine | `@anthropic-ai/sdk` | the `claude` binary on this machine |
+| credential | a key Wake holds (Settings → Agent) | whatever `claude` is already signed in with |
+| loop | Wake's, in `agent/engine.ts` | Claude Code's |
+| gate | blocks inside the tool call | Claude Code's own permission model |
+| can edit files | no | yes, under its own permissions |
+
+`ANTHROPIC_API_KEY` is stripped from every child environment (`redact.ts`)
+precisely so the two stay separate: Claude Code prefers an API key over its own
+login when one is present, and leaving Wake's key in the environment would move
+every launched session onto Wake's billing without anyone deciding that.
+
+The launcher mints the session id itself and passes `--session-id`, so the
+resume command shown in the UI is the id that was used rather than one scraped
+out of a log line that may never arrive. Verified end to end: pack → launch →
+transcript on disk at that id → `claude --resume <id>` answers.
+
+Two things had to be discovered by running rather than by reading:
+
+- **Claude Code's login is not always a file.** On Linux it is
+  `~/.claude/.credentials.json`; on macOS it is the login keychain. The first
+  version of the availability check read only the file and therefore declared
+  every Mac signed out. It now probes the keychain for the item's *existence*
+  (`find-generic-password` without `-w`, which does not prompt and returns no
+  secret) and reports "cannot tell" rather than "no" when it genuinely cannot.
+- **`--permission-prompt-tool` does not exist in this version (2.1.233)**, which
+  is another reason the chat's gate had to be Wake's own.
+
+## 15. The agent gets no shell — and no MCP server is needed to say so
+
+Wake used to run its own MCP server at `/mcp/<token>` so the Claude Code
+subprocess could call back into it. With the chat on the SDK (#14) that server
+had no consumer, so it is deleted rather than left as a token-minting endpoint
+nothing uses.
+
+The tool surface is typed and enumerable (`src/server/agent/tools.ts`). There is
+no `bash` tool, no editor, and every Truto invocation is an argument array handed
+to `Bun.spawn` — no shell, no interpolation — so a customer name with a semicolon
+in it is an argument rather than a second command. Tests assert it: no tool is
+named anything shell-shaped, no file in `src/server` spawns a shell or
+interpolates a command string, and every tool is reachable from some mode. That
+last one is how two dead tools were found the first time round — `truto_apply`
+and `slack_thread` both existed, looked implemented, and could never be called.
+
+Work that genuinely needs an editor does not get one here. It gets packed and
+handed to Claude Code, which has one and applies its own permissions to it.
+
+## 16. Modes change the tool surface, not a label
+
+Nine modes, each with an allowlist of Wake's own tools. The second allowlist —
+Claude Code's built-ins — is gone with the subprocess: there is no `Edit`,
+`Write` or `Bash` in any mode now, in any configuration. `engineering` is the
+mode that scopes a change and hands it to a session; it is not a mode that
+edits.
+
+`triage` is read-only and cannot reach a mutating tool even with an approval,
+and it cannot draft outbound mail either. The allowlist is checked at call time,
+not only when the list is built, because a model that remembers a tool name from
+an earlier turn in another mode would otherwise still be able to call it.
+
+## 17. Skills are indexed by metadata and loaded one at a time
+
+The corpus is 28 skills across three catalogs and far more Markdown than belongs
+in any prompt. Startup indexes `id / name / whenToUse / path` only; a body is
+read when a turn needs it.
+
+Routing lives in code (`src/server/skills/route.ts`) rather than in a system
+prompt, because the brief's rules are mandatory and a prompt can be ignored:
+CLI work always loads `truto-cli-toolbelt` first, anything that could mutate also
+loads `truto-safe-admin-operator`, a `*Service.ts` change forces
+`ginger-migration-guardrails`, and an API-contract change forces
+`platform-change-checklist`. Each rule has a test that fails if it is edited out.
+
+Which skills were chosen, and the rule that chose them, are shown in the UI and
+persisted per turn — "why is it doing this" should be answerable from the screen.
+
+## 18. Turns are durable; the browser is a viewer
+
+Every visible thing a turn does is written to `turn_events` with a gap-free
+per-turn `seq` before it reaches a browser, and the SSE endpoint is a cursor over
+that table. One code path serves a fresh connection, a reconnect after a dropped
+network, and a phone that slept through half a turn — all of them `?after=<seq>`.
+
+A turn that ends without a result event is recorded as an **error**, not as done.
+The first version defaulted to done, which meant a killed process reported
+success — the exact false-success this system exists to prevent.
+
+## 19. Worktrees are resolved from git, not from a list of names
+
+The brief listed eleven worktrees by name. Names drift. A linked worktree's
+`.git` is a file reading `gitdir: <canonical>/.git/worktrees/<name>`, so the
+upstream repository is a fact to read rather than a convention to maintain. All
+ten present worktrees resolve correctly, and the registry refuses to let one pass
+itself off as a separate product.
+
+The registry also carries a curated topic list per repository, because README
+first lines are written for someone who already knows the product: nothing in
+truto's README says "salesforce" or "sync job", and a customer report says little
+else.
+
+## 20. An unavailable connector says so
+
+Platform MCP and truto-monitoring MCP are consumed, not reimplemented — they
+already own the OpenAPI catalog and the monitoring entities respectively, and a
+second copy would diverge. When either is unconfigured, the tool returns
+`available: false` with the reason, and the system prompt names the gap
+explicitly. Describing what a connector *would* have returned is worse than
+saying it is down.
+
+## 21. Mail is a client, not a card feed
+
+Cards already showed unread mail. That is the right shape for "is someone
+waiting on me" and the wrong shape for "answer this", so Mail is a real client
+beside the piles rather than a filter over them: boxes, labels, search,
+per-account pagination, threads, sanitized bodies, compose, reply, reply-all,
+forward, drafts, send.
+
+Three calls inside it worth naming:
+
+- **Plain text is preferred; HTML is a fallback.** Email HTML is the most
+  hostile input this app handles, so it is sanitized to a short allowlist on the
+  way *into* the database (`mail/sanitize.ts`) rather than on the way out —
+  scripts, styles, frames and every event handler are gone before anything is
+  stored, and the rendered subset can only be tags on that list.
+- **Remote images do not load until asked.** A tracking pixel reports that you
+  opened the mail and roughly from where. The original source is kept in a data
+  attribute so "load images" is one click and not a refetch.
+- **Pagination is per account.** Two inboxes advance independently, and one
+  shared cursor silently drops the slower one's older mail.
+
+Attachments are listed as metadata and never downloaded. Wake has no reason to
+hold a copy of a customer's PDF.
+
+## 22. Gmail is not connected on this deployment, and the product says so
+
+The DevBox reaches Gmail through a **claude.ai connector**, and all 23 `mcpOAuth`
+entries on that box have an empty `accessToken` (#2). So Wake cannot read that
+mailbox, and no amount of adapter code changes it.
+
+Mail therefore ships complete and shows the real reason, with the exact fix —
+add Gmail as a directly-added HTTP server, or set `WAKE_GMAIL_TOKEN`. The
+alternative was a demo inbox, which is worse than an empty one: it teaches you
+to trust a screen that is not reading your mail.
+
+The same rule runs deeper than the empty state. `probeMail` asks the server what
+tools it actually offers and matches by shape, so a connection that can read but
+not send disables Send and says which tools were advertised — rather than failing
+at the moment someone presses it.
+
+## 23. Voice keeps the recording, whatever else fails
+
+Three separate things, deliberately not one feature:
+
+- **Instruct** — live dictation into a field, using the browser's own recogniser.
+  It exists in Chrome and Safari and does not exist in Firefox, so where it is
+  missing the button says so instead of sitting there inert.
+- **Voice notes** — recorded with `MediaRecorder`, written to disk under the data
+  directory, indexed in SQLite. The file is written *before* anything is
+  transcribed, which is the whole design: a note with no transcript is a note, a
+  note with an invented transcript is something you act on wrongly later.
+- **Listen** — playback with a real scrub bar, served with HTTP range support so
+  seeking works rather than restarting.
+
+Nothing here sends. A transcript lands in a field and a human still presses the
+button; a test reads the source and fails if a dictation handler ever gains the
+power to submit, launch or send.
+
+Anthropic has no transcription endpoint, so transcribing a *stored* note needs a
+service Wake does not bundle. Unset, it says so.
+
+## 24. Cloudflare Access proves who; it does not prove which page
+
+Access is the front door and it is not enough on its own. Its cookie rides along
+on a cross-site form post from any tab the same browser has open, so every
+state-changing request is checked against `Sec-Fetch-Site` and `Origin`
+(`security.ts`). Reads are untouched; the OAuth callback is the single exemption,
+because an identity provider redirecting to it has no same-origin referrer by
+construction.
+
+The audit trail is a **separate table** from the analytics log. `events` is
+written by the card pipeline on every poll and drives Pulse; `audit_events`
+records what this system did to the outside world and who asked. Mixing them
+makes both unreadable, and lets a retention policy written for one quietly
+delete the other.
+
+## 25. Schema changes are numbered migrations
+
+The boot block was one `CREATE IF NOT EXISTS` script, which is fine until a
+change is not idempotent — an `ALTER`, a backfill, a `DROP`. Everything new goes
+through a numbered, recorded, single-transaction migration
+(`schema_migrations`), because a half-applied schema is worse than an unapplied
+one: the next boot skips the half it believes ran.
+
+The existing tables stayed under their existing names. Renaming `conversations`
+to `agent_conversations` would have been churn against a live database for no
+gain — they are already namespaced by the section they live in.

@@ -124,3 +124,42 @@
         transparent 70%);
   }
 }
+
+@layer utilities {
+  /* Horizontal chip rails scroll; a scrollbar under them is noise. */
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /*
+    Mail and Agent are working surfaces, not reading columns: a thread list beside
+    a thread, or history beside a conversation beside an inspector. Forcing them
+    into the 760px column would waste two thirds of a laptop screen, so the shell
+    switches on this class instead of every page re-deriving its own width.
+  */
+  .column  { max-width: 760px; margin-inline: auto; }
+  .bleed   { max-width: none; margin-inline: 0; }
+
+  /* Keyboard focus on a list row: an ink shift, never a ring around a card. */
+  .row-focus { background: var(--color-ink-800); }
+
+  /* Sanitized mail bodies. Scoped so email CSS cannot reach the rest of the app. */
+  .mail-body { font-size: 13.5px; line-height: 1.65; color: var(--color-fg-dim); word-break: break-word; }
+  .mail-body a { color: var(--color-accent); text-decoration: none; }
+  .mail-body a:hover { text-decoration: underline; }
+  .mail-body p { margin: 0 0 0.75em; }
+  .mail-body blockquote {
+    margin: 0.5em 0; padding-left: 0.75rem;
+    border-left: 1px solid color-mix(in oklab, var(--color-fg) 12%, transparent);
+    color: var(--color-fg-mute);
+  }
+  .mail-body pre { overflow-x: auto; padding: 0.5rem; background: var(--color-ink-850); border-radius: 8px; }
+  .mail-body table { display: block; overflow-x: auto; max-width: 100%; border-collapse: collapse; }
+  .mail-body td, .mail-body th { padding: 0.25rem 0.5rem; vertical-align: top; }
+  /* A blocked remote image keeps its box so the layout does not jump when loaded. */
+  .mail-body img { max-width: 100%; height: auto; }
+  .mail-body img:not([src]) {
+    min-width: 1px; min-height: 1px;
+    background: color-mix(in oklab, var(--color-fg) 5%, transparent);
+    border-radius: 4px;
+  }
+}

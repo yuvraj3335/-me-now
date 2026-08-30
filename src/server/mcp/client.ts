@@ -12,12 +12,21 @@ export type JsonRpcResponse = { jsonrpc: '2.0'; id: number | string; result?: an
 export type McpTool = { name: string; description?: string; inputSchema?: unknown }
 
 /**
- * Wake is read-only against the outside world. Rather than trusting every future
- * edit to remember that, any tool whose name looks like a mutation is refused
- * here — a mistake becomes a loud error instead of a message sent to a colleague.
- * See DECISIONS.md #7.
+ * Wake's ingest path is read-only against the outside world. Rather than
+ * trusting every future edit to remember that, any tool whose name looks like a
+ * mutation is refused here — a mistake becomes a loud error instead of a message
+ * sent to a colleague. See DECISIONS.md #7.
+ *
+ * `modify` and `patch` are on the list because Gmail's own mutation for marking
+ * read and changing labels is `modify_message`, which the first version of this
+ * pattern waved straight through: it names an operation nobody would call
+ * "send", and it changes a real mailbox.
+ *
+ * Sending mail is the one sanctioned exception, and it goes through
+ * `callWriteTool` below — a named door, not a hole.
  */
-const WRITE_TOOL = /(^|_)(send|post|create|update|delete|remove|trash|untrash|archive|label|unlabel|mark|unmark|write|set|add|edit|reply|schedule|invite|join|leave|upload|assign|resolve|close|merge|approve)(_|$)/i
+const WRITE_TOOL =
+  /(^|_)(send|post|create|update|patch|modify|move|delete|remove|trash|untrash|archive|label|unlabel|mark|unmark|star|unstar|write|set|add|insert|import|edit|reply|forward|schedule|invite|join|leave|upload|assign|resolve|close|merge|approve)(_|$)/i
 
 export class McpError extends Error {
   constructor(message: string, readonly code?: number, readonly status?: number) {
@@ -281,6 +290,25 @@ export class McpSession {
     if (WRITE_TOOL.test(name)) {
       throw new McpError(`refusing to call "${name}": Wake is read-only against external systems`)
     }
+    return this.invoke(name, args)
+  }
+
+  /**
+   * The sanctioned way past the denylist above.
+   *
+   * The card ingest and every search path must stay read-only, and the denylist
+   * is what guarantees that without trusting each future edit to remember. But
+   * "Wake can never send" stopped being true when Mail grew a Send button, and
+   * a denylist with a quiet bypass is worse than one with a named door.
+   *
+   * Callers reach this only after a confirmation token bound to the exact
+   * arguments has been spent (`security.ts`), and every call is audited.
+   */
+  async callWriteTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    return this.invoke(name, args)
+  }
+
+  private async invoke(name: string, args: Record<string, unknown>): Promise<unknown> {
     await this.init()
     const r = await this.transport.request('tools/call', { name, arguments: args })
     if (r?.isError) {
@@ -292,19 +320,27 @@ export class McpSession {
 
   /** Tool results carry text and/or structured content; prefer the structured form. */
   async callJson<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-    const r: any = await this.callTool(name, args)
-    if (r?.structuredContent !== undefined) return r.structuredContent as T
-    const text = extractText(r)
-    if (!text) return undefined as T
-    try {
-      return JSON.parse(text) as T
-    } catch {
-      return text as unknown as T
-    }
+    return unwrap<T>(await this.callTool(name, args))
+  }
+
+  /** `callJson`'s counterpart for the audited write path. */
+  async callWriteJson<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    return unwrap<T>(await this.callWriteTool(name, args))
   }
 
   close() {
     return this.transport.close()
+  }
+}
+
+function unwrap<T>(r: any): T {
+  if (r?.structuredContent !== undefined) return r.structuredContent as T
+  const text = extractText(r)
+  if (!text) return undefined as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return text as unknown as T
   }
 }
 

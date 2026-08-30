@@ -1,5 +1,18 @@
+/**
+ * Settings.
+ *
+ * The old page printed shell commands as status text — `not connected — … run:
+ * claude mcp login slack` — which is a README wearing a product's clothes. Each
+ * row here says what is true in a sentence and offers the one action that fixes
+ * it; the command that would also fix it lives behind a disclosure, because when
+ * it is the answer it is the whole answer, and the rest of the time it is noise.
+ */
+
 import { useEffect, useState } from 'react'
-import { Bell, BellRing, Check, Link2, Loader2, Smartphone, X } from 'lucide-react'
+import {
+  Activity, Bell, BellRing, Check, ChevronRight, KeyRound, Link2, Loader2, Mic,
+  Smartphone, Terminal,
+} from 'lucide-react'
 import { actions } from '../lib/api'
 import type { SourceStatus } from '../lib/types'
 import {
@@ -7,17 +20,65 @@ import {
 } from '../lib/push'
 import { Button, Field, Sheet, inputClass } from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
+import { dictationSupported, fmtBytes, recordingSupported } from '../lib/voice'
+import { ago } from '../lib/time'
+
+type Overview = {
+  agent: { key: { present: boolean; via: string; last4: string | null }; model: string; modes: number; engine: string }
+  claudeCode: { ok: boolean; binary: string; version: string | null; loggedIn: boolean | null; reason: string; packDir: string; recentSessions: number }
+  mail: { connected: boolean; reason: string | null; accounts: Array<{ address: string; connected: boolean; via: string; reason: string | null }>; canSend: boolean; canDraft: boolean; discovered: string[] }
+  voice: { stt: { available: boolean; reason: string }; storage: { count: number; bytes: number }; missing: number }
+  skills: { total: number; byCatalog: Record<string, number> }
+  workspace: { root: string; repos: number }
+  remote: Record<string, { configured: boolean; url: string | null; why: string | null }>
+  identity: { emails: string[]; github: string; gmailAccounts: string[] }
+  publicUrl: string
+}
+
+/**
+ * Which link in the credential chain answered, in words. Naming it matters: a
+ * source that works "through Claude Code's token" goes dark the moment someone
+ * removes that entry, and a source on Wake's own login does not.
+ */
+const VIA: Record<string, string> = {
+  'wake-oauth': 'Wake’s own login',
+  'claude-bridge': 'Claude Code’s token on this machine',
+  env: 'an environment variable',
+  'gh cli': 'the token the gh CLI already holds',
+  filesystem: 'the transcripts on this machine',
+}
+
+/**
+ * Where each source's shell fallback lives. Kept next to the row it belongs to
+ * rather than in prose, and shown only when someone opens the disclosure.
+ */
+const CLI_FALLBACK: Record<string, string> = {
+  slack: 'claude mcp add --transport http slack https://mcp.slack.com/mcp\nclaude mcp login slack',
+  sentry: 'claude mcp add --transport http sentry https://mcp.sentry.dev/mcp\nclaude mcp login sentry',
+  gmail: 'claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1\nclaude mcp login gmail',
+}
 
 export function Settings() {
   const [sources, setSources] = useState<SourceStatus[]>([])
   const [redirectUri, setRedirectUri] = useState('')
+  const [over, setOver] = useState<Overview | null>(null)
+  const [truto, setTruto] = useState<{ profiles: string[]; active: any; error?: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [clientFor, setClientFor] = useState<SourceStatus | null>(null)
   const [pushOn, setPushOn] = useState(false)
-  const [pushMsg, setPushMsg] = useState<string | null>(null)
+  const [devices, setDevices] = useState(0)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [keySheet, setKeySheet] = useState(false)
+  const [audit, setAudit] = useState(false)
 
-  const load = () =>
-    actions.connections().then(d => { setSources(d.sources); setRedirectUri(d.redirectUri) }).catch(() => {})
+  const load = async () => {
+    await Promise.all([
+      actions.connections().then(d => { setSources(d.sources); setRedirectUri(d.redirectUri) }).catch(() => {}),
+      fetch('/api/settings').then(r => r.json()).then(setOver).catch(() => {}),
+      fetch('/api/settings/truto').then(r => r.json()).then(setTruto).catch(() => {}),
+      actions.pushStatus().then(d => setDevices(d.devices.length)).catch(() => {}),
+    ])
+  }
 
   useEffect(() => {
     void load()
@@ -35,82 +96,229 @@ export function Settings() {
       } else if (r.error === 'needs_client_id') {
         setClientFor(s)
       } else {
-        setPushMsg(r.detail ?? r.error ?? 'Could not start authorization')
+        setMsg(r.detail ?? r.error ?? 'Could not start authorization')
       }
     } catch (e) {
-      setPushMsg((e as Error).message)
+      setMsg((e as Error).message)
     } finally {
       setBusy(null)
     }
   }
 
   async function togglePush() {
-    setPushMsg(null)
+    setMsg(null)
     if (pushOn) {
       await disablePush()
       setPushOn(false)
+      await load()
       return
     }
     const r = await enablePush()
     setPushOn(r.ok)
-    if (!r.ok) setPushMsg(r.reason ?? 'Could not enable notifications')
+    if (!r.ok) setMsg(r.reason ?? 'Could not enable notifications')
+    else {
+      // Confirming the round trip immediately is the difference between "the
+      // toggle is on" and "this device will actually be woken".
+      const t = await actions.pushTest()
+      setDevices(t.devices)
+      setMsg(t.devices ? `On, and a test reached ${t.devices} device${t.devices > 1 ? 's' : ''}.` : 'On, but no device is registered yet.')
+    }
   }
 
   return (
     <div className="pb-24">
       <header className="pt-8 pb-6">
         <h1 className="text-[26px] sm:text-[30px] font-medium tracking-[-0.025em] leading-none">Settings</h1>
-        <p className="mt-2 text-[13px] text-fg-mute">Connections and notifications</p>
+        <p className="mt-2 text-[13px] text-fg-mute">What is connected, and what runs where</p>
       </header>
 
-      <section className="mt-4">
-        <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute mb-1">Sources</h2>
-        <p className="text-[12.5px] text-fg-mute mb-4 leading-relaxed">
-          Wake reads these and never writes to them.
-        </p>
-
-        <div>
-          {sources.map(s => (
-            <div key={s.name} className="flex items-start gap-3 py-4 hairline last:border-0">
-              <div className="pt-1.5"><SourceDot source={s.name} size={7} /></div>
-              <div className="grow min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-[14.5px]">{SOURCE_LABEL[s.name]}</span>
-                  {s.ok
-                    ? <Check size={13} className="text-ok shrink-0" />
-                    : <X size={13} className="text-fg-mute shrink-0" />}
-                </div>
-                <p className="text-[12.5px] text-fg-mute mt-1 leading-snug">{s.detail}</p>
-                {s.via && (
-                  <p className="text-[11.5px] text-fg-mute/70 mt-1">
-                    via {s.via === 'claude-bridge' ? 'Claude Code’s token' : s.via}
-                  </p>
-                )}
+      {/* ------------------------------ sources ------------------------------ */}
+      <Section title="Sources" hint="Wake reads these on a timer and never writes to them.">
+        {sources.map(s => (
+          <div key={s.name} className="flex items-start gap-3 py-4 hairline last:border-0">
+            <div className="pt-1.5"><SourceDot source={s.name} size={7} /></div>
+            <div className="grow min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[14.5px]">{SOURCE_LABEL[s.name]}</span>
+                <span className={`text-[12.5px] ${s.ok ? 'text-ok' : 'text-fg-mute'}`}>
+                  {s.ok ? 'connected' : 'not connected'}
+                </span>
               </div>
-              {s.oauthable && (
-                <Button
-                  variant={s.ok ? 'ghost' : 'solid'}
-                  onClick={() => (s.ok ? actions.disconnect(s.name).then(load) : connect(s))}
-                  disabled={busy === s.name}
-                >
-                  {busy === s.name ? <Loader2 size={13} className="animate-spin" /> : null}
-                  {s.ok ? 'Disconnect' : 'Connect'}
-                </Button>
-              )}
+              {s.ok && s.via && <p className="text-[11.5px] text-fg-mute mt-1">through {VIA[s.via] ?? s.via}</p>}
+              {!s.ok && <Reason name={s.name} detail={s.detail} />}
+            </div>
+            {s.oauthable && (
+              <Button
+                variant={s.ok ? 'ghost' : 'solid'}
+                onClick={() => (s.ok ? actions.disconnect(s.name).then(load) : connect(s))}
+                disabled={busy === s.name}
+              >
+                {busy === s.name ? <Loader2 size={13} className="animate-spin" /> : null}
+                {s.ok ? 'Disconnect' : 'Connect'}
+              </Button>
+            )}
+          </div>
+        ))}
+      </Section>
+
+      {/* ------------------------------- mail -------------------------------- */}
+      {over && (
+        <Section title="Mail accounts" hint="Both inboxes are separate connections, not one with a filter.">
+          {over.mail.accounts.map(a => (
+            <div key={a.address} className="flex items-start gap-3 py-3 hairline last:border-0">
+              <div className="grow min-w-0">
+                <div className="text-[14px]">{a.address}</div>
+                <p className={`text-[12px] mt-0.5 ${a.connected ? 'text-ok' : 'text-fg-mute'}`}>
+                  {a.connected ? `connected through ${a.via}` : 'not connected'}
+                </p>
+              </div>
             </div>
           ))}
-        </div>
-      </section>
+          {over.mail.connected && (
+            <p className="text-[12px] text-fg-mute pt-2 leading-relaxed">
+              This connection can {over.mail.canSend ? 'send' : 'read but not send'}
+              {over.mail.canDraft ? ' and save drafts' : ''}.
+              {!over.mail.canSend && ' Composing still works; Send is disabled rather than failing at the last step.'}
+            </p>
+          )}
+          {!over.mail.connected && over.mail.reason && (
+            // The first sentence is the answer; the rest is the mechanism, and
+            // it is already spelled out on the Mail page itself.
+            <p className="text-[12.5px] text-fg-mute pt-2 leading-relaxed">
+              {over.mail.reason.split('. ')[0]}. Open Mail for the full reason and the fix.
+            </p>
+          )}
+        </Section>
+      )}
 
-      <section className="mt-10">
-        <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute mb-4">Notifications</h2>
+      {/* ------------------------------ agent -------------------------------- */}
+      {over && (
+        <Section title="Agent" hint="The chat inside Wake. It runs on the Anthropic API with a key Wake holds.">
+          <Row
+            icon={<KeyRound size={14} />}
+            label="Anthropic API key"
+            value={over.agent.key.present ? `set · ${over.agent.key.via} · …${over.agent.key.last4}` : 'not set — the agent cannot run'}
+            tone={over.agent.key.present ? 'ok' : 'bad'}
+            action={<Button variant="solid" onClick={() => setKeySheet(true)}>{over.agent.key.present ? 'Replace' : 'Add a key'}</Button>}
+          />
+          <Row label="Model" value={over.agent.model} />
+          <Row label="Modes" value={`${over.agent.modes} — each one changes the tool surface, not a label`} />
+        </Section>
+      )}
 
+      {/* --------------------------- claude code ----------------------------- */}
+      {over && (
+        <Section title="Claude Code" hint="“Open in Claude Code” starts a session on this machine. Wake sends it no credential of its own.">
+          <Row
+            icon={<Terminal size={14} />}
+            label="Binary"
+            value={over.claudeCode.version ? `${over.claudeCode.binary} · ${over.claudeCode.version}` : `${over.claudeCode.binary} — not runnable`}
+            tone={over.claudeCode.version ? 'ok' : 'bad'}
+          />
+          <Row
+            label="Signed in"
+            value={
+              over.claudeCode.loggedIn === true ? 'yes'
+                : over.claudeCode.loggedIn === false ? 'no'
+                : 'stored in the system keychain — Wake does not read it'
+            }
+            tone={over.claudeCode.loggedIn === false ? 'bad' : over.claudeCode.loggedIn ? 'ok' : undefined}
+          />
+          <Row label="Recent sessions" value={`${over.claudeCode.recentSessions} in the last 30 days`} />
+          <Row label="Packs" value={over.claudeCode.packDir} mono />
+          {!over.claudeCode.ok && <p className="text-[12.5px] text-warn pt-2 leading-relaxed">{over.claudeCode.reason}</p>}
+        </Section>
+      )}
+
+      {/* ------------------------------ truto -------------------------------- */}
+      {truto && (
+        <Section title="Truto" hint="The CLI's own profiles. Wake never reads or shows the token.">
+          {truto.active ? (
+            <>
+              <Row label="Profile" value={truto.active.profile} />
+              <Row label="Team" value={truto.active.team ?? '(not reported)'} />
+              <Row label="User" value={truto.active.user ?? '(not reported)'} />
+              <Row label="API" value={truto.active.apiUrl ?? '(default)'} mono />
+            </>
+          ) : (
+            <p className="text-[12.5px] text-fg-mute py-2 leading-relaxed">
+              {truto.error ?? 'No Truto CLI profile resolved on this machine.'}
+            </p>
+          )}
+          {truto.profiles.length > 1 && (
+            // Thirty-seven profile names is a dump, not information. The count
+            // is the fact; the list is available to whoever wants it.
+            <details className="pt-2">
+              <summary className="cursor-pointer list-none text-[11.5px] text-fg-mute hover:text-fg-dim transition-colors">
+                {truto.profiles.length} profiles on this machine
+              </summary>
+              <p className="mt-1.5 text-[11.5px] text-fg-mute leading-relaxed">{truto.profiles.join(' · ')}</p>
+            </details>
+          )}
+        </Section>
+      )}
+
+      {/* --------------------------- skills & MCP ---------------------------- */}
+      {over && (
+        <Section title="Skills and connectors" hint="Skills are indexed by metadata; a body is read only when a turn needs it.">
+          <Row
+            label="Skills indexed"
+            value={`${over.skills.total} across ${Object.keys(over.skills.byCatalog).length} catalogs (${Object.entries(over.skills.byCatalog).map(([k, v]) => `${k}:${v}`).join(', ')})`}
+          />
+          <Row
+            label="Workspace"
+            value={`${over.workspace.repos} ${over.workspace.repos === 1 ? 'repository' : 'repositories'} under ${over.workspace.root}`}
+          />
+          {Object.entries(over.remote).map(([name, r]) => (
+            <Row
+              key={name}
+              label={name === 'platform' ? 'Platform MCP' : 'truto-monitoring MCP'}
+              value={r.configured ? (r.url ?? 'configured') : 'not configured — its tools report themselves unavailable'}
+              tone={r.configured ? 'ok' : undefined}
+            />
+          ))}
+        </Section>
+      )}
+
+      {/* ------------------------------ voice -------------------------------- */}
+      {over && (
+        <Section title="Voice" hint="Recordings stay on this machine. Nothing is uploaded unless you attach it to a send you confirm.">
+          <Row
+            icon={<Mic size={14} />}
+            label="Microphone"
+            value={recordingSupported() ? 'available in this browser' : 'this browser cannot record audio'}
+            tone={recordingSupported() ? 'ok' : 'bad'}
+          />
+          <Row
+            label="Live dictation"
+            value={dictationSupported() ? 'available in this browser' : 'not available here — recordings still work'}
+            tone={dictationSupported() ? 'ok' : undefined}
+          />
+          <Row
+            label="Transcribing stored notes"
+            value={over.voice.stt.available ? 'configured' : 'not configured'}
+            tone={over.voice.stt.available ? 'ok' : undefined}
+          />
+          {!over.voice.stt.available && (
+            <p className="text-[12px] text-fg-mute pt-1 leading-relaxed">{over.voice.stt.reason}</p>
+          )}
+          <Row label="Stored" value={`${over.voice.storage.count} note${over.voice.storage.count === 1 ? '' : 's'} · ${fmtBytes(over.voice.storage.bytes)}`} />
+          {over.voice.missing > 0 && (
+            <p className="text-[12px] text-warn pt-1">
+              {over.voice.missing} note{over.voice.missing === 1 ? '' : 's'} reference audio that is no longer on disk.
+            </p>
+          )}
+        </Section>
+      )}
+
+      {/* -------------------------- notifications ---------------------------- */}
+      <Section title="Notifications">
         {needsHomeScreenInstall() && (
           <div className="flex gap-3 mb-4 text-[13px] text-fg-dim leading-relaxed">
             <Smartphone size={15} className="shrink-0 mt-0.5 text-accent" />
             <p>
-              On iPhone, open the share sheet and choose <strong className="font-medium">Add to Home
-              Screen</strong> first. Apple only delivers push to an installed app, never to a Safari tab.
+              On iPhone, open the share sheet and choose <strong className="font-medium">Add to Home Screen</strong> first.
+              Apple only delivers push to an installed app, never to a Safari tab.
             </p>
           </div>
         )}
@@ -123,25 +331,217 @@ export function Settings() {
           {pushOn && (
             <Button variant="ghost" onClick={async () => {
               const r = await actions.pushTest()
-              setPushMsg(r.devices ? `Sent to ${r.devices} device${r.devices > 1 ? 's' : ''}.` : 'No devices registered.')
+              setDevices(r.devices)
+              setMsg(r.devices ? `Sent to ${r.devices} device${r.devices > 1 ? 's' : ''}.` : 'No devices registered.')
             }}>
               Send a test
             </Button>
           )}
+          {devices > 0 && <span className="text-[12px] text-fg-mute tnum">{devices} device{devices > 1 ? 's' : ''}</span>}
         </div>
 
-        {pushMsg && <p className="text-[12.5px] text-fg-dim mt-2 leading-snug">{pushMsg}</p>}
-        {!pushSupported() && (
-          <p className="text-[12.5px] text-fg-mute mt-2">This browser doesn’t support Web Push.</p>
-        )}
-      </section>
+        {msg && <p className="text-[12.5px] text-fg-dim mt-2 leading-snug">{msg}</p>}
+        {!pushSupported() && <p className="text-[12.5px] text-fg-mute mt-2">This browser doesn’t support Web Push.</p>}
+      </Section>
 
+      {/* ------------------------------ audit -------------------------------- */}
+      <Section title="Audit" hint="Every message sent, every session started, every command run.">
+        <button
+          onClick={() => setAudit(true)}
+          className="w-full flex items-center gap-2 py-3 text-left text-[13.5px] text-fg-dim hover:text-fg transition-colors"
+        >
+          <Activity size={14} className="text-fg-mute" />
+          Open the audit trail
+          <ChevronRight size={14} className="ml-auto text-fg-mute" />
+        </button>
+      </Section>
+
+      <KeySheet open={keySheet} onClose={() => setKeySheet(false)} onSaved={async () => { setKeySheet(false); await load() }} />
+      <AuditSheet open={audit} onClose={() => setAudit(false)} />
       <ClientSheet
         source={clientFor}
         redirectUri={redirectUri}
         onClose={() => setClientFor(null)}
         onSaved={async () => { setClientFor(null); await load() }}
       />
+    </div>
+  )
+}
+
+/* -------------------------------- pieces ---------------------------------- */
+
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section className="mt-9 first:mt-4">
+      <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute">{title}</h2>
+      {hint && <p className="text-[12.5px] text-fg-mute mt-1 mb-3 leading-relaxed max-w-[58ch]">{hint}</p>}
+      <div className={hint ? '' : 'mt-3'}>{children}</div>
+    </section>
+  )
+}
+
+function Row({
+  label, value, tone, mono, icon, action,
+}: {
+  label: string
+  value: string
+  tone?: 'ok' | 'bad' | 'warn'
+  mono?: boolean
+  icon?: React.ReactNode
+  action?: React.ReactNode
+}) {
+  const colour = tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-fg-dim'
+  return (
+    <div className="flex items-start gap-3 py-2.5 hairline last:border-0">
+      {icon && <span className="text-fg-mute mt-0.5 shrink-0">{icon}</span>}
+      <div className="grow min-w-0">
+        <div className="text-[13px] text-fg-mute">{label}</div>
+        <div className={`text-[13.5px] mt-0.5 break-words ${colour} ${mono ? 'font-mono text-[12px]' : ''}`}>{value}</div>
+      </div>
+      {action}
+    </div>
+  )
+}
+
+/** The CLI is the fallback, not the status copy. It lives behind a disclosure. */
+function Reason({ name, detail }: { name: string; detail: string }) {
+  const cmd = CLI_FALLBACK[name]
+  // Adapter status strings historically appended "run: …" — strip that so the
+  // sentence reads as a sentence and the command appears once, below.
+  // Older adapter strings appended "— connect here, or run: …". Strip the
+  // command and any dangling conjunction so the sentence reads as a sentence
+  // and the command appears once, below, where someone asked for it.
+  const clean = detail
+    .replace(/\s*—?\s*run:.*$/is, '')
+    .replace(/^not connected\s*—?\s*/i, '')
+    .replace(/[,\s]*\bor\b\s*$/i, '')
+    .trim()
+  return (
+    <div className="mt-1">
+      {clean && <p className="text-[12.5px] text-fg-mute leading-snug">{clean}</p>}
+      {cmd && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer list-none text-[11.5px] text-fg-mute hover:text-fg-dim transition-colors">
+            Or connect it from a terminal
+          </summary>
+          <pre className="mt-1.5 p-2.5 rounded-[10px] bg-ink-850 text-[11.5px] font-mono text-fg-dim overflow-x-auto leading-relaxed">
+            {cmd}
+          </pre>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function KeySheet({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const [key, setKey] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { if (open) { setKey(''); setErr(null) } }, [open])
+
+  const save = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await fetch('/api/settings/agent/key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      })
+      const body = await r.json()
+      if (!r.ok) throw new Error(body.error ?? `${r.status}`)
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Anthropic API key"
+      footer={
+        <div className="flex gap-1.5">
+          <Button variant="accent" className="flex-1" onClick={save} disabled={busy}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : null} Save
+          </Button>
+          <Button variant="ghost" onClick={() => { setKey(''); void save() }}>Clear</Button>
+        </div>
+      }
+    >
+      <p className="text-[13px] text-fg-dim leading-relaxed mb-4">
+        This key runs the chat inside Wake. It is stored on this machine only, is never sent to a
+        subprocess, and is never shown again — Settings will only ever report its last four characters.
+      </p>
+      <Field label="Key">
+        <input
+          className={inputClass}
+          type="password"
+          value={key}
+          autoFocus
+          onChange={e => setKey(e.target.value)}
+          placeholder="sk-ant-…"
+        />
+      </Field>
+      {err && <p className="text-[12.5px] text-bad">{err}</p>}
+    </Sheet>
+  )
+}
+
+function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [data, setData] = useState<any>(null)
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/settings/audit?limit=80').then(r => r.json()).then(setData).catch(() => {})
+  }, [open])
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Audit">
+      {!data ? (
+        <p className="text-[13px] text-fg-mute py-6">Reading…</p>
+      ) : (
+        <div className="space-y-5">
+          <AuditGroup title="Outbound and launches" rows={data.events} render={(e: any) => (
+            <>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${e.ok ? 'bg-ok' : 'bg-bad'}`} />
+              <span className="font-mono text-[11.5px] text-fg-dim shrink-0">{e.kind}</span>
+              <span className="text-[12px] text-fg-mute truncate">{e.target ?? e.error ?? ''}</span>
+              <span className="ml-auto tnum text-[11px] text-fg-mute shrink-0">{ago(e.at)}</span>
+            </>
+          )} />
+          <AuditGroup title="Truto CLI" rows={data.commands} render={(r: any) => (
+            <>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.ok ? 'bg-ok' : 'bg-bad'}`} />
+              <span className="font-mono text-[11.5px] text-fg-dim truncate">truto {r.argv.slice(0, 4).join(' ')}</span>
+              <span className="ml-auto tnum text-[11px] text-fg-mute shrink-0">{ago(r.at)}</span>
+            </>
+          )} />
+          <AuditGroup title="Agent tool calls" rows={data.tools} render={(t: any) => (
+            <>
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.ok ? 'bg-ok' : 'bg-bad'}`} />
+              <span className="font-mono text-[11.5px] text-fg-dim truncate">{t.name}</span>
+              {t.mutates ? <span className="text-[10px] text-warn uppercase tracking-wide shrink-0">write</span> : null}
+              <span className="ml-auto tnum text-[11px] text-fg-mute shrink-0">{t.ms}ms</span>
+            </>
+          )} />
+        </div>
+      )}
+    </Sheet>
+  )
+}
+
+function AuditGroup({ title, rows, render }: { title: string; rows: any[]; render: (r: any) => React.ReactNode }) {
+  if (!rows?.length) return null
+  return (
+    <div>
+      <div className="text-[10.5px] uppercase tracking-[0.08em] text-fg-mute mb-1.5">{title}</div>
+      {rows.slice(0, 40).map((r, i) => (
+        <div key={r.id ?? i} className="flex items-center gap-2 py-1.5 hairline last:border-0">{render(r)}</div>
+      ))}
     </div>
   )
 }
