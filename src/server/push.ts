@@ -129,11 +129,11 @@ export async function runReminders() {
 function describeTarget(r: any): { title: string; body?: string; url?: string } {
   if (r.target_kind === 'task') {
     const t = db.query<any, [string]>(`SELECT title FROM tasks WHERE id = ?`).get(r.target_id)
-    return { title: r.label || 'Reminder', body: t?.title ?? undefined, url: `${PUBLIC_URL}/tasks` }
+    return { title: r.label || 'Reminder', body: t?.title ?? undefined, url: `${PUBLIC_URL}/work` }
   }
   if (r.target_kind === 'goal') {
     const g = db.query<any, [string]>(`SELECT title FROM goals WHERE id = ?`).get(r.target_id)
-    return { title: r.label || 'Goal reminder', body: g?.title ?? undefined, url: `${PUBLIC_URL}/goals` }
+    return { title: r.label || 'Goal reminder', body: g?.title ?? undefined, url: `${PUBLIC_URL}/work` }
   }
   const c = db.query<any, [string]>(
     `SELECT title, url FROM cards WHERE group_key = ? AND gone = 0 ORDER BY ts DESC LIMIT 1`,
@@ -166,7 +166,7 @@ async function warnDeadlines() {
       await notify(`due:${task.id}:${task.due_at}:${lead}`, {
         title: label === 'overdue' ? 'Overdue' : 'Due soon',
         body: task.title,
-        url: `${PUBLIC_URL}/tasks`,
+        url: `${PUBLIC_URL}/work`,
         kind: 'deadline',
       })
       break // one horizon per pass; the nearer one wins

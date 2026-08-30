@@ -6,7 +6,7 @@
  * cards on a page whose entire purpose is telling you what is true right now.
  */
 
-const SHELL = 'wake-shell-v1'
+const SHELL = 'wake-shell-v2'
 
 self.addEventListener('install', event => {
   event.waitUntil(

@@ -18,3 +18,9 @@ dist/
 # called IA_EVIDENCE, an hour later, mid-capture. `git add -f` to include one on
 # purpose.
 *_EVIDENCE/
+
+# The revamp brief. Same reason as the evidence directories above: it quotes
+# real card titles, real session prompts and real mail subjects verbatim, and it
+# names the operator's live Truto profiles by count. It is a working document,
+# not a shipped one.
+detailed.md

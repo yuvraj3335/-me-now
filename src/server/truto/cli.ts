@@ -80,8 +80,6 @@ export type RunOpts = {
   profile?: string | null
   format?: 'json' | 'ndjson'
   timeoutMs?: number
-  turnId?: string | null
-  approvalId?: string | null
   signal?: AbortSignal
   /** Body passed on stdin, for `--stdin` commands. */
   stdin?: string
@@ -176,15 +174,19 @@ export async function runTruto(argv: string[], opts: RunOpts = {}): Promise<CliR
     hazard: hazardNote(argv),
   }
 
+  // `turn_id` and `approval_id` were columns of the in-process agent. Migration 4
+  // dropped both and the baseline never created them, so this INSERT threw on
+  // every CLI invocation, on every database — and `settings.ts` swallowed the
+  // throw with `.catch(() => [])`, which is how "no Truto CLI profiles on this
+  // machine" was rendered about a machine with nine of them. A source of truth
+  // that throws must never render as "nothing here".
   db.query(
-    `INSERT INTO cli_audit (turn_id, profile, argv, class, approval_id, exit_code, ms, ok, stdout_head, stderr_head, at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO cli_audit (profile, argv, class, exit_code, ms, ok, stdout_head, stderr_head, at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
   ).run(
-    opts.turnId ?? null,
     opts.profile ?? null,
     JSON.stringify(full),
     classification.cls,
-    opts.approvalId ?? null,
     exitCode,
     ms,
     result.ok ? 1 : 0,

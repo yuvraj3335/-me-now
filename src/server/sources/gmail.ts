@@ -1,7 +1,8 @@
 /**
  * Gmail over the Gmail MCP server. Multi-account from the start: each address
- * gets its own credential key ("gmail:<address>"), so yuvraj@ and engineering@
- * are separate connections rather than one inbox with a filter bolted on.
+ * gets its own credential key ("gmail:<address>"), so two addresses are separate
+ * connections rather than one inbox with a filter bolted on. This deployment
+ * configures exactly one, `yuvraj@truto.one`.
  *
  * Read-only: only search_threads / get_thread are ever called, and the client's
  * write-tool denylist blocks the rest regardless.

@@ -10,7 +10,7 @@ one email at a time.
 
 Around the piles sit three more surfaces:
 
-- **Mail** — a real client over both inboxes. Boxes, labels, search, threads,
+- **Mail** — a real client over `yuvraj@truto.one`. Boxes, labels, search, threads,
   compose, reply, forward, drafts, send.
 - **Open in Claude** — packs a card, a mail thread, a Sentry issue or a Slack
   thread into one self-contained brief, and opens it in Claude: the app on a

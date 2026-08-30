@@ -202,8 +202,10 @@ wired, and tested against the real tool schema (`search_threads`, `get_thread`,
 `list_labels`), and it activates the moment a credential resolves through the
 chain in decision #2. Setup is one documented step in `SETUP.md`.
 
-Both `yuvraj@redroot.one` and `engineering@redroot.one` are configured as separate
-accounts, so the adapter is multi-account from the start rather than retrofitted.
+The adapter is multi-account from the start rather than retrofitted, so a second
+address costs configuration rather than code. On this deployment there is exactly
+one: `yuvraj@truto.one`. Multi-account is a capability the code keeps, not a
+claim about whose mail this is.
 
 ## 9. Piles are computed, not folders
 
@@ -404,8 +406,10 @@ Three calls inside it worth naming:
 - **Remote images do not load until asked.** A tracking pixel reports that you
   opened the mail and roughly from where. The original source is kept in a data
   attribute so "load images" is one click and not a refetch.
-- **Pagination is per account.** Two inboxes advance independently, and one
-  shared cursor silently drops the slower one's older mail.
+- **Pagination is per account.** Accounts advance independently, and one shared
+  cursor would silently drop the slower one's older mail. This deployment has a
+  single account, `yuvraj@truto.one`; the per-account cursor is what keeps a
+  second one from being a rewrite.
 
 Attachments are listed as metadata and never downloaded. Wake has no reason to
 hold a copy of a customer's PDF.
@@ -413,8 +417,8 @@ hold a copy of a customer's PDF.
 ## 22. Gmail is not connected on this deployment, and the product says so
 
 The DevBox reaches Gmail through a **claude.ai connector**, and all 23 `mcpOAuth`
-entries on that box have an empty `accessToken` (#2). So Wake cannot read that
-mailbox, and no amount of adapter code changes it.
+entries on that box have an empty `accessToken` (#2). So Wake cannot read
+`yuvraj@truto.one`, and no amount of adapter code changes it.
 
 Mail therefore ships complete and shows the real reason, with the exact fix —
 add Gmail as a directly-added HTTP server, or set `WAKE_GMAIL_TOKEN`. The

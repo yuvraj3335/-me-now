@@ -98,3 +98,80 @@ describe('confirmation tokens', () => {
     expect(fingerprint({ a: 1 })).not.toBe(fingerprint({ a: 2 }))
   })
 })
+
+/* ---------------------------------------------------------------------------
+ * The write door.
+ *
+ * `DECISIONS.md` §7 said "a test asserts exactly one module calls it". It did
+ * not. This is that test, written before the surfaces around mail were touched
+ * so the revamp runs into it rather than past it.
+ *
+ * The rule it holds: `callTool` refuses anything matching the mutation denylist,
+ * and `callWriteTool` is the single sanctioned way past that denylist. A second
+ * module reaching for the write door is not a refactor — it is a new outbound
+ * write, and it needs its own gate and its own audit line first.
+ * ------------------------------------------------------------------------- */
+
+import { readdirSync as _readdirSync, readFileSync as _readFileSync, statSync as _statSync } from 'node:fs'
+import { join as _join } from 'node:path'
+
+const serverFiles = (dir: string): string[] =>
+  _readdirSync(dir).flatMap(entry => {
+    const p = _join(dir, entry)
+    return _statSync(p).isDirectory() ? serverFiles(p) : /\.ts$/.test(p) ? [p] : []
+  })
+
+describe('the MCP write door stays confined to one module', () => {
+  /**
+   * Where the door itself lives (the class that defines it), and the thin
+   * per-account wrapper that forwards to it. Neither decides to write; both are
+   * plumbing for the one module that does.
+   */
+  const PLUMBING = ['src/server/mcp/client.ts', 'src/server/mail/gmail.ts']
+  /** The one module allowed to actually open it. */
+  const CALLER = 'src/server/mail/service.ts'
+
+  const mentions = serverFiles('src/server').filter(f =>
+    /\bcallWrite(?:Tool|Json)?\b/.test(_readFileSync(f, 'utf8')),
+  )
+
+  test('no module outside mail/service.ts calls the write door', () => {
+    const unexpected = mentions.filter(f => !PLUMBING.includes(f) && f !== CALLER)
+    expect(unexpected, 'a new module reached for the outbound write path').toEqual([])
+  })
+
+  test('mail/service.ts is still the caller, at its two known sites', () => {
+    expect(mentions).toContain(CALLER)
+    const calls = _readFileSync(CALLER, 'utf8')
+      .split('\n')
+      .filter(l => /\bcallWrite\s*</.test(l) || /\bcallWrite\s*\(/.test(l))
+    // Send and draft. A third is a new outbound write and has to be decided on,
+    // not inherited from a green suite.
+    expect(calls.length, 'the number of outbound writes changed').toBe(2)
+  })
+
+  test('the denylist still catches the tool the door exists for', () => {
+    // `modify_message` is Gmail's mutation for mark-read, archive, star and
+    // label. It is the exact shape a "make the inbox real" change reaches for.
+    const client = _readFileSync('src/server/mcp/client.ts', 'utf8')
+    const re = /const WRITE_TOOL\s*=\s*\n?\s*(\/(?:[^\n\\/]|\\.|\[[^\]]*\])*\/[a-z]*)/.exec(client)
+    expect(re, 'the mutation denylist is no longer a literal regex').not.toBeNull()
+    // eslint-disable-next-line no-eval
+    const denylist = eval(re![1]!) as RegExp
+    for (const tool of ['modify_message', 'send_message', 'trash_message', 'create_draft']) {
+      expect(denylist.test(tool), `${tool} is no longer refused by callTool`).toBe(true)
+    }
+    expect(denylist.test('search_threads')).toBe(false)
+    expect(denylist.test('get_thread')).toBe(false)
+  })
+
+  test('callTool refuses a denylisted name and callWriteTool does not', () => {
+    const client = _readFileSync('src/server/mcp/client.ts', 'utf8')
+    // The gate is inside callTool, not at the transport: moving it to `invoke`
+    // would make callWriteTool refuse too, and moving it out of callTool would
+    // make the denylist decorative.
+    const callTool = client.slice(client.indexOf('async callTool('), client.indexOf('async callWriteTool('))
+    expect(callTool, 'callTool no longer checks the denylist').toMatch(/WRITE_TOOL\.test\(name\)/)
+    expect(callTool).toMatch(/throw new McpError/)
+  })
+})
