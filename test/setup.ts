@@ -26,6 +26,19 @@ process.env.WAKE_CLAUDE_HOME = join(root, 'claude')
 process.env.WAKE_EMAILS = 'me@example.com,team@example.com'
 
 /**
+ * Skill catalogs point at a fixture, not at ~/work.
+ *
+ * The index used to read whatever the machine happened to have cloned, so the
+ * suite passed on a laptop with three sibling repos and failed on CI, which has
+ * none. What is worth testing is the indexer — frontmatter, the manifest
+ * override, catalog separation, reference confinement — and a fixture tests that
+ * identically everywhere. routing.test.ts writes into these.
+ */
+process.env.WAKE_SKILLS_TRUTO = join(root, 'catalogs', 'a')
+process.env.WAKE_SKILLS_CURSOR = join(root, 'catalogs', 'b')
+process.env.WAKE_SKILLS_REPO = join(root, 'catalogs', 'c')
+
+/**
  * Point both subprocess binaries at paths that do not exist.
  *
  * The suite must never run the real `truto` or start a real Claude Code

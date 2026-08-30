@@ -2,9 +2,12 @@
  * The two indexes a brief is assembled from: the skill catalogs it names, and
  * the repository registry that decides which repository it may name at all.
  *
- * These run against the real catalogs on disk. If a skill is missing locally
- * the assertion that needs it is skipped rather than failed, so the suite
- * stays honest on a machine that has not cloned every repo.
+ * Both run against fixtures built here, not against whatever this machine
+ * happens to have cloned. That distinction has already cost this repo twice —
+ * a test that asserted three catalogs existed passed on a laptop and failed on
+ * the DevBox, and its replacement still needed ~/work/truto-skills and so failed
+ * on CI. The invariant is how the indexer behaves, and a fixture states it in a
+ * way that is true everywhere.
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test'
@@ -16,7 +19,36 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 
+/** Catalog A is manifest-first and nested; B and C are flat directories. */
+function writeCatalogs() {
+  const A = process.env.WAKE_SKILLS_TRUTO!
+  const B = process.env.WAKE_SKILLS_CURSOR!
+  const C = process.env.WAKE_SKILLS_REPO!
+
+  const skill = (dir: string, name: string, fm: string, body: string) => {
+    mkdirSync(join(dir, name), { recursive: true })
+    writeFileSync(join(dir, name, 'SKILL.md'), `---\n${fm}\n---\n\n${body}\n`)
+  }
+
+  // A: under `skills/`, with a manifest whose curated text must win over the
+  // file's own frontmatter.
+  skill(join(A, 'skills'), 'truto-operator', 'title: from the file\ndescription: platform operations', 'Body A.')
+  mkdirSync(join(A, 'manifest'), { recursive: true })
+  writeFileSync(
+    join(A, 'manifest', 'skills.json'),
+    JSON.stringify({ skills: [{ id: 'truto-operator', title: 'from the manifest', whenToUse: 'a platform incident' }] }),
+  )
+
+  skill(B, 'truto-cli-toolbelt', 'description: the CLI baseline', 'Body B.')
+  // A reference file, so "listed but not inlined" is a real assertion.
+  mkdirSync(join(B, 'truto-cli-toolbelt', 'references'), { recursive: true })
+  writeFileSync(join(B, 'truto-cli-toolbelt', 'references', 'flags.md'), 'the flags\n')
+
+  skill(C, 'ginger-migration-guardrails', 'description: repo engineering', 'Body C.')
+}
+
 beforeAll(() => {
+  writeCatalogs()
   reindexSkills()
   rescan()
 })
@@ -46,22 +78,43 @@ describe('skill index', () => {
     }
   })
 
-  test('a skill body is only read on demand', () => {
-    const any = listSkills()[0]!
-    const loaded = loadSkill(any.id)
-    expect(loaded?.body.length).toBeGreaterThan(0)
-    expect(loaded?.references).toBeInstanceOf(Array)
+  test('all three catalogs are indexed, one skill each', () => {
+    expect(listSkills().map(s => s.id).sort()).toEqual([
+      'A/truto-operator',
+      'B/truto-cli-toolbelt',
+      'C/ginger-migration-guardrails',
+    ])
+  })
+
+  test('the manifest wins over the file for the fields it curates', () => {
+    // The manifest carries whenToUse written for routing; the frontmatter is
+    // written for a human opening the file. Identity and path are never
+    // overridable, or the index could disagree with the disk.
+    const a = getSkill('A/truto-operator')!
+    expect(a.title).toBe('from the manifest')
+    expect(a.when_to_use).toBe('a platform incident')
+    expect(a.path).toContain('truto-operator/SKILL.md')
+  })
+
+  test('a skill body is only read on demand, and references are listed not inlined', () => {
+    const loaded = loadSkill('B/truto-cli-toolbelt')!
+    expect(loaded.body).toContain('Body B.')
+    expect(loaded.references).toEqual(['references/flags.md'])
+    // The reference's contents are NOT in the body — that is the whole point.
+    expect(loaded.body).not.toContain('the flags')
+    expect(loadSkillReference('B/truto-cli-toolbelt', 'references/flags.md')).toContain('the flags')
   })
 
   test('a reference cannot escape its own skill directory', () => {
-    const any = listSkills()[0]!
-    expect(loadSkillReference(any.id, '../../../../etc/passwd')).toBeNull()
-    expect(loadSkillReference(any.id, '/etc/passwd')).toBeNull()
+    const id = 'B/truto-cli-toolbelt'
+    expect(loadSkillReference(id, '../../../../etc/passwd')).toBeNull()
+    expect(loadSkillReference(id, '/etc/passwd')).toBeNull()
+    expect(loadSkillReference(id, 'file:///etc/passwd')).toBeNull()
   })
 
   test('a bare skill name resolves when unambiguous', () => {
-    const any = listSkills()[0]!
-    expect(getSkill(any.name)?.id).toBe(any.id)
+    expect(getSkill('truto-cli-toolbelt')?.id).toBe('B/truto-cli-toolbelt')
+    expect(getSkill('not-a-skill')).toBeNull()
   })
 })
 
