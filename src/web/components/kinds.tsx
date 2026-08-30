@@ -116,6 +116,10 @@ export function whereOf(source: CardSource | undefined, card: Card): string | nu
  * `trutohq/truto-app` cut from the right is `trutohq/tru…`, which is the half
  * that is the same on every row. Cut from the left it is `…/truto-app`, which is
  * the half that differs.
+ *
+ * The budget is characters, and it has to match the column's real width or CSS
+ * truncates the result a second time and cuts it at *both* ends. Mono at 13px
+ * advances 0.6em, so a 120px column with 8px of padding either side holds 13.
  */
 export function headTruncate(v: string, max: number): string {
   return v.length <= max ? v : `…${v.slice(-(max - 1))}`

@@ -67,7 +67,7 @@ export const paneWidth = (w: number) => (w >= 1440 ? 400 : 352)
  * because their column headings are wider than they are — 60px of dots under a
  * 44px column made `SOURCE` and `WHEN` collide into `SOURCEWHEN`.
  */
-const W = { kind: 88, why: 120, who: 88, where: 108, source: 68, when: 56, actions: 72 }
+const W = { kind: 88, why: 108, who: 88, where: 120, source: 68, when: 56, actions: 72 }
 const TITLE_MIN = 280
 
 export function columnsFor(width: number): Columns {
