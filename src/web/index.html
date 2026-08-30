@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <!-- No maximum-scale: capping it blocks pinch-zoom entirely, which is a real
+         accessibility failure and not something a personal app gets to opt out of.
+         It was there to stop iOS zooming when a sub-16px field takes focus; the
+         stylesheet solves that properly instead (see the `pointer: coarse` rule). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <!-- The browser chrome follows the theme too, so a light-mode phone does not
          wear a black status bar. -->
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0c" />

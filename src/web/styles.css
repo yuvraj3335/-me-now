@@ -223,6 +223,17 @@
 
   input, textarea, select, button { font: inherit; letter-spacing: inherit; }
 
+  /*
+    iOS zooms the page when a field smaller than 16px takes focus, and never
+    zooms back out. The usual fix is `maximum-scale=1` in the viewport, which
+    also disables pinch-zoom for everyone — trading an annoyance for an
+    accessibility failure. Raising the field's own size on touch instead fixes
+    the cause and leaves zoom alone.
+  */
+  @media (pointer: coarse) {
+    input, textarea, select { font-size: max(16px, 1em); }
+  }
+
   /* Scrollbars: present, not loud. */
   * { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
