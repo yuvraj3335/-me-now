@@ -72,10 +72,19 @@ export type SlackThreadRead = {
  * optional; the parenthesised id may carry the `ID:` prefix or not.
  */
 function parseWho(raw: string): { who: string; whoId: string } {
-  const whoId = raw.match(/\((?:ID:\s*)?([UWB][A-Z0-9]+)\)/)?.[1] ?? ''
+  /*
+   * A guest from another workspace carries more inside the parentheses than an
+   * id: `rameshsutaliya (U09038ZHE3H, external: spendflo)`. The id pattern
+   * closed on `)`, so it matched nothing there and the strip left the whole
+   * parenthetical in place — which is how `Varad (U08HCR8KXQB, external:` came
+   * to be the Who column, the From row and the author of every line in the
+   * thread list on a customer channel. Both halves stop at the id and drop
+   * whatever else Slack chose to put beside it.
+   */
+  const whoId = raw.match(/\((?:ID:\s*)?([UWB][A-Z0-9]+)[,)]/)?.[1] ?? ''
   const who = raw
     .replace(/\s*<[^>]*>\s*/, ' ')
-    .replace(/\s*\((?:ID:\s*)?[A-Z0-9]+\)\s*/, ' ')
+    .replace(/\s*\((?:ID:\s*)?[A-Z0-9]+[^)]*\)\s*/, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return { who: who || 'someone', whoId }
