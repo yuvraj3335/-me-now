@@ -181,16 +181,21 @@ export type DonutSlice = { id: string; label: string; value: number; color: stri
  * question the page opens with, and it answers it without an axis — so there is
  * no long empty ruler when four of five sources are quiet. The counts and
  * percentages live in `Legend` beside it, as text.
+ *
+ * **The centre is this ring's own total, and it is not a prop.** It used to be
+ * one, and the two rings on Pulse then said different kinds of thing in the
+ * same place: `112 / cards / 5 sources`, which is the sum of its slices, beside
+ * `00:00 / peak hour / 2 done`, which is a clock reading over a count that
+ * belongs to one hour rather than to the ring — so the second one read as a
+ * donut whose middle disagreed with its own arcs, four of them summing to 4.
+ * A caller cannot pass a number that fails to add up if it cannot pass one.
+ * `centreTop` names what the number counts and `centreFoot` is the one
+ * secondary fact worth the space; neither is a second total.
  */
 export function Donut({
-  slices, total, centreTop, centreFoot, size = 240,
+  slices, centreTop, centreFoot, size = 240,
 }: {
   slices: DonutSlice[]
-  /**
-   * What the centre says. Not always the sum — the desk ring's centre is
-   * `openNow`, and the day-part ring's is the peak hour, a clock reading.
-   */
-  total: number | string
   centreTop: string
   centreFoot: string
   size?: number
@@ -198,6 +203,18 @@ export function Donut({
   const reduce = useStill()
   const sum = slices.reduce((n, s) => n + s.value, 0)
   if (!sum) return null
+
+  /**
+   * A bucket with nothing in it is not a slice.
+   *
+   * `pie()` gives a zero value a zero angle, and `padAngle` then draws that
+   * nothing as a degenerate two-point path — `M-75.196,0.752L-47.998,0.48Z`,
+   * a hairline with its own fill sitting in the ring. `PartBar` has always
+   * filtered its segments; this did not, and only the desk donut was safe
+   * because its caller happened to filter first. Doing it here is what makes
+   * every mark on the page agree about what an empty bucket looks like.
+   */
+  slices = slices.filter(s => s.value > 0)
 
   // `sort(null)` is mandatory: without it d3 re-sorts by value on every render,
   // so two sources that trade places between polls swap sides of the ring and
@@ -236,7 +253,7 @@ export function Donut({
       </g>
       <text x={size / 2} y={size / 2 - 2} textAnchor="middle"
             className="fill-[var(--color-fg)] text-xl font-medium tnum">
-        {total}
+        {sum}
       </text>
       <text x={size / 2} y={size / 2 + 16} textAnchor="middle"
             className="fill-[var(--color-fg-mute)] text-sm">
@@ -259,9 +276,13 @@ export function Donut({
  */
 export function Legend({ items }: { items: DonutSlice[] }) {
   const sum = items.reduce((n, s) => n + s.value, 0)
+  // Zero rows go with the zero slices they key. `Afternoon 0 · 0%` beside a
+  // colour swatch reads as a slice that failed to draw rather than as a bucket
+  // nothing landed in, and the swatch is pointing at an arc that is not there.
+  const shown = items.filter(s => s.value > 0)
   return (
     <ul className="min-w-0">
-      {items.map(s => (
+      {shown.map(s => (
         <li key={s.id} className="flex items-center gap-2 h-8 min-w-0">
           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} aria-hidden />
           <span className="text-sm text-fg-dim truncate grow">{s.label}</span>
@@ -366,7 +387,12 @@ export function Ring({
 
 /* -------------------------------- weekday -------------------------------- */
 
-const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+/**
+ * Exported, because a week with one active day is not drawn as a chart at all —
+ * the page prints `9 on Sun` on a row instead, and it has to say the day in the
+ * same words the axis would have.
+ */
+export const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: number }> }) {
   const reduce = useStill()
@@ -384,7 +410,7 @@ export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: nu
    * half the axis was unreadable at the width this chart is usually given.
    */
   return (
-    <div role="img" aria-label={data.map(d => `${WD[d.weekday]} ${d.value}`).join('; ')}>
+    <div role="img" aria-label={data.map(d => `${WEEKDAY[d.weekday]} ${d.value}`).join('; ')}>
       <div className="grid grid-cols-7 gap-2">
         {data.map(d => (
           <span key={d.weekday} className="tnum text-sm text-fg-mute text-center">{d.value || ''}</span>
@@ -407,7 +433,7 @@ export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: nu
       </div>
       <div className="grid grid-cols-7 gap-2 mt-2">
         {data.map(d => (
-          <span key={d.weekday} className="text-sm text-fg-mute text-center truncate">{WD[d.weekday]}</span>
+          <span key={d.weekday} className="text-sm text-fg-mute text-center truncate">{WEEKDAY[d.weekday]}</span>
         ))}
       </div>
     </div>

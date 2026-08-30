@@ -33,17 +33,18 @@ import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../l
 import { timeOfDay } from '../lib/time'
 import {
   CardLine, CardRow, PANE_MIN, TABLE_MIN, TableCols, TableHead, maxPaneFor,
-  useViewport, type RowAction,
+  useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { TaskSheet } from '../components/TaskSheet'
-import { Button, Empty, PAGE_SIZE, Pager, Select, inputClass, pageCount, pageSlice } from '../components/primitives'
+import {
+  Button, Empty, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
+} from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
 import { registerPaletteActions } from '../components/palette'
-import { WakeMark } from '../components/WakeMark'
-import { PAGE_TITLE } from '../lib/typography'
 import { toast } from '../lib/toast'
+import { useStill } from '../lib/motion'
 import { overlayOpen, useOverlay } from '../lib/overlay'
 import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
 
@@ -121,11 +122,16 @@ const isSettledFilter = (s: string) => s === 'done' || s === 'wont_do'
  *
  * `version` is what a write bumps. The server owns this list, and a status
  * changed from inside it has to be re-read rather than patched locally.
+ *
+ * `null` while it is being read, and an array once it has answered — including
+ * an empty array, which is a different fact from "not asked yet". Everything on
+ * this page that clamps a range against `rows.length` has to know which of the
+ * two it is looking at, or it clamps against a list that does not exist yet.
  */
 function useHiddenCards(active: boolean, version: number) {
-  const [cards, setCards] = useState<CardT[]>(NO_CARDS)
+  const [cards, setCards] = useState<CardT[] | null>(null)
   useEffect(() => {
-    if (!active) return setCards(NO_CARDS)
+    if (!active) return setCards(null)
     let live = true
     actions.doneCards()
       .then(d => { if (live) setCards(d.cards) })
@@ -138,13 +144,17 @@ function useHiddenCards(active: boolean, version: number) {
 export function Home() {
   const { state } = useStore()
   const width = useViewport()
-  const p = useParams(['src', 'q', 'due', 'pri', 'status', 'page'])
+  const p = useParams(['src', 'q', 'due', 'pri', 'status', 'page', 'sort'])
   const filter = (p.src ?? 'all') as SourceName | 'all'
   const query = p.q ?? ''
   const due = (p.due ?? 'any') as DueFilter
   const pri = p.pri ?? 'any'
   const status = p.status ?? 'any'
   const page = Math.max(1, Number(p.page) || 1)
+  // Read through a whitelist rather than cast: `?sort=` is a string a person
+  // can type, and an unrecognised one has to mean the default order rather than
+  // an order nothing implements.
+  const sort: DueSort = p.sort === 'due' || p.sort === '-due' ? p.sort : null
   const selectedKey = useDetailKey()
   const [taskFrom, setTaskFrom] = useState<CardT | null>(null)
   /**
@@ -159,7 +169,16 @@ export function Home() {
 
   const settled = isSettledFilter(status)
   const hidden = useHiddenCards(settled, written)
-  const cards = settled ? hidden : (state?.cards ?? NO_CARDS)
+  const cards = settled ? (hidden ?? NO_CARDS) : (state?.cards ?? NO_CARDS)
+  /**
+   * Whether the list this page is standing over has actually answered.
+   *
+   * Both sources arrive over the wire — the desk in `/api/state`, the settled
+   * list in its own read — and both are an empty array until they do. That is
+   * indistinguishable from a list that really is empty unless it is asked
+   * separately, which is why this is a third value rather than `rows.length`.
+   */
+  const loaded = settled ? hidden !== null : state !== null
 
   /**
    * Five predicates over one list, composed in a fixed order.
@@ -217,14 +236,40 @@ export function Home() {
     [status],
   )
 
+  /**
+   * Filtered, then ordered — and the order is the sixth thing in the URL.
+   *
+   * The five predicates decide which rows exist; this decides where they sit,
+   * and it has to happen here rather than inside the table because the page
+   * slice, the palette's eight entries and the j/k cursor all index this list.
+   * Sorting the visible page instead would put "the soonest thing due" at the
+   * top of page 1 and a second, unrelated soonest thing at the top of page 2.
+   *
+   * A card with no deadline is not the earliest and not the latest; it has no
+   * position on this axis at all, so it sits after everything that does in both
+   * directions. Sending it to the front of "latest first" would answer "what is
+   * furthest out" with sixty rows that were never due.
+   */
   const rows = useMemo(
-    () => cards
-      .filter(matchSource)
-      .filter(matchQuery)
-      .filter(matchDue)
-      .filter(matchPriority)
-      .filter(matchStatus),
-    [cards, matchSource, matchQuery, matchDue, matchPriority, matchStatus],
+    () => {
+      const kept = cards
+        .filter(matchSource)
+        .filter(matchQuery)
+        .filter(matchDue)
+        .filter(matchPriority)
+        .filter(matchStatus)
+      if (!sort) return kept
+      const dir = sort === '-due' ? -1 : 1
+      // In place is safe — every `.filter` above already handed back a fresh
+      // array, so the store is never the thing being reordered. `sort` is
+      // stable, so rows sharing a date keep the order they arrived in.
+      return kept.sort((a, b) =>
+        a.due_at === null || b.due_at === null
+          ? Number(a.due_at === null) - Number(b.due_at === null)
+          : (a.due_at - b.due_at) * dir,
+      )
+    },
+    [cards, matchSource, matchQuery, matchDue, matchPriority, matchStatus, sort],
   )
 
   const pages = pageCount(rows.length)
@@ -399,9 +444,21 @@ export function Home() {
   useEffect(() => {
     setCursor(c => (c === null ? null : Math.min(c, Math.max(rows.length - 1, 0))))
   }, [rows.length])
+  /**
+   * And it waits for the list before it decides that a page is past the end.
+   *
+   * Every mount runs this effect once with no cards in hand: `state` is null
+   * until `/api/state` lands, so `rows.length` is 0, `pageCount` answers 1, and
+   * a perfectly valid `?page=3` was rewritten to `/` about 40ms after load —
+   * before any row existed to be counted. A reloaded page-3 landed on page 1
+   * and the bookmark was destroyed on the way. `loaded` is the difference
+   * between "there is no page 3" and "nobody has answered yet"; only the first
+   * of those is a reason to move the reader.
+   */
   useEffect(() => {
+    if (!loaded) return
     if (page > pages) setParam('page', pages === 1 ? null : String(pages))
-  }, [page, pages])
+  }, [loaded, page, pages])
 
   /**
    * The palette's card entries, capped.
@@ -444,7 +501,13 @@ export function Home() {
         <>
           <table className="w-full table-fixed border-collapse">
             <TableCols />
-            <TableHead />
+            {/* Re-ordering does not change which rows exist, but it does change
+                which of them page 3 holds — and the reader who just asked what
+                is due soonest wants the top of the answer, not row 101 of it. */}
+            <TableHead
+              sort={sort}
+              onSort={next => { setParam('sort', next); setParam('page', null) }}
+            />
             <tbody>
               {pageRows.map(c => (
                 <CardRow
@@ -540,8 +603,8 @@ function PushDetail({
   card, taskFrom, onMakeTask,
 }: { card: CardT; taskFrom: CardT | null; onMakeTask: (c: CardT | null) => void }) {
   useOverlay(true)
+  const still = useStill()
   const [tall, setTall] = useState(() => readNumber(SHEET_KEY, 0) === 1)
-  const height = tall ? '92dvh' : '55dvh'
 
   const snap = (next: boolean) => { setTall(next); writeNumber(SHEET_KEY, next ? 1 : 0) }
 
@@ -555,34 +618,96 @@ function PushDetail({
    *
    * It snaps rather than resting wherever it is let go, because a sheet that
    * can be any height is a control that has to be re-aimed every time it opens.
+   *
+   * **The sheet follows the finger while the finger is down.** It held `92dvh`
+   * through every `pointermove` and changed only on release, so the one direct
+   * manipulation in the product gave no sign it had been noticed until it was
+   * over: you drag a dead handle, let go, and the panel teleports. `held` is
+   * the live pixel height and it is dropped on release, so the resting height
+   * goes back to being a `dvh` that follows the viewport rather than a pixel
+   * count that was true once.
+   *
+   * Its ceiling is read off the element rather than recomputed here. The sheet
+   * is capped by a `max-height` that keeps the tab bar and a row of the list
+   * showing, and that cap is lower than the tall snap on a phone — a drag
+   * clamped to `92dvh` would have spent its last 50px moving nothing, which is
+   * the same dead handle in a smaller place.
    */
   const from = useRef<number | null>(null)
   const dragged = useRef(false)
+  const grip = useRef({ height: 0, min: 0, max: 0 })
+  const [held, setHeld] = useState<number | null>(null)
+
+  const height = held !== null ? `${held}px` : tall ? '92dvh' : '55dvh'
 
   return createPortal(
     <div
-      style={{ height }}
-      className="fixed inset-x-0 bottom-0 z-50 bg-ink-900 edge-t flex flex-col pad-bottom"
+      /*
+       * It stops above the phone's tab bar rather than on the bottom edge.
+       *
+       * At `bottom: 0` a 55dvh sheet covered all six destinations — every one of
+       * them measured unreachable with `elementFromPoint`, and no bar was even
+       * visible to explain why. This is a push sheet and not a modal: the list
+       * stays live underneath it, so the shell has to stay live under that. The
+       * cap keeps a row of the list showing at the tall snap too, which is the
+       * whole reason the sheet is not a takeover.
+       *
+       * From `sm` up `--nav-h` is only the home indicator, which is what the
+       * sheet's own `pad-bottom` used to supply — so that class goes with it,
+       * or the indicator's height is reserved twice.
+       */
+      style={{
+        height,
+        bottom: 'var(--nav-h)',
+        maxHeight: 'calc(100dvh - var(--nav-h) - 44px)',
+      }}
+      /* No transition while the finger is down — the drag is the animation, and
+         easing it would leave the sheet a frame or two behind the thumb. On
+         release it travels to the snap instead of jumping to it.
+         Gated on `useStill` like every other motion here: a height transition
+         needs frames, and a headless pane produces none, so an ungated one
+         leaves the sheet frozen at the height it was let go from. */
+      className={`fixed inset-x-0 z-50 bg-ink-900 edge-t flex flex-col
+                  ${held === null && !still ? 'transition-[height] duration-200 ease-out-quint' : ''}`}
     >
       <button
         onPointerDown={e => {
           from.current = e.clientY
           dragged.current = false
+          const sheet = e.currentTarget.parentElement
+          const vh = window.innerHeight
+          const min = vh * 0.55
+          // `max-height` computes to a pixel length, so the cap the sheet is
+          // actually under can be read rather than re-derived from `--nav-h`.
+          const cap = sheet ? parseFloat(getComputedStyle(sheet).maxHeight) : NaN
+          grip.current = {
+            height: sheet?.getBoundingClientRect().height ?? min,
+            min,
+            max: Math.max(min, Math.min(vh * 0.92, Number.isFinite(cap) ? cap : Infinity)),
+          }
           e.currentTarget.setPointerCapture(e.pointerId)
         }}
         onPointerMove={e => {
-          if (from.current !== null && Math.abs(e.clientY - from.current) > 8) dragged.current = true
+          if (from.current === null) return
+          const dy = e.clientY - from.current
+          if (Math.abs(dy) > 8) dragged.current = true
+          const { height: h0, min, max } = grip.current
+          setHeld(Math.min(max, Math.max(min, h0 - dy)))
         }}
         onPointerUp={e => {
           const start = from.current
           from.current = null
+          setHeld(null)
           if (start === null) return
           const dy = e.clientY - start
           if (Math.abs(dy) > 24) snap(dy < 0)
         }}
+        // A pointer the system takes away mid-drag still has to put the height
+        // back on a snap, or it rests at whatever pixel the last move wrote.
+        onPointerCancel={() => { from.current = null; setHeld(null) }}
         onClick={() => { if (!dragged.current) snap(!tall) }}
         aria-label={tall ? 'Shrink the panel' : 'Grow the panel'}
-        className="shrink-0 h-6 flex items-center justify-center touch-none cursor-row-resize"
+        className="hit relative shrink-0 h-6 flex items-center justify-center touch-none cursor-row-resize"
       >
         <span className="block w-10 h-1 rounded-full bg-ink-600" />
       </button>
@@ -605,15 +730,13 @@ function PushDetail({
  * changes what there is to see. It is also the only row on the page that cannot
  * scroll sideways on a phone, which is where a control worth pressing belongs.
  *
- * The mark rides this row on a phone and nowhere else. The rail carries it on a
- * laptop; a phone has no rail, and a header band added just to hold a logo
- * would cost 48px of the fold on the one screen where the fold is the product.
+ * The mark rides this row on a phone and nowhere else — `PageTitle` owns that
+ * rule now, for all six routes rather than for the two that remembered it.
  */
 function Header({ count }: { count?: number }) {
   return (
     <header className="pt-4 pb-2 flex items-center gap-3">
-      <WakeMark size={16} className="text-accent shrink-0 sm:hidden" />
-      <h1 className={PAGE_TITLE}>Desk</h1>
+      <PageTitle>Desk</PageTitle>
       {count !== undefined && <span className="tnum text-sm text-fg-mute">{count}</span>}
       <span className="ml-auto shrink-0"><Fetch /></span>
     </header>
@@ -638,7 +761,11 @@ function Header({ count }: { count?: number }) {
  *
  * The strip scrolls on a phone rather than wrapping. Six tabs need more than
  * 358px whatever is done to them, and a second line of tabs pushes the first row
- * of the list off the fold.
+ * of the list off the fold — so it fades at the right edge while there is more
+ * past it, because a tab sliced in half by the screen edge reads as a bug and
+ * not as more. A scrolling strip also clips its children's overflow, which is
+ * what took `.hit`'s vertical outset off every tab in it; the tab is 44px in its
+ * own right on a phone rather than borrowing one it cannot keep.
  */
 function SourceTabs({
   value, state,
@@ -656,37 +783,42 @@ function SourceTabs({
   }
 
   const tab = (active: boolean) =>
-    `hit relative inline-flex items-center gap-2 h-9 px-2 text-sm whitespace-nowrap
+    `hit relative inline-flex items-center gap-2 h-11 sm:h-9 px-2 text-sm whitespace-nowrap
      border-b-2 -mb-px transition-colors duration-100
      ${active
        ? 'border-accent text-fg font-medium'
        : 'border-transparent text-fg-mute font-medium hover:text-fg-dim'}`
 
+  const rail = useRail<HTMLDivElement>()
+
   return (
-    <div className="flex items-center gap-4 border-b border-edge overflow-x-auto no-scrollbar">
-      <button aria-selected={value === 'all'} role="tab" className={tab(value === 'all')}
-        onClick={() => { setParam('src', null); setParam('page', null) }}>
-        All
-      </button>
-      {FILTERS.map(s => {
-        const bad = wordFor(s)
-        return (
-          <button
-            key={s}
-            role="tab"
-            aria-selected={value === s}
-            className={tab(value === s)}
-            title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
-            onClick={() => { setParam('src', value === s ? null : s); setParam('page', null) }}
-          >
-            <SourceMark source={s} failed={!!bad} />
-            {/* The name from `sm` up, where six of them fit. On a phone the six
-                marks are the strip, and the pressed one keeps its name so the
-                answer to "which am I in" never needs a hover. */}
-            <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
-          </button>
-        )
-      })}
+    <div className="rail" data-spill={rail.spill || undefined}>
+      <div ref={rail.ref}
+        className="flex items-center gap-4 border-b border-edge overflow-x-auto no-scrollbar">
+        <button aria-selected={value === 'all'} role="tab" className={tab(value === 'all')}
+          onClick={() => { setParam('src', null); setParam('page', null) }}>
+          All
+        </button>
+        {FILTERS.map(s => {
+          const bad = wordFor(s)
+          return (
+            <button
+              key={s}
+              role="tab"
+              aria-selected={value === s}
+              className={tab(value === s)}
+              title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
+              onClick={() => { setParam('src', value === s ? null : s); setParam('page', null) }}
+            >
+              <SourceMark source={s} failed={!!bad} />
+              {/* The name from `sm` up, where six of them fit. On a phone the six
+                  marks are the strip, and the pressed one keeps its name so the
+                  answer to "which am I in" never needs a hover. */}
+              <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -32,9 +32,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { Card, CardStatus } from '../lib/types'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { fromLocalInput, toLocalInput } from '../lib/time'
-import { Check } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, Check } from 'lucide-react'
 import { Button, Select } from './primitives'
 import { cardKind, KindGlyph } from './kinds'
+import { SOURCE_LABEL } from './sources'
 import { PriorityGlyph, StatusSlot, isSettled } from './status'
 import { dueWords, ROW_META, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
 
@@ -113,14 +114,65 @@ export function useViewport(): number {
  */
 const HEAD = TABLE_HEAD
 
-export function TableHead() {
+/**
+ * How the desk is ordered, as the address bar spells it.
+ *
+ * `null` is the order the server sent — most recently touched first, which is
+ * the right answer to "what happened" and the wrong one to "what is due
+ * soonest". Those are the only two questions a deadline column is asked, so
+ * there are exactly two sorted states and a way back to neither.
+ */
+export type DueSort = 'due' | '-due' | null
+
+const NEXT_SORT: Record<string, DueSort> = { none: 'due', due: '-due', '-due': null }
+
+/** The state one press of the Due header moves to. */
+export const nextDueSort = (sort: DueSort): DueSort => NEXT_SORT[sort ?? 'none'] ?? null
+
+/**
+ * Four headings, one of which is a control.
+ *
+ * Due is sortable and the other three are not, and that asymmetry is the point
+ * rather than an omission: a deadline is the only column here whose values have
+ * an order that means something. Title, Status and Kind sort into alphabets and
+ * enum positions, which answer nothing anybody asks of this table.
+ *
+ * The glyph is always drawn, including in the unsorted state, because a control
+ * that only looks like one once it has been used cannot be found the first time
+ * — and `group-hover` does not fire on a touch screen at all.
+ */
+export function TableHead({
+  sort = null, onSort,
+}: { sort?: DueSort; onSort?: (next: DueSort) => void }) {
+  const Glyph = sort === 'due' ? ArrowUp : sort === '-due' ? ArrowDown : ArrowUpDown
+  const word = sort === 'due' ? 'earliest first' : sort === '-due' ? 'latest first' : 'unsorted'
+
   return (
     <thead className="sticky top-0 z-10 bg-ink-900">
       <tr className="border-b border-edge">
         <th className={HEAD} scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
         <th className={HEAD} scope="col">Kind</th>
-        <th className={HEAD} scope="col">Due</th>
+        <th
+          className={HEAD}
+          scope="col"
+          aria-sort={sort === 'due' ? 'ascending' : sort === '-due' ? 'descending' : 'none'}
+        >
+          <button
+            onClick={() => onSort?.(nextDueSort(sort))}
+            title={`Sort by due date — ${word}`}
+            aria-label={`Sort by due date — ${word}`}
+            /* `relative`, because `.hit` hangs its target 6px outside the box
+               with `position: absolute` — without a positioned box of its own
+               that target resolves against the nearest positioned ancestor and
+               becomes a page-sized one. `uppercase` is restated because the UA
+               sheet sets `text-transform: none` on a button, so the eyebrow
+               casing the header cell carries does not reach through it. */
+            className={`hit relative inline-flex items-center gap-1 cursor-pointer uppercase
+                        transition-colors duration-100 hover:text-fg-dim
+                        ${sort ? 'text-fg-dim' : ''}`}
+          >Due<Glyph size={12} aria-hidden /></button>
+        </th>
       </tr>
     </thead>
   )
@@ -268,7 +320,9 @@ function DueCell({ card, onDue }: { card: Card; onDue: (c: Card, at: number | nu
         onClick={() => setEditing(true)}
         title={words ? 'Change the due date' : 'Set a due date'}
         aria-label={words ? `Due ${words}` : 'Set a due date'}
-        className={`hit w-full h-7 px-1 text-left rounded-control truncate
+        /* `relative`, or the touch box lands on `<main>` — a `<td>` is not a
+           positioned ancestor, so a 30px control would claim the whole page. */
+        className={`hit relative w-full h-7 px-1 text-left rounded-control truncate
                     transition-colors duration-100 hover:bg-ink-700
                     ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}
       >
@@ -283,25 +337,44 @@ function DueCell({ card, onDue }: { card: Card; onDue: (c: Card, at: number | nu
 /**
  * One line, 44px.
  *
- * Status glyph, title, due, and one control. No kind word, no channel, no
- * priority: 358px of usable width already carries two things that want to
- * truncate, and a third makes all of them useless. The glyph carries the state
- * without a word, which is what a glyph is for, and everything else is one tap
- * away in the sheet.
+ * Status glyph, source glyph, title, due, and one control. Still no kind
+ * *word*, no channel and no priority: 358px of usable width already carries two
+ * things that want to truncate, and a third string makes all of them useless.
+ *
+ * The second glyph is not a third string. It is 20px of fixed slot, and without
+ * it a Slack message, a Gmail thread and a Sentry alert are the same row — the
+ * laptop answers that in a whole Kind column and the phone was answering it
+ * nowhere, so the only way to tell one from another was to switch the source
+ * tab and see which rows disappeared. Where a thing came from is the fastest
+ * signal on the row and the reason a row gets skipped or opened at 7am.
+ *
+ * It is the kind mark rather than a source dot, and that is deliberate: the
+ * shape already differs per source and the hue is the source's own, so one mark
+ * carries both. Five identical dots in five hues would carry neither on a screen
+ * that cannot hover.
  */
 export function CardLine({
   card, selected, actions,
 }: { card: Card; selected: boolean; actions: RowAction }) {
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
+  const kind = cardKind(card)
 
   return (
     <li className={`flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}>
       <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
         <div className="flex items-center h-full">
-          {/* The same fixed slot the table uses, so every title on the page
-              starts on one x whatever glyph precedes it. */}
+          {/* The same fixed slots the table uses, so every title on the page
+              starts on one x whatever glyphs precede it — and in the table's own
+              order, Status before Kind, so the two layouts read the same way. */}
           <StatusSlot status={card.status} />
+          {/* Named for the source rather than the kind: the shape is what a
+              sighted reader tells them apart by, and the hue that carries the
+              source is exactly the half a screen reader cannot see. */}
+          <span role="img" aria-label={SOURCE_LABEL[kind.source]} title={SOURCE_LABEL[kind.source]}
+            className="w-5 shrink-0 flex items-center">
+            <KindGlyph kind={kind} size={14} />
+          </span>
           <span className={`${ROW_TITLE} truncate min-w-0 grow
                             ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
             {card.title}

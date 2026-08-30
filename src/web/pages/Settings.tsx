@@ -42,7 +42,7 @@ import {
   currentSubscription, disablePush, enablePush, needsHomeScreenInstall, pushSupported,
 } from '../lib/push'
 import {
-  Button, Field, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice,
+  Button, Field, PageTitle, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice,
 } from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
 import { fmtBytes, recordingSupported } from '../lib/voice'
@@ -152,8 +152,8 @@ export function Settings() {
 
   return (
     <div className="pb-24">
-      <header className="pt-4 pb-2">
-        <h1 className="text-lg font-medium">Settings</h1>
+      <header className="pt-4 pb-2 flex items-center gap-3">
+        <PageTitle>Settings</PageTitle>
       </header>
 
       <Section title="You">
@@ -403,7 +403,11 @@ export function stateWord(s: SourceStatus): { text: string; tone: string; detail
   if (!s.hasWakeToken && !s.lastSync?.connected && !s.ok) {
     return { text: 'not connected', tone: 'text-fg-mute' }
   }
-  const authOk = s.lastAuthOkAt ? `auth ok ${ago(s.lastAuthOkAt)}` : undefined
+  // `auth 3m`, not `auth ok 3m`. The word `ok` costs 20px in the one column on
+  // this page that has none — `synced now · 30 · auth ok 3m` needed 174px of a
+  // 151px slot at 375, and the truncation ate the auth fact, which is the one
+  // thing here `synced` cannot already tell you.
+  const authOk = s.lastAuthOkAt ? `auth ${ago(s.lastAuthOkAt)}` : undefined
   if ((s.lastSync && !s.lastSync.ok) || (s.hasWakeToken && !s.ok)) {
     return { text: 'sync failed', tone: 'text-warn' }
   }
@@ -534,6 +538,13 @@ function ClientSheet({
 /**
  * Three states, not a switch. "System" is a real choice — a phone that goes dark
  * at sunset should take the app with it — so it carries what it resolved to.
+ *
+ * *Only* what it resolved to. The value column used to read `System · light`
+ * beside a segmented control whose pressed segment already said System, so the
+ * one word in the row that the control cannot say was the one being pushed out:
+ * 80px of text in 76px of column, ellipsised to `System · li…`. The resolution
+ * is the whole reason this row has a value, and Light and Dark resolve to
+ * themselves — they get no value at all rather than an echo of the button.
  */
 function ThemeChoice() {
   const { theme, resolved, set } = useTheme()
@@ -546,7 +557,7 @@ function ThemeChoice() {
     <div className="flex items-center h-11 border-b border-rule">
       <span className="text-sm text-fg-mute w-24 shrink-0">Theme</span>
       <span className="text-sm text-fg-dim grow truncate">
-        {theme === 'system' ? `System · ${resolved}` : theme === 'light' ? 'Light' : 'Dark'}
+        {theme === 'system' ? resolved : ''}
       </span>
       <Segmented options={options} value={theme} onChange={set} ariaLabel="Theme" />
     </div>

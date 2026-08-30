@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Loader2, SquareTerminal, Trash2 } from 'lucide-react'
+import { ArrowUpRight, Loader2, SquareTerminal, Trash2 } from 'lucide-react'
 import { Button, Empty, Pager, Sheet, inputClass, pageCount, pageSlice } from './primitives'
 import { ago } from '../lib/time'
 import { toast } from '../lib/toast'
@@ -114,18 +114,46 @@ function Row({ session: s, onDelete }: { session: Session; onDelete: () => void 
         {s.lastPrompt && (
           <p className="text-sm text-fg-mute truncate">{s.lastPrompt}</p>
         )}
-        <p className="text-sm text-fg-mute truncate">
-          {[
-            s.branch,
-            `${s.turns} turns in view`,
-            ago(s.lastTs),
-          ].filter(Boolean).join(' — ')}
+        {/*
+          Only the branch gives up width here.
+
+          Joined into one truncating string, a shared branch prefix ate the whole
+          line on a phone: six consecutive rows rendered
+          `fix/sync-job-v4-paginati…` and nothing else, so the two facts that
+          actually tell two sessions in one repository apart — how far in it got
+          and how long ago — were the two that never survived. The branch is the
+          part most likely to be the same on every row, so it is the part that
+          truncates.
+        */}
+        <p className="flex items-baseline gap-2 min-w-0 text-sm text-fg-mute">
+          {s.branch && (
+            <>
+              <span className="truncate min-w-0">{s.branch}</span>
+              <span className="shrink-0" aria-hidden>—</span>
+            </>
+          )}
+          <span className="shrink-0 tnum">{s.turns} turns in view</span>
+          <span className="shrink-0" aria-hidden>—</span>
+          <span className="shrink-0 tnum">{ago(s.lastTs)}</span>
         </p>
       </div>
 
       <div className="flex items-center gap-1 shrink-0">
+        {/*
+          The word costs 110px, and on a 375px phone that 110px comes out of the
+          title. Measured: the title column got 133px against a 438px string, so
+          four different sessions rendered as `As you can see the…`,
+          `fix(mfa): make the login…`, `You're working a cross-…`. The row is
+          the thing being read; the action is one of two on it. So below `sm`
+          the label collapses to the mark every "this leaves Wake" control in
+          the product already carries, and the name lives on `title` and
+          `aria-label`, which is where a control with no room for a word keeps
+          its name.
+        */}
         <Button
           size="sm"
+          title="Open in Claude"
+          ariaLabel="Open in Claude"
           onClick={() => openLaunch(
             [{
               kind: 'session',
@@ -143,7 +171,8 @@ function Row({ session: s, onDelete }: { session: Session; onDelete: () => void 
             { templates: ['continue-session'], repoHint: s.cwd, session: s.id, title: s.title },
           )}
         >
-          Open in Claude
+          <span className="hidden sm:inline">Open in Claude</span>
+          <ArrowUpRight size={14} className="sm:hidden" />
         </Button>
         {/* Ghost, not `danger`. This button opens a dialog; the dialog's button
             is what destroys, and that one is `danger`. Fifty filled red squares

@@ -170,18 +170,25 @@ analytics.get('/', c => {
   // because he said Done or Won't do, and a row whose state predates the status
   // column has NULL there and is still on it.
 
-  const aging = db.query<{ source: string; first_seen_at: number }, [number]>(
+  // No snooze clause, and that is the fix rather than an omission. This set is
+  // the donut's slices; `openNow` below is the number printed in the middle of
+  // it, and the two have to select the same rows or the ring reports a whole it
+  // does not add up to. It did: one snoozed card made the slices sum to 111
+  // against a centre of 112, and the percentages beside them totalled 99%. A
+  // snoozed card is still on the desk — `/api/state` sends it, the table renders
+  // it, and its status is still one of the three that means it is on him — so
+  // the answer is for the slices to count it, not for the centre to stop.
+  const aging = db.query<{ source: string; first_seen_at: number }, []>(
     `SELECT c.source AS source, s.first_seen_at AS first_seen_at
        FROM cards c
        JOIN card_state s ON s.group_key = c.group_key
       WHERE c.gone = 0 AND (s.status IS NULL OR s.status NOT IN ('done','wont_do'))
-        AND (s.snoozed_until IS NULL OR s.snoozed_until < ?)
       GROUP BY c.group_key
       -- Ordered, so the donut's slices keep their positions between polls. An
       -- unordered GROUP BY let two sources swap places on a refresh, which reads
       -- as the data having moved.
       ORDER BY c.source`,
-  ).all(Date.now())
+  ).all()
 
   const BUCKETS: Array<[string, number, number]> = [
     ['today', 0, 1], ['2–3d', 1, 3], ['4–7d', 3, 7], ['1–2w', 7, 14], ['older', 14, Infinity],
@@ -221,7 +228,12 @@ analytics.get('/', c => {
     agingBuckets: BUCKETS.map(b => b[0]),
     goals,
     // `doneAllTime` and `tasksOpen` were two COUNT queries nothing rendered.
-    // `openNow` is the donut's centre, and it is the only total the page reads.
+    // `openNow` is the canonical count of what is on the desk, and the `aging`
+    // query above is required to be the same set. The donut's centre is summed
+    // from its own slices now rather than sent — a centre that arrives beside
+    // the arcs instead of out of them is a number that can disagree with them,
+    // and it did — so this is the thing the ring is checked *against* rather
+    // than the thing it prints.
     totals: { openNow },
   })
 })

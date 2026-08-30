@@ -53,6 +53,31 @@ describe('what counts as still on the desk', () => {
     expect(Object.values(slack.buckets).reduce((n: number, v: any) => n + v, 0)).toBe(3)
   })
 
+  test('a snoozed card is counted by the slices as well as by the centre', async () => {
+    // The donut prints `openNow` in the middle of slices built from `aging`, so
+    // the two queries have to select the same rows. `aging` used to drop
+    // anything snoozed into the future and `openNow` never did: with one snoozed
+    // card the ring's slices summed to one less than its own centre and the
+    // percentages beside them added to 99%.
+    const plain = card('g-awake', 'slack', 1)
+    state('g-awake', {}, plain.at)
+
+    const naps = card('g-snoozed', 'github', 1)
+    db.query(
+      `INSERT OR REPLACE INTO card_state
+         (group_key, status, snoozed_until, first_seen_at, updated_at)
+       VALUES (?,'not_started',?,?,?)`,
+    ).run('g-snoozed', Date.now() + 7 * DAY, naps.at, naps.at)
+
+    const a = await get()
+    const sliced = a.aging.reduce(
+      (n: number, r: any) => n + Object.values(r.buckets).reduce((m: number, v: any) => m + v, 0),
+      0,
+    )
+    expect(sliced).toBe(a.totals.openNow)
+    expect(a.totals.openNow).toBe(2)
+  })
+
   test('status is authoritative where the legacy timestamps disagree', async () => {
     // `done_at` and `not_mine` are still written and kept in sync — see
     // DECISIONS.md #32 — but they are the old vocabulary. The predicate reads

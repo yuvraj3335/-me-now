@@ -40,6 +40,7 @@ import {
   useLaunchBasket, type LaunchState, type PackItem, type PermissionMode, type Session,
 } from '../lib/launch'
 import { handoffFor } from '../../shared/handoff'
+import { ago } from '../lib/time'
 import { Mic } from './voice'
 
 const KIND_LABEL: Record<string, string> = {
@@ -184,7 +185,13 @@ function LaunchBody({
             cwd ? (meta.repos.find(r => r.path === cwd)?.name ?? 'no repository') : 'no repository'
           } · ${effectiveSkills.length} skill${effectiveSkills.length === 1 ? '' : 's'}`} />
       ) : (
-        <div className="sticky bottom-0 -mx-4 mt-4 px-4 py-3 bg-ink-850 border-t border-rule
+        /* `-mb-4` for the same reason as `-mx-4`: the bar breaks out of the
+           padding on every edge it touches, so it comes to rest on the panel's
+           own bottom edge rather than 16px above it with list rows sliding
+           through the strip underneath. `Sheet` owns the other half of this —
+           its bottom pad is inside the scrolled content precisely so a sticky
+           box can reach past it. */
+        <div className="sticky bottom-0 -mx-4 -mb-4 mt-4 px-4 py-3 bg-ink-850 border-t border-rule
                         flex items-center">
           {/* The one commit on this surface, and the only amber on it. */}
           <Button size="lg" variant="primary" className="ml-auto" onClick={write} disabled={busy}>
@@ -236,6 +243,18 @@ function Composer({
           this sheet was in. */}
       <RepoPicker repos={meta.repos} cwd={cwd} setCwd={setCwd} />
 
+      {/*
+        Name beside description on a laptop, name over description on a phone.
+
+        Two columns need about 340px to work and a 375px screen leaves 343 for
+        both, so the split gave the name 122 and the description 181 against
+        338 — every template's blurb cut mid-sentence (`A customer report, taken
+        to …`, `One stack trace to the line th…`) and half the names cut with
+        them. The blurb is the entire reason this list is browsable rather than
+        a dropdown of slugs, so below `sm` it takes the whole width and wraps.
+        The row stops being a fixed 44px there, because a row that wraps is not
+        one line tall.
+      */}
       <section className="py-4">
         <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Templates — {templates.length}</h3>
         {meta.templates.map(t => {
@@ -245,16 +264,24 @@ function Composer({
               key={t.id}
               onClick={() => onToggleTemplate(t.id)}
               aria-pressed={on}
-              className="w-full flex items-center h-11 text-left border-b border-rule last:border-0
+              className="w-full flex flex-col items-start gap-1 py-2
+                         sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
+                         text-left border-b border-rule last:border-0
                          hover:bg-ink-800 transition-colors duration-100"
             >
               {/* A check, not a filled amber box. One selected template used to
                   be one accent mark, so choosing three spent the budget. */}
-              <span className="w-40 shrink-0 flex items-center gap-2 pr-4">
+              <span className="w-full sm:w-40 shrink-0 flex items-center gap-2 sm:pr-4">
                 <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
                 <span className={`text-sm truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>{t.label}</span>
               </span>
-              <span className="text-sm text-fg-mute truncate grow min-w-0">{t.blurb}</span>
+              {/* Two lines, not one clipped one. The blurb is the whole of what
+                  tells `Sentry issue` from `Sync job failure`, and at 760px of
+                  dialog a one-line clamp ellipsised half of them — the picker
+                  then reads by title, which is the one thing 26 of these titles
+                  cannot be told apart by. Two 18px lines still sit inside the
+                  44px row, so the grid does not move. */}
+              <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{t.blurb}</span>
             </button>
           )
         })}
@@ -419,7 +446,14 @@ function SessionPicker({
                   <SquareTerminal size={14} className="text-fg-mute shrink-0" />
                   <span className="text-sm text-fg-dim truncate grow min-w-0">{s.title}</span>
                   {s.live && <span className="text-sm text-ok shrink-0">live</span>}
+                  {/* Age, because the repository is already the group heading
+                      and the title is often the same commit message twice. Two
+                      sessions in one directory differ by when they last ran and
+                      how far they got, and this list was printing only the
+                      second half — `/sessions` has said both all along, off the
+                      same `lastTs` this row already had in hand. */}
                   <span className="text-sm text-fg-mute tnum shrink-0">{s.turns} in view</span>
+                  <span className="text-sm text-fg-mute tnum shrink-0">{ago(s.lastTs)}</span>
                 </button>
               ))}
             </div>
@@ -607,7 +641,11 @@ function SkillPicker({
           <span className="text-sm text-fg-dim truncate grow min-w-0 font-mono">
             {id.split('/').pop()}
           </span>
-          <span className="text-sm text-fg-mute truncate shrink-0 max-w-[55%]">
+          {/* Gone below `sm`, rather than squeezed into 45% of a 343px row.
+              This blurb's job is choosing, and on a row for something already
+              chosen it is the second thing competing for a width that only
+              holds one — so the phone keeps the identity and drops the pitch. */}
+          <span className="hidden sm:block text-sm text-fg-mute truncate shrink-0 max-w-[55%]">
             {blurbOf(named(id))}
           </span>
           <Button size="sm" variant="ghost" title="Remove" ariaLabel="Remove" onClick={() => toggle(id)}>
@@ -626,11 +664,12 @@ function SkillPicker({
         />
       </div>
 
-      {/* The same row the templates above use: an identity on the left with its
-          check, and the sentence that tells you what it is filling the rest.
-          The slug is the identity — 26 of the 28 catalog `title` values are the
-          slug again — so what makes a list of 28 readable is the description
-          beside it, not the name printed twice. */}
+      {/* The same row the templates above use, and it stacks on a phone for the
+          same reason: an identity on the left with its check, and the sentence
+          that tells you what it is filling the rest. The slug is the identity —
+          26 of the 28 catalog `title` values are the slug again — so what makes
+          a list of 28 readable is the description beside it, not the name
+          printed twice, and a description cut at 181px is not one. */}
       <div className="max-h-64 overflow-y-auto">
         {matches.map(s => {
           const on = selected.includes(s.id)
@@ -639,16 +678,18 @@ function SkillPicker({
               key={s.id}
               onClick={() => toggle(s.id)}
               aria-pressed={on}
-              className="w-full flex items-center h-11 text-left border-b border-rule last:border-0
+              className="w-full flex flex-col items-start gap-1 py-2
+                         sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
+                         text-left border-b border-rule last:border-0
                          hover:bg-ink-800 transition-colors duration-100"
             >
-              <span className="w-52 shrink-0 flex items-center gap-2 pr-4">
+              <span className="w-full sm:w-52 shrink-0 flex items-center gap-2 sm:pr-4">
                 <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
                 <span className={`text-sm font-mono truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>
                   {s.name}
                 </span>
               </span>
-              <span className="text-sm text-fg-mute truncate grow min-w-0">{blurbOf(s)}</span>
+              <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{blurbOf(s)}</span>
             </button>
           )
         })}

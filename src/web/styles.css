@@ -291,6 +291,28 @@
 }
 
 @layer base {
+  /*
+    How much of the bottom of the viewport is already spoken for.
+
+    Below `sm` that is the tab bar — 53px painted, plus whatever the device puts
+    under it for a home indicator. From `sm` up the nav is the left rail and only
+    the indicator is left. Either way it is the strip that anything fixed to the
+    bottom edge has to stop above, and it replaces that thing's own
+    `pad-bottom`: the two together would count the indicator twice.
+
+    Nothing may cover the tab bar. The card sheet did — `bottom: 0` with a 55dvh
+    height put 447px over the bar, so all six destinations measured unreachable
+    while a card was open and switching from Desk to Mail cost a dismissal
+    first. A bar that is not merely in the way but not drawn at all is worse,
+    because nothing on screen says the tap will not land.
+
+    It is a variable because a fixed element has no way to measure a sibling.
+  */
+  :root { --nav-h: max(env(safe-area-inset-bottom), 0px); }
+  @media (max-width: 639.98px) {
+    :root { --nav-h: calc(53px + max(env(safe-area-inset-bottom), 0px)); }
+  }
+
   html {
     background: var(--color-ink-900);
     /* Stop the iOS rubber-band from revealing white behind the app. */
@@ -403,29 +425,100 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
   /*
+    A rail that scrolls, and says so.
+
+    Six mail filters need 384px inside 343, so the last one — `All mail` — was
+    cut clean off at the viewport edge with nothing to suggest it was a scroll
+    region rather than a layout bug: the page itself does not scroll, the
+    scrollbar is hidden by the rule above, and a chip sliced down the middle by
+    the screen edge reads as broken, not as more. The fade is the affordance,
+    and it is painted only while there is something past it — a permanent one
+    would ghost the last chip when the rail is already at its end, which is the
+    same lie in the other direction. `data-spill` is set by `useRail`.
+
+    It stops 1px short of the bottom so a rail with a rule under it — the desk's
+    source tabs — keeps an unbroken hairline. A rail with no rule loses one
+    transparent pixel of fade, which is nothing.
+  */
+  .rail { position: relative; min-width: 0; }
+  .rail[data-spill]::after {
+    content: '';
+    position: absolute;
+    inset-block: 0 1px;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to left, var(--color-ink-900), transparent);
+  }
+
+  /*
     Small ink, generous target — where there are fingers.
 
     A 26px row action and a 32px toolbar button are the right *painted* size for
     a tool; they are the wrong touch target. This decouples the two, so a button
     can shrink to where it belongs visually without becoming unhittable on a
-    phone. Applied by `Button` at sizes sm and md, and by `Chip`.
+    phone. Applied by `Button` at every size, and by `Chip` and `Segmented`.
+
+    It is a 44px box centred on the control, not a fixed outset. `inset: -6px`
+    was the outset, and an outset cannot reach a target from an unknown size:
+    28px of ink became 40, 30px of ink became 42, and every row action, every
+    close, every pager arrow and every filter tab measured under 44 on a phone.
+    `max(100%, 44px)` reaches exactly 44 on whichever axis is short and leaves
+    the other alone, so a 200px-wide bar grows in height only and nothing that
+    already clears the target moves at all.
+
+    The host needs `position: relative`. Without it the box is laid out against
+    the nearest positioned ancestor — which in this app is `<main>` — and a
+    control quietly acquires an invisible, page-sized target that swallows every
+    tap on the route. Three controls shipped that way.
 
     Scoped to coarse pointers, which is the case it was written for: a mouse
     hits a 26px box without help. It is scoped rather than unconditional because
-    an absolutely positioned box that reaches 6px past its parent's padding edge
-    IS scroll overflow, and Chrome counts it — `Connect` reported clientWidth 64
+    an absolutely positioned box that reaches past its parent's padding edge IS
+    scroll overflow, and Chrome counts it — `Connect` reported clientWidth 64
     against scrollWidth 70 while its label measured 47.64px inside 16px of
     padding and was not clipped at all. Every audit for clipped text then read
     every small button in the product as a sizing bug. `overflow: clip`,
     `overflow-clip-margin` and `contain: paint` were all measured: none of them
     take the box back out of the overflow, so the fix is to ask for the bigger
     target only where it buys something.
+
+    A rail that scrolls sideways clips this box on its own overflow, so a rail
+    carries enough vertical padding to hold a 44px target rather than relying on
+    an outset that will be cut off — see `.rail`.
   */
   @media (any-pointer: coarse) {
     .hit::after {
       content: '';
       position: absolute;
-      inset: -6px;
+      left: 50%;
+      top: 50%;
+      translate: -50% -50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+    }
+
+    /*
+      The same target, for the controls that cannot carry a pseudo-element.
+
+      `<select>` and `<input>` are replaced elements: `::after` on them
+      generates nothing in any engine, which is why the six native controls in
+      the product — three desk filters, Status, Priority, Due — measured 27–31px
+      of target against the 28–32px they paint, with no expansion at all. They
+      grow themselves to 44 instead and hand the difference straight back as a
+      negative margin, so the *layout* keeps the height the row was built around
+      while the finger gets the whole 44. The painted box moves to the wrapper
+      beside them, because a border on a control that is now 44px tall would
+      draw the target.
+
+      `--hit-ink` is that painted height; set it wherever it is not the 28px of
+      a row control. The element selector is deliberate — it has to outrank the
+      `h-*` utility sitting on the same element.
+    */
+    select.hit-native,
+    input.hit-native {
+      height: 44px;
+      margin-block: calc((44px - var(--hit-ink, 28px)) / -2);
     }
   }
 

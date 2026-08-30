@@ -35,9 +35,11 @@ import { useStill } from '../lib/motion'
 import { actions } from '../lib/api'
 import type { Analytics, SourceName } from '../lib/types'
 import { duration } from '../lib/time'
-import { Bars, Donut, Legend, PartBar, Ring, WeekdayBars, type DonutSlice } from '../components/charts'
+import {
+  Bars, Donut, Legend, PartBar, Ring, WEEKDAY, WeekdayBars, type DonutSlice,
+} from '../components/charts'
 import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
-import { Empty, Segmented } from '../components/primitives'
+import { Empty, PageTitle, Segmented } from '../components/primitives'
 import { setParam, useParam } from '../lib/route'
 
 const RANGES = ['7', '30', '90'] as const
@@ -97,18 +99,39 @@ function staleRamp(i: number, n: number): string {
 }
 
 /** Four parts of a day, and the hours each one owns. */
-const DAY_PARTS: Array<{ id: string; label: string; from: number; to: number; weight: number }> = [
-  { id: 'night', label: 'Night', from: 0, to: 5, weight: 25 },
-  { id: 'morning', label: 'Morning', from: 6, to: 11, weight: 50 },
-  { id: 'afternoon', label: 'Afternoon', from: 12, to: 17, weight: 75 },
-  { id: 'evening', label: 'Evening', from: 18, to: 23, weight: 100 },
+const DAY_PARTS: Array<{ id: string; label: string; from: number; to: number }> = [
+  { id: 'night', label: 'Night', from: 0, to: 5 },
+  { id: 'morning', label: 'Morning', from: 6, to: 11 },
+  { id: 'afternoon', label: 'Afternoon', from: 12, to: 17 },
+  { id: 'evening', label: 'Evening', from: 18, to: 23 },
 ]
 
-// A monochrome ramp on purpose. The five source hues are spent on the first
-// donut, and a second coloured ring on the same page would read as a second
-// taxonomy rather than as a clock.
+// One hue, four steps — a ramp, not a palette. Parts of a day are ordered, and
+// an ordered variable takes a sequential ramp; four unrelated hues would say
+// they are four unrelated things, and re-using the five source hues here would
+// teach the reader that violet means Slack on one ring and evening on the next.
+//
+// The hue is the accent rather than a neutral. A grey ramp is the correct shape
+// drawn in the one colour that cannot hold four legible steps on this ground:
+// `fg-dim` into `ink-700` puts Morning and Evening close enough that the ring
+// has to be read against its own legend, which is the complaint this page
+// exists to answer. Amber is already the product's second colour and is spent
+// nowhere on the first donut, so it separates the two rings rather than
+// colliding with them.
 const partColor = (weight: number) =>
-  `color-mix(in oklab, var(--color-fg-dim) ${weight}%, var(--color-ink-700))`
+  `color-mix(in oklab, var(--color-accent) ${weight}%, var(--color-ink-700))`
+
+/**
+ * Where the i-th of n drawn parts sits on that ramp.
+ *
+ * Derived from the parts that are actually drawn rather than fixed per part,
+ * which is the difference between using the ramp and wasting it: with one
+ * quiet part the remaining three used to land on 25/50/100 and put two of them
+ * a twentieth of a lightness step apart, because the missing one had taken a
+ * rung with it. Spread over what is present, the three sit 25/62/100 and the
+ * scale gives up as much separation as it has.
+ */
+const partWeight = (i: number, n: number) => (n < 2 ? 100 : 25 + (75 * i) / (n - 1))
 
 export function Pulse() {
   const days = Number(useParam('days') ?? 30) || 30
@@ -150,6 +173,23 @@ export function Pulse() {
   const done = shape(a.throughput.done)
   const clearedShape = shape(a.throughput.cleared)
 
+  /**
+   * The same rule, over the week rather than over the window.
+   *
+   * `By weekday` was the one mark on this page exempt from it, and it showed:
+   * with a single active day it drew one tall bar over six 4px stubs — the
+   * shape the throughput charts were collapsed for, six sevenths of the way.
+   * Seven empty slots do not put Sunday's number next to anything, so it says
+   * the number instead, the way every other thin series here already does.
+   */
+  const weekday = (() => {
+    const marked = a.rhythm.byWeekday.filter(d => d.value > 0)
+    return {
+      thin: marked.length < 2,
+      value: marked.length === 1 ? `${marked[0]!.value} on ${WEEKDAY[marked[0]!.weekday]}` : undefined,
+    }
+  })()
+
   /* --- panel 1: what is on the desk, by source --------------------------- */
   const bySource = new Map(a.aging.map(r => [
     r.source,
@@ -183,13 +223,22 @@ export function Pulse() {
   const staleMarked = stale.filter(s => s.value > 0)
 
   /* --- panel 5: when you work -------------------------------------------- */
-  const parts: DonutSlice[] = DAY_PARTS.map(p => ({
+  // Quiet parts are dropped before the ramp is laid over them, so a part with
+  // nothing in it neither takes a rung of the scale nor keeps a legend row
+  // reading `Afternoon 0 · 0%` beside a swatch pointing at no arc.
+  const worked = DAY_PARTS
+    .map(p => ({
+      ...p,
+      value: a.rhythm.byHour
+        .filter(h => h.hour >= p.from && h.hour <= p.to)
+        .reduce((n, h) => n + h.value, 0),
+    }))
+    .filter(p => p.value > 0)
+  const parts: DonutSlice[] = worked.map((p, i) => ({
     id: p.id,
     label: p.label,
-    value: a.rhythm.byHour
-      .filter(h => h.hour >= p.from && h.hour <= p.to)
-      .reduce((n, h) => n + h.value, 0),
-    color: partColor(p.weight),
+    value: p.value,
+    color: partColor(partWeight(i, worked.length)),
   }))
   const peak = a.rhythm.byHour.reduce((best, h) => (h.value > best.value ? h : best), a.rhythm.byHour[0]!)
 
@@ -206,7 +255,6 @@ export function Pulse() {
           <Donut
             slices={desk}
             size={200}
-            total={a.totals.openNow}
             centreTop="cards"
             centreFoot={desk.length === 1 ? 'one source' : `${desk.length} sources`}
           />
@@ -261,18 +309,24 @@ export function Pulse() {
       node: (
         <div className="space-y-6">
           <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-center sm:gap-6">
+            {/* The centre counts this ring, like the desk ring's does: the
+                total finished in the window, which is what the four arcs are
+                shares of. The peak hour is the secondary fact and reads as one
+                — as the headline it was a clock over a count from a single
+                hour, so a ring summing to four announced two. */}
             <Donut
               slices={parts}
               size={160}
-              total={`${String(peak.hour).padStart(2, '0')}:00`}
-              centreTop="peak hour"
-              centreFoot={`${peak.value} done`}
+              centreTop="finished"
+              centreFoot={`peak ${String(peak.hour).padStart(2, '0')}:00`}
             />
             <div className="w-full grow min-w-0"><Legend items={parts} /></div>
           </div>
           <div>
             <SubLabel>By weekday</SubLabel>
-            <WeekdayBars data={a.rhythm.byWeekday} />
+            {weekday.thin
+              ? <Empty>{weekday.value ?? '—'}</Empty>
+              : <WeekdayBars data={a.rhythm.byWeekday} />}
           </div>
         </div>
       ),
@@ -367,7 +421,7 @@ export function Pulse() {
 function Header({ days }: { days: number }) {
   return (
     <header className="flex items-center gap-3 pt-4 pb-2">
-      <h1 className="text-lg font-medium">Pulse</h1>
+      <PageTitle>Pulse</PageTitle>
       <Segmented
         className="ml-auto"
         options={RANGES.map(d => ({ id: d, label: `${d}d` }))}

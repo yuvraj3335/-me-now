@@ -29,9 +29,10 @@ import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, X
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
-import { Button, Empty, Field, Pager, Sheet, inputClass, pageCount, pageSlice, spring } from '../components/primitives'
+import {
+  Button, Empty, Field, PageTitle, Pager, Sheet, inputClass, pageCount, pageSlice, spring,
+} from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
-import { WakeMark } from '../components/WakeMark'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
@@ -115,7 +116,7 @@ export function Work() {
 
   // Nothing at all until the first read lands. A sentence saying a page is
   // loading is chrome that teaches, and it paints for one frame.
-  if (!state) return <div className="pad-x pt-4"><h1 className="text-lg font-medium">Work</h1></div>
+  if (!state) return <div className="pad-x pt-4 flex items-center gap-3"><PageTitle>Work</PageTitle></div>
 
   const rowProps = (t: Task) => ({
     task: t, reminders, goals,
@@ -128,8 +129,7 @@ export function Work() {
 
   const header = (
     <header className="flex items-center gap-3 pt-4 pb-2">
-      <WakeMark size={16} className="text-accent shrink-0 sm:hidden" />
-      <h1 className="text-lg font-medium">Work</h1>
+      <PageTitle>Work</PageTitle>
       <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
       <span className="ml-auto flex items-center gap-4">
         {/* Two words, not a bordered segmented box. It is a choice between two
@@ -140,7 +140,10 @@ export function Work() {
               key={id}
               onClick={() => setParam('tab', id === 'tasks' ? null : id)}
               aria-pressed={tab === id}
-              className={`hit h-8 text-sm font-medium transition-colors duration-100
+              /* `relative`, or `.hit` hangs its touch box off `<main>` instead
+                 of off the word — a page-sized invisible target that answers
+                 every tap on the route with `Goals`. */
+              className={`hit relative h-8 text-sm font-medium transition-colors duration-100
                 ${tab === id ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}
             >
               {id === 'tasks' ? 'Tasks' : 'Goals'}
@@ -175,15 +178,16 @@ export function Work() {
   /**
    * Nothing on the list, nothing that went off, nothing recorded.
    *
-   * One column, one dash, and the mic — because a second structural column
+   * One column, one line, and the mic — because a second structural column
    * holding a second em dash is a layout describing an absence, and 760px of it
-   * is the loudest way this product has ever said nothing.
+   * is the loudest way this product has ever said nothing. The line says which
+   * list is empty; a bare dash in that slot is what a failed render looks like.
    */
   if (!tasks.length && !goals.length && !fired.length && !notes?.length) {
     return (
       <div className="pad-x pb-24 xl:pb-8">
         {header}
-        <Empty />
+        <Empty>{tab === 'tasks' ? 'No tasks' : 'No goals'}</Empty>
         <VoiceNotes notes={notes} onNotes={setNotes} />
         {sheets}
       </div>
@@ -214,8 +218,11 @@ export function Work() {
                 </Reorder.Group>
               </Group>
             )}
-            {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
-            {!todo.length && !doing.length && !done.length && <Empty />}
+            {/* An empty list is one word, not a paragraph and not a tutorial — and a
+                word rather than the default dash, because a dash alone in a
+                44px slot with 90px of nothing under it reads as a render that
+                failed rather than as a list with nothing on it. */}
+            {!todo.length && !doing.length && !done.length && <Empty>No tasks</Empty>}
 
             {/*
               Done is the only list here that pages.
@@ -379,7 +386,7 @@ function TaskRow({
 
 function GoalList({ goals, tasks, onEdit }: { goals: Goal[]; tasks: Task[]; onEdit: (g: Goal) => void }) {
   const reduce = useStill()
-  if (!goals.length) return <Empty />
+  if (!goals.length) return <Empty>No goals</Empty>
   return (
     <div>
       {goals.map(g => {

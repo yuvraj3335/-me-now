@@ -6,13 +6,14 @@
  * the title sits on the same vertical as Pulse's and Settings'.
  */
 
+import { PageTitle } from '../components/primitives'
 import { SessionsView } from '../components/sessions'
 
 export function Sessions() {
   return (
     <div className="pb-24">
-      <header className="pt-4 pb-2">
-        <h1 className="text-lg font-medium">Sessions</h1>
+      <header className="pt-4 pb-2 flex items-center gap-3">
+        <PageTitle>Sessions</PageTitle>
       </header>
       <SessionsView />
     </div>

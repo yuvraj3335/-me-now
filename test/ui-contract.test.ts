@@ -323,6 +323,23 @@ describe('the shell reaches everywhere from both places', () => {
     expect(route).toMatch(/'static'/)
   })
 
+  test('an open card does not cover the phone bar', () => {
+    // The detail sheet is `fixed bottom-0 z-50` at 55dvh, and the bar is 53px
+    // at `bottom-0` under it: `elementFromPoint` returned something other than
+    // the button at all six destinations, and the screenshots show no bar at
+    // all. Desk → Mail cost a dismissal first. This is a push sheet — the list
+    // stays live underneath it — so the shell has to stay live under that.
+    const css = read('src/web/styles.css')
+    expect(css, 'the strip the bar owns is no longer measured anywhere')
+      .toMatch(/--nav-h:/)
+    const home = read('src/web/pages/Home.tsx')
+    const sheet = home.slice(home.indexOf('function PushDetail('))
+    expect(sheet, 'the sheet went back to sitting on the bottom edge')
+      .toMatch(/bottom: 'var\(--nav-h\)'/)
+    expect(sheet, 'the sheet can grow over the bar again')
+      .toMatch(/maxHeight: '[^']*--nav-h/)
+  })
+
   test('the filter and the open row both live in the URL', () => {
     const home = read('src/web/pages/Home.tsx')
     // Either subscription shape. The desk reads six params at once now, so it
@@ -907,6 +924,35 @@ describe('a long list is paged, not truncated', () => {
     // reload that happens mid-triage — the same reason the filter is a param.
     expect(read('src/web/pages/Home.tsx'), 'the desk page went back into useState')
       .toMatch(/setParam\('page'/)
+  })
+
+  test('the page in the URL is not clamped before the list has arrived', () => {
+    // Measured: `/?page=3` became `/` about 40ms after load, while the table
+    // still held zero rows. The clamp effect runs on the first commit, when
+    // `state` is null — so `rows.length` is 0, `pageCount` answers 1, and every
+    // reloaded or bookmarked page-N link landed on page 1 and rewrote itself on
+    // the way. An unread list and an empty one have to be distinguishable
+    // before anything is allowed to move the reader off a page.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the desk cannot tell an unread list from an empty one')
+      .toMatch(/const loaded = /)
+    expect(home, 'the page clamp fires again before any card exists to count')
+      .toMatch(/if \(!loaded\) return\s*\n\s*if \(page > pages\)/)
+  })
+
+  test('how the desk is ordered lives in the URL beside what it shows', () => {
+    // There was no ordering at all: the Due header was inert, so an overdue
+    // card sat below one due in three weeks and the only way to find what was
+    // due soonest was to read all 112 rows. It is a URL parameter rather than
+    // header state for the same reason the filter and the page are — it has to
+    // survive a reload and go in a bookmark.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the desk lost its ordering control').toMatch(/setParam\('sort'/)
+    expect(home, 'the order stopped being read from the address bar')
+      .toMatch(/p\.sort === 'due'/)
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'the Due header stopped announcing which way it sorts')
+      .toMatch(/aria-sort=/)
   })
 
   test('one page size, shared by the pager and everything it counts', () => {
