@@ -51,6 +51,12 @@ export async function discover(mcpUrl: string): Promise<AsMetadata | null> {
 
   const prm = await json<{ authorization_servers?: string[] }>(`${origin}/.well-known/oauth-protected-resource`)
   const candidates = [...(prm?.authorization_servers ?? []), origin]
+  // Gmail MCP publishes no OAuth metadata. Google's own OIDC document does,
+  // and that is the grant that can carry a refresh token. Without this,
+  // Claude's hourly access token is the only thing Wake can hold.
+  if (origin.includes('gmailmcp.googleapis.com')) {
+    candidates.push('https://accounts.google.com')
+  }
 
   for (const as of candidates) {
     for (const path of ['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration']) {
@@ -80,6 +86,21 @@ export function scopeQueryParam(authorizationEndpoint: string, server: string): 
 /** Slack wants commas on both of its authorize URLs; other servers want spaces. */
 export function formatScopeList(scopes: string, server: string): string {
   return scopes.replace(/,/g, server === 'slack' ? ',' : ' ')
+}
+
+/**
+ * Extra query params Wake must set on an authorize URL.
+ *
+ * Claude's Gmail login omits `access_type=offline`, so Google issues a
+ * one-hour access token and no refresh token. Wake then goes dark every
+ * hour. These two params are what make the grant durable.
+ */
+export function decorateAuthorizeUrl(url: URL, server: string): URL {
+  if (server === 'gmail') {
+    url.searchParams.set('access_type', 'offline')
+    url.searchParams.set('prompt', 'consent')
+  }
+  return url
 }
 
 export async function registerClient(md: AsMetadata, redirectUri: string): Promise<{ client_id: string; client_secret?: string } | null> {

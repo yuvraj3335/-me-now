@@ -112,27 +112,25 @@ for review (Open).
 
 ## Gmail
 
-Gmail is the awkward one, and worth knowing why: `gmailmcp.googleapis.com`
-publishes **no** OAuth discovery metadata — both well-known endpoints 404 —
-because Google expects the client to arrive already holding a Google token. So
-there is no self-serve button for it.
+`gmailmcp.googleapis.com` publishes no OAuth metadata. Wake still Connects:
+it authorizes against Google's own OIDC document and asks for
+`access_type=offline`, so the grant refreshes instead of dying every hour.
 
-Try the CLI route first:
+`claude mcp login gmail` does **not** request offline access. That token
+lasts about an hour and Wake then correctly says it has nothing.
 
-```bash
-claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1 && claude mcp login gmail
+**The durable way — Settings → Gmail → Connect.** Add this redirect URI on
+the Google OAuth client (the same app as project `285417044045`):
+
+```
+https://<your-wake>/api/connections/callback
 ```
 
-If that succeeds, Wake picks the token up through chain step 2 and Gmail lights
-up on the next poll.
+Wake reuses the client id/secret already stored by `claude mcp login` if
+they are on the box. If Connect asks for them, paste them once.
 
-If it does not, put a Google OAuth access token with `gmail.readonly` in the
-environment instead:
-
-```bash
-# in ~/work/wake/.env
-WAKE_GMAIL_TOKEN=ya29....
-```
+The hourly CLI login still works as a stopgap and is not how you should
+run this.
 
 The address in `WAKE_EMAILS` is the account Wake connects (`yuvraj@truto.one`
 by default). Add a second, comma-separated address only if you actually own a

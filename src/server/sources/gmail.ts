@@ -83,10 +83,7 @@ export const gmail: SourceAdapter = {
       }
     }
     if (!live.length) {
-      // No Connect button accompanies this, because there is nothing to press:
-      // `gmailmcp.googleapis.com` publishes no OAuth metadata, so Wake cannot
-      // even build an authorize URL. Fetch covers the data through the box.
-      return { ok: false, detail: 'no token Wake can obtain' }
+      return { ok: false, detail: 'Connect — Google\'s hourly token expired and cannot be refreshed' }
     }
     return { ok: true, detail: `connected: ${live.join(', ')}`, via: per.find(p => p.token)?.via }
   },

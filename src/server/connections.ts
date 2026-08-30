@@ -11,9 +11,10 @@ import { ADAPTERS, ingest } from './ingest'
 import type { SourceName } from './sources/types'
 import { resolveToken, claudeBridgeToken } from './mcp/creds'
 import {
-  challengeFor, discover, exchangeCode, formatScopeList, getStored, makeVerifier,
-  putStored, registerClient, scopeQueryParam,
+  challengeFor, decorateAuthorizeUrl, discover, exchangeCode, formatScopeList,
+  getStored, makeVerifier, putStored, registerClient, scopeQueryParam,
 } from './mcp/oauth'
+import { seedGmailClientFromClaude } from './mcp/creds'
 
 export const connections = new Hono()
 
@@ -32,6 +33,7 @@ connections.get('/', async c => {
   // connected. `sync_runs` is the single source of truth for what happened;
   // `status()` below answers the different question of what could happen now.
   const runs = new Map(latestFinishedRuns().map(r => [r.source, r]))
+  seedGmailClientFromClaude()
 
   const sources = await Promise.all(ADAPTERS.map(async a => {
     const status = await a.status()
@@ -45,11 +47,9 @@ connections.get('/', async c => {
       lastSync: runs.get(a.name) ?? null,
       oauthable,
       /**
-       * Whether Connect can actually work, as opposed to whether Wake knows a
-       * URL. `oauthable` meant the second and was read as the first, so Gmail
-       * rendered a Connect button on two screens that could only ever answer
-       * 400: `gmailmcp.googleapis.com` publishes no OAuth metadata at either
-       * well-known, so there is no authorize URL to build.
+       * Whether Connect can actually work. Gmail's MCP origin publishes no
+       * metadata; Wake still builds a Google authorize URL from OIDC, so
+       * this is true for Gmail the same way it is for Slack.
        */
       connectable: cfg?.oauth !== 'none',
       // Surface which link in the credential chain answered, so a confusing
@@ -78,6 +78,7 @@ connections.post('/:server/start', async c => {
   const cfg = MCP_SERVERS[server]
   if (!cfg) return c.json({ error: 'unknown server' }, 404)
 
+  if (server === 'gmail') seedGmailClientFromClaude()
   const md = await discover(cfg.url)
   if (!md) return c.json({ error: `${cfg.label} publishes no OAuth metadata; see SETUP.md` }, 400)
 
@@ -113,6 +114,7 @@ connections.post('/:server/start', async c => {
   if (scopes) {
     u.searchParams.set(scopeQueryParam(md.authorization_endpoint, server), formatScopeList(scopes, server))
   }
+  decorateAuthorizeUrl(u, server)
   return c.json({ url: u.toString() })
 })
 

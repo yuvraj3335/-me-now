@@ -67,6 +67,37 @@ export function claudeBridgeToken(server: string): string | null {
   return best?.token ?? null
 }
 
+/**
+ * The Google client Claude already used for `claude mcp login gmail`.
+ * Wake needs the same id/secret to run its own offline grant. Does not
+ * copy the hourly access token — that one cannot be refreshed.
+ */
+export function seedGmailClientFromClaude() {
+  if (getStored('gmail')?.client_id) return
+  let raw: string
+  try {
+    raw = readFileSync(claudeCredentialsPath(), 'utf8')
+  } catch {
+    return
+  }
+  let parsed: {
+    mcpOAuth?: Record<string, ClaudeMcpEntry & { clientId?: string }>
+    mcpOAuthClientConfig?: Record<string, { clientSecret?: string }>
+  }
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return
+  }
+  for (const [key, entry] of Object.entries(parsed.mcpOAuth ?? {})) {
+    const name = (entry.serverName ?? key.split('|')[0] ?? '').toLowerCase()
+    if (name !== 'gmail' || !entry.clientId) continue
+    const secret = parsed.mcpOAuthClientConfig?.[key]?.clientSecret
+    putStored('gmail', { client_id: entry.clientId, client_secret: secret ?? null })
+    return
+  }
+}
+
 /** Refresh Wake's own token when it is within a minute of expiring. */
 async function wakeOauthToken(server: string): Promise<string | null> {
   const row = getStored(server)
@@ -75,7 +106,9 @@ async function wakeOauthToken(server: string): Promise<string | null> {
   const fresh = !row.expires_at || row.expires_at > Date.now() + 60_000
   if (fresh) return row.access_token
 
-  if (!row.refresh_token || !row.client_id) return row.access_token
+  // An expired grant with no refresh token is not a token. Serving it
+  // turned Gmail's hourly death into a 401 instead of Connect.
+  if (!row.refresh_token || !row.client_id) return null
   const md = await discover(MCP_SERVERS[server]?.url ?? '')
   if (!md) return row.access_token
 

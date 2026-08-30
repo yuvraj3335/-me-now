@@ -88,7 +88,14 @@ export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: 
     scopes: 'canvases:read,canvases:write,channels:history,channels:read,channels:write,chat:write,emoji:read,files:read,groups:history,groups:read,groups:write,im:history,im:read,im:write,lists:read,lists:write,mpim:history,mpim:read,mpim:write,reactions:read,reactions:write,search:read,search:read.files,search:read.im,search:read.mpim,search:read.private,search:read.public,search:read.users,team:read,users:read,users:read.email',
   },
   sentry: { url: str('WAKE_SENTRY_MCP_URL', 'https://mcp.sentry.dev/mcp'), label: 'Sentry', oauth: 'dcr' },
-  gmail: { url: str('WAKE_GMAIL_MCP_URL', 'https://gmailmcp.googleapis.com/mcp/v1'), label: 'Gmail', oauth: 'none' },
+  gmail: {
+    url: str('WAKE_GMAIL_MCP_URL', 'https://gmailmcp.googleapis.com/mcp/v1'),
+    label: 'Gmail',
+    // Google hosts the MCP; Google's OIDC document hosts the grant.
+    // Connect asks for offline access so the token does not die every hour.
+    oauth: 'client-id',
+    scopes: 'https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.compose',
+  },
 }
 
 export const IS_DEV = str('NODE_ENV') !== 'production'

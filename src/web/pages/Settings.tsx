@@ -30,8 +30,8 @@
  *   2. **Disconnect is only offered for a token that is actually working.**
  *      A held token whose poll failed is Reconnect (same client id, new
  *      grant). Disconnect deletes the `oauth_tokens` row, client id included.
- *   3. **A source that cannot be connected offers no Connect button.** Gmail's
- *      could only ever answer 400.
+ *   3. **A source that cannot be connected offers no Connect button.**
+ *      Gmail now can — Google OIDC plus offline access.
  */
 
 import { useEffect, useState } from 'react'

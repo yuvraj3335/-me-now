@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'bun:test'
 import { MCP_SERVERS } from '../src/server/env'
-import { formatScopeList, scopeQueryParam } from '../src/server/mcp/oauth'
+import { decorateAuthorizeUrl, formatScopeList, scopeQueryParam } from '../src/server/mcp/oauth'
 
 describe('OAuth scope query param', () => {
   test('Slack MCP v2_user authorize reads scope, not user_scope', () => {
@@ -21,6 +21,14 @@ describe('OAuth scope query param', () => {
 
   test('other servers space-separate scopes', () => {
     expect(formatScopeList('a,b,c', 'sentry')).toBe('a b c')
+  })
+
+  test('Gmail Connect asks Google for a refresh token', () => {
+    const u = decorateAuthorizeUrl(new URL('https://accounts.google.com/o/oauth2/v2/auth'), 'gmail')
+    expect(u.searchParams.get('access_type')).toBe('offline')
+    expect(u.searchParams.get('prompt')).toBe('consent')
+    expect(MCP_SERVERS.gmail!.oauth).toBe('client-id')
+    expect(MCP_SERVERS.gmail!.scopes).toContain('gmail.readonly')
   })
 
   test('Slack MCP is asked for granular search scopes, and not files:write', () => {
