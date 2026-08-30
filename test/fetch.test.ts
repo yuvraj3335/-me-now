@@ -8,8 +8,10 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { parseRows } from '../src/server/fetch/claude'
 import { whyFrom } from '../src/server/fetch'
+import { clean } from '../src/server/sources/slack'
 
 describe('only schema-valid objects are read', () => {
   test('a fenced array is unwrapped', () => {
@@ -81,5 +83,35 @@ describe('why is a rule firing, not a sentence somebody wrote', () => {
     expect(whyFrom(null, 'waiting')).toBe('you were named')
     expect(whyFrom(null, 'open')).toBe('open where you are named')
     expect(whyFrom('the deploy finished', 'open')).toBe('open where you are named')
+  })
+})
+
+describe('the two pipes land on one desk without fighting', () => {
+  test('a Slack search hit is normalised the way the poller normalises it', () => {
+    // The poller runs Slack's wire markup through `clean`; a search hit arrives
+    // raw. Unguarded, that put `<@U09617LRRDF|Yuvraj Muley> can you look` on the
+    // live desk as a row title, overwriting the clean one the poll had written.
+    expect(clean('<@U09617LRRDF|Yuvraj Muley> can you look at this?'))
+      .toBe('@Yuvraj Muley can you look at this?')
+    const search = readFileSync('src/server/sources/search.ts', 'utf8')
+    expect(search, 'the search path stopped normalising Slack markup')
+      .toContain('clean(h.text)')
+  })
+
+  test('a collision with a poll row refreshes the sighting and nothing else', () => {
+    // Identity dedup, with pipe 1 winning: it has a live credential and a
+    // three-minute cadence, and Fetch is a manual snapshot.
+    const src = readFileSync('src/server/fetch/index.ts', 'utf8')
+    expect(src, 'Fetch went back to overwriting rows the poller owns')
+      .toMatch(/found_by === 'poll'[\s\S]{0,400}UPDATE cards SET group_key = \?, last_seen_at = \?, gone = 0/)
+  })
+
+  test('the poller cannot sweep a row Fetch put there', () => {
+    // Fetch is manual and asks questions the poll never asks, so everything it
+    // lands is by definition something the next poll will not return. Without
+    // this condition a Fetch row survives under three minutes.
+    const ingest = readFileSync('src/server/ingest.ts', 'utf8')
+    expect(ingest, "the sweep stopped scoping itself to the pipe that owns the sighting")
+      .toMatch(/UPDATE cards SET gone = 1[\s\S]{0,200}found_by = 'poll'/)
   })
 })

@@ -135,6 +135,13 @@ export function parseSlackResults(md: string): SlackHit[] {
 }
 
 /**
+ * Slack's own markup, out. Exported because the search path in
+ * `sources/search.ts` reads the same text and must normalise it the same way:
+ * without it a Fetch row's title is `<@U09617LRRDF|Yuvraj Muley> can you look`,
+ * which is the raw wire format sitting on the desk.
+ */
+
+/**
  * "Anything that reads like a task or ask aimed at me" — the brief asked for
  * this, and it is done with rules rather than a model, so you can read exactly
  * why any given message was flagged. Deliberately tuned to under-claim.
@@ -154,7 +161,7 @@ export function readsLikeAsk(text: string): string | null {
   return null
 }
 
-const clean = (t: string) =>
+export const clean = (t: string) =>
   t.replace(/<@([A-Z0-9]+)\|([^>]+)>/g, '@$2')
    .replace(/<@([A-Z0-9]+)>/g, '@$1')
    .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, '$2')

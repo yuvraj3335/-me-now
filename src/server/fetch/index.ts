@@ -437,9 +437,29 @@ function land(incoming: RawCard[]): { written: number; fresh: number } {
     for (const c of incoming) {
       const id = cardId(c)
       const gk = groups.get(id) ?? id
-      const prev = db.query<{ group_key: string; first_seen_at: number }, [string]>(
-        `SELECT group_key, first_seen_at FROM cards WHERE id = ?`,
+      const prev = db.query<{ group_key: string; first_seen_at: number; found_by: string }, [string]>(
+        `SELECT group_key, first_seen_at, found_by FROM cards WHERE id = ?`,
       ).get(id)
+
+      /*
+       * If pipe 1 owns this row, pipe 1 wins.
+       *
+       * The two pipes read the same message and normalise it differently — the
+       * poller runs Slack's markup through `clean`, and a search hit arrives
+       * raw — so an unguarded upsert let Fetch replace a clean title with
+       * `<@U09617LRRDF|Yuvraj Muley> can you look`, on rows the poller owns, on
+       * the live desk. Beyond the normalisation, pipe 1 has a live credential
+       * and a three-minute cadence; Fetch is a manual snapshot. So a collision
+       * only refreshes the sighting: the group it belongs to, that it is still
+       * there, and when it was last seen.
+       */
+      if (prev?.found_by === 'poll') {
+        db.query(`UPDATE cards SET group_key = ?, last_seen_at = ?, gone = 0 WHERE id = ?`)
+          .run(gk, at, id)
+        written++
+        if (prev.group_key !== gk) migrateState(prev.group_key, gk)
+        continue
+      }
 
       db.query(
         `INSERT INTO cards (id, source, source_id, account, group_key, kind, title, why, actor, actor_id,

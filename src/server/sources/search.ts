@@ -10,7 +10,7 @@
  * All of it is read-only. Nothing in this file can post, reply or modify.
  */
 
-import { runSearch, discoverTools, readThread } from './slack'
+import { runSearch, discoverTools, readThread, clean } from './slack'
 import { sessionFor as gmailSession } from './gmail'
 import { getSession as sentrySession, findIssuesTool, orgSlug, parseSentryIssues } from './sentry'
 import { GMAIL_ACCOUNTS } from '../env'
@@ -35,7 +35,7 @@ export async function searchSlack(query: string, limit = 15): Promise<SearchHit[
     source: 'slack',
     title: h.isDm ? `DM ${h.channelName || h.channelId}` : `#${h.channelName || h.channelId}`,
     actor: h.fromName || h.fromId,
-    excerpt: h.text,
+    excerpt: clean(h.text),
     url: h.permalink,
     ts: h.epochMs,
     // `channel:ts` is the same reference the dedup engine keys threads on, so a
