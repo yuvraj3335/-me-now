@@ -7,7 +7,8 @@ import { Hono } from 'hono'
 import { latestFinishedRuns, db, now, uid } from './db'
 import { resetSlackSession } from './sources/slack'
 import { MCP_SERVERS, PUBLIC_URL } from './env'
-import { ADAPTERS } from './ingest'
+import { ADAPTERS, ingest } from './ingest'
+import type { SourceName } from './sources/types'
 import { resolveToken, claudeBridgeToken } from './mcp/creds'
 import {
   challengeFor, discover, exchangeCode, formatScopeList, getStored, makeVerifier,
@@ -146,6 +147,9 @@ connections.get('/callback', async c => {
     // search scopes would otherwise keep serving the three-tool list from
     // the previous token for the rest of the process lifetime.
     if (pending.server === 'slack') resetSlackSession()
+    // Do not wait. The Allow tab is closing; Settings is about to reload
+    // and must not still be reading the poll from before this grant.
+    void ingest(pending.server as SourceName)
     return c.html(page(`${cfg!.label} connected`, 'You can close this tab.', true))
   } catch (e) {
     return c.html(page('Authorization failed', (e as Error).message))

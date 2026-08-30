@@ -89,6 +89,11 @@ export function Settings() {
   useEffect(() => {
     void load()
     void currentSubscription().then(s => setPushOn(!!s))
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void load()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
 
   async function connect(s: SourceStatus) {
