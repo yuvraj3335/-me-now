@@ -9,7 +9,9 @@
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { reindexSkills, listSkills, getSkill, loadSkill, loadSkillReference } from '../src/server/skills/catalog'
+import {
+  reindexSkills, listSkills, getSkill, loadSkill, loadSkillReference, CATALOG_SURFACE,
+} from '../src/server/skills/catalog'
 import { routeSkills } from '../src/server/skills/route'
 import { rescan, listRepos, resolveCanonical, searchRepos } from '../src/server/registry/scan'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -36,8 +38,18 @@ describe('skill index', () => {
   })
 
   test('catalogs stay separate because they target different surfaces', () => {
-    const surfaces = new Set(listSkills().map(s => s.surface))
-    expect(surfaces.size).toBeGreaterThan(1)
+    // The invariant is the mapping, not the machine. Asserting that more than
+    // one surface appears in the *index* only tested which repositories happen
+    // to be cloned — it passed on a laptop with all three catalogs and failed
+    // on the box, which has one.
+    const surfaces = Object.values(CATALOG_SURFACE)
+    expect(new Set(surfaces).size).toBe(surfaces.length)
+
+    // And every indexed skill carries its own catalog's surface, so a CLI
+    // playbook can never be offered as advice for the platform MCP.
+    for (const s of listSkills()) {
+      expect(s.surface, `${s.id} claims the wrong surface`).toBe(CATALOG_SURFACE[s.catalog])
+    }
   })
 
   test('a skill body is only read on demand', () => {
