@@ -12,7 +12,7 @@ import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import { MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs } from '../dedup'
-import type { RawCard, Ref, SourceAdapter } from './types'
+import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
 
 let session: McpSession | null = null
 const getSession = () =>
@@ -184,10 +184,10 @@ export const slack: SourceAdapter = {
 
   async fetch() {
     const { token } = await resolveToken('slack')
-    if (!token) return []
+    if (!token) throw new NotConnected('slack')
 
     const t = await discoverTools()
-    if (!t.search) return []
+    if (!t.search) throw new Error('the Slack server exposes no search tool')
 
     const since = new Date(Date.now() - LOOKBACK_DAYS * 864e5).toISOString().slice(0, 10)
     const me = t.myUserId

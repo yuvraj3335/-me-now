@@ -20,8 +20,14 @@ const bad = (m: string) => ({ error: m })
 
 type Row = Record<string, any>
 
-/** Cards grouped into the dedup unit the UI actually renders. */
-function groupedCards() {
+/**
+ * Cards grouped into the dedup unit the UI actually renders.
+ *
+ * `hidden` asks for the opposite set: the groups a Done or Not-mine took off
+ * the list. Nothing else changes — same grouping, same lead card, same sources
+ * — because a card someone wants back has to be the card they recognise.
+ */
+function groupedCards(opts: { hidden?: boolean } = {}) {
   const cards = db.query<Row, []>(`SELECT * FROM cards WHERE gone = 0 ORDER BY ts DESC`).all()
   const states = new Map<string, Row>(
     db.query<Row, []>(`SELECT * FROM card_state`).all().map(s => [s.group_key, s]),
@@ -45,7 +51,7 @@ function groupedCards() {
     )
     const lead = sorted[0]!
     const computed = pileOf({ pile: leadPile(sorted) }, state)
-    if (computed === 'hidden') continue
+    if ((computed === 'hidden') !== !!opts.hidden) continue
 
     out.push({
       group_key,
@@ -69,12 +75,20 @@ function groupedCards() {
             acked_at: state.acked_at, snoozed_until: state.snoozed_until,
             notified_at: state.notified_at, pinned: !!state.pinned,
             pile_override: state.pile_override,
+            done_at: state.done_at, not_mine: !!state.not_mine,
           }
         : null,
       tasks: db.query<Row, [string]>(
         `SELECT id, title, status FROM tasks WHERE source_card_group = ?`,
       ).all(group_key),
     })
+  }
+
+  if (opts.hidden) {
+    // Most recently taken off the list first: the one someone wants back is
+    // almost always the one they just removed.
+    out.sort((a, b) => (b.state?.done_at ?? b.ts) - (a.state?.done_at ?? a.ts))
+    return out
   }
 
   out.sort((a, b) =>
@@ -117,7 +131,7 @@ api.get('/state', async c => {
     // duration of each poll — the Home page's sync line said "needs connect"
     // about a source that was answering fine.
     lastSync: db.query<Row, []>(
-      `SELECT source, MAX(started_at) AS at, ok, count, error
+      `SELECT source, MAX(started_at) AS at, ok, connected, count, error
          FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
     ).all(),
     serverTime: now(),
@@ -189,7 +203,22 @@ api.post('/cards/:group/pin', async c => {
 api.post('/cards/:group/restore', c => {
   const g = decodeURIComponent(c.req.param('group'))
   touchState(g, { not_mine: 0, done_at: null, snoozed_until: null, pile_override: null })
+  logEvent('card_restored', { group_key: g })
   return c.json({ ok: true })
+})
+
+/**
+ * What Done and Not-mine took away.
+ *
+ * Done is one unconfirmed keystroke, and until this existed there was no route
+ * back to a card it removed: the sheet is unreachable once the card is off
+ * every pile, and a re-sync does not undo it — the suppression is state, not a
+ * missing card. `POST /cards/:group/restore` was always here; this is the list
+ * that makes it findable.
+ */
+api.get('/cards/done', c => {
+  const limit = Math.min(Number(c.req.query('limit') ?? 40) || 40, 200)
+  return c.json({ cards: groupedCards({ hidden: true }).slice(0, limit) })
 })
 
 /** Slack threads are read on demand rather than on every poll. */

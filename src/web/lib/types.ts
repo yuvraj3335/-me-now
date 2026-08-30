@@ -32,6 +32,9 @@ export type Card = {
     notified_at: number | null
     pinned: boolean
     pile_override: string | null
+    /** Only ever set on a card `GET /cards/done` returned. */
+    done_at?: number | null
+    not_mine?: boolean
   } | null
   tasks: Array<{ id: string; title: string; status: string }>
 }
@@ -69,16 +72,35 @@ export type Notification = {
   url: string | null; kind: string | null; created_at: number; read_at: number | null
 }
 
+/**
+ * One source's last finished poll.
+ *
+ * `connected` is the fact `ok` cannot carry: a source with no account attached
+ * polls successfully, finds nothing, and reports `ok: 1, count: 0` — which is
+ * indistinguishable from a healthy sync of an inbox with nothing new in it
+ * unless the run also says whether there was anything to poll.
+ */
+export type SyncRun = {
+  source: string
+  at: number
+  ok: number
+  count: number
+  error: string | null
+  connected: number
+}
+
 export type State = {
   now: Card[]; open: Card[]; parked: Card[]
   tasks: Task[]; goals: Goal[]; reminders: Reminder[]
   notifications: Notification[]
-  lastSync: Array<{ source: string; at: number; ok: number; count: number; error: string | null }>
+  lastSync: SyncRun[]
   serverTime: number
 }
 
 export type SourceStatus = {
   name: SourceName; label: string; ok: boolean; detail: string; via?: string
+  /** The last finished poll, or null if this source has never run one. */
+  lastSync: { ok: number; at: number; error: string | null } | null
   oauthable: boolean; hasWakeToken: boolean; hasClaudeBridge: boolean
   hasClientId: boolean; needsClientId: boolean
 }

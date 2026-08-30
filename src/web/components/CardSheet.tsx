@@ -10,6 +10,7 @@ import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, Sheet } from './primitives'
 import { openLaunch } from '../lib/launch'
 import { cardContext, cardTitle, repoHintFor, templateFor } from '../lib/cardContext'
+import { toast } from '../lib/toast'
 
 const SNOOZE = [
   { label: 'Later today', at: () => Date.now() + 4 * 3.6e6 },
@@ -34,6 +35,15 @@ export function CardDetail({
   useEffect(() => { setThread(null); setCopied(false) }, [card.group_key])
 
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
+
+  /** Same as `run`, plus the undo bar — for the two actions that hide a card. */
+  const runUndoable = async (fn: () => Promise<unknown>, text: string) => {
+    await run(fn)
+    toast(text, {
+      label: 'Undo',
+      run: async () => { await actions.restore(card.group_key); await reload() },
+    })
+  }
 
   const resumeCmd = card.sources.find(s => s.source === 'claude')?.meta?.resume_cmd as string | undefined
   const hasSlack = card.sources.some(s => s.source === 'slack')
@@ -191,14 +201,16 @@ export function CardDetail({
           <Button variant="solid" onClick={() => onMakeTask(card)}>
             <ListPlus size={14} /> Make a task
           </Button>
-          <Button variant="solid" onClick={() => run(() => actions.doneCard(card.group_key))}>
+          <Button variant="solid"
+            onClick={() => runUndoable(() => actions.doneCard(card.group_key), 'Marked done.')}>
             <Check size={14} /> Done
           </Button>
           <Button variant="ghost"
             onClick={() => run(() => actions.pin(card.group_key, !card.state?.pinned))}>
             {card.state?.pinned ? <><PinOff size={14} /> Unpin</> : <><Pin size={14} /> Pin</>}
           </Button>
-          <Button variant="ghost" onClick={() => run(() => actions.notMine(card.group_key))}>
+          <Button variant="ghost"
+            onClick={() => runUndoable(() => actions.notMine(card.group_key), 'Taken off your list.')}>
             <UserMinus size={14} /> Not mine
           </Button>
         </div>

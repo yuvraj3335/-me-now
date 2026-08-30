@@ -15,6 +15,17 @@ export const connections = new Hono()
 const REDIRECT = `${PUBLIC_URL}/api/connections/callback`
 
 connections.get('/', async c => {
+  // The last finished poll per source, so a row can say "connected" and "the
+  // last poll still failed" at once. Being reachable and being useful are
+  // different claims, and a status row that only makes the first reads as
+  // healthy for a source that has not returned anything in a day.
+  const runs = new Map<string, { ok: number; at: number; error: string | null }>(
+    db.query<{ source: string; at: number; ok: number; error: string | null }, []>(
+      `SELECT source, MAX(started_at) AS at, ok, error
+         FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
+    ).all().map(r => [r.source, { ok: r.ok, at: r.at, error: r.error }]),
+  )
+
   const sources = await Promise.all(ADAPTERS.map(async a => {
     const status = await a.status()
     const oauthable = a.name in MCP_SERVERS
@@ -23,6 +34,7 @@ connections.get('/', async c => {
       name: a.name,
       label: a.label,
       ...status,
+      lastSync: runs.get(a.name) ?? null,
       oauthable,
       // Surface which link in the credential chain answered, so a confusing
       // "connected but empty" state is diagnosable from the UI.

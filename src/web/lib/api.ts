@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Analytics, SourceStatus, State } from './types'
 
+/** What `POST /connections/:source/start` answers with, success or not. */
+export type ConnectStart = {
+  status?: number
+  url?: string
+  error?: string
+  detail?: string
+  redirectUri?: string
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
     ...init,
@@ -79,6 +88,7 @@ export const actions = {
   doneCard: (g: string) => post(`/cards/${encodeURIComponent(g)}/done`),
   pin: (g: string, pinned: boolean) => post(`/cards/${encodeURIComponent(g)}/pin`, { pinned }),
   restore: (g: string) => post(`/cards/${encodeURIComponent(g)}/restore`),
+  doneCards: () => req<{ cards: import('./types').Card[] }>('/cards/done'),
   thread: (g: string) => req<{ thread: any }>(`/cards/${encodeURIComponent(g)}/thread`),
 
   createTask: (b: Record<string, unknown>) => post('/tasks', b),
@@ -98,7 +108,20 @@ export const actions = {
 
   sources: () => req<SourceStatus[]>('/sources'),
   connections: () => req<{ sources: SourceStatus[]; redirectUri: string }>('/connections'),
-  connectStart: (s: string) => post<{ url?: string; error?: string; detail?: string; redirectUri?: string }>(`/connections/${s}/start`),
+  /**
+   * Unlike every other call here, this one reads the body on a failure status.
+   * "This source needs an app of your own" arrives as a 428 whose body carries
+   * the explanation and the redirect URL to paste — throwing that away and
+   * surfacing the status code is how a helpful backend becomes a dead button.
+   */
+  connectStart: async (s: string): Promise<ConnectStart> => {
+    const r = await fetch(`/api/connections/${s}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const body = (await r.json().catch(() => ({}))) as ConnectStart
+    return { ...body, status: r.status }
+  },
   setClient: (s: string, b: { client_id: string; client_secret?: string }) => post(`/connections/${s}/client`, b),
   disconnect: (s: string) => post(`/connections/${s}/disconnect`),
 

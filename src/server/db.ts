@@ -207,6 +207,9 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   started_at  INTEGER NOT NULL,
   finished_at INTEGER,
   ok          INTEGER,
+  -- Whether there was an account to poll at all. A source nobody connected
+  -- succeeds at finding nothing, which is not the same fact as a healthy sync.
+  connected   INTEGER NOT NULL DEFAULT 1,
   count       INTEGER,
   error       TEXT
 );
@@ -534,6 +537,23 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
       for (const c of ['turn_id', 'conv_id']) dropColumn('audit_events', c)
       for (const c of ['session_id', 'resumed_from', 'pid', 'error', 'finished_at']) {
         dropColumn('launch_packs', c)
+      }
+    },
+  },
+  {
+    id: 5,
+    name: 'sync-runs-connected',
+    // A poll of a source with no account attached used to be stored as `ok = 1,
+    // count = 0` — identical to a healthy poll that found nothing new — and the
+    // Home page's sync line read that as "Slack, just now" for a Slack nobody
+    // had connected. The run now records whether there was anything to poll.
+    //
+    // Old rows default to connected: every one of them predates the
+    // distinction, and claiming they were disconnected would be inventing a
+    // fact rather than admitting to not having one.
+    run() {
+      if (!hasColumn('sync_runs', 'connected')) {
+        db.exec(`ALTER TABLE sync_runs ADD COLUMN connected INTEGER NOT NULL DEFAULT 1`)
       }
     },
   },

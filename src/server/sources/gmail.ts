@@ -10,7 +10,7 @@ import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
 import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import type { RawCard, Ref, SourceAdapter } from './types'
+import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
 
 const sessions = new Map<string, McpSession>()
 
@@ -69,7 +69,16 @@ export const gmail: SourceAdapter = {
     const shared = await resolveToken('gmail')
     const live = per.filter(p => p.token).map(p => p.a)
     if (!live.length && shared.token) {
-      return { ok: true, detail: 'connected (single account)', via: shared.via }
+      // One token, every configured address — `fetch` polls all of them with it,
+      // and `/api/mail/state` lists all of them as connected. Calling that
+      // "single account" contradicted both wherever the string surfaced.
+      return {
+        ok: true,
+        detail: GMAIL_ACCOUNTS.length === 1
+          ? `connected: ${GMAIL_ACCOUNTS[0]}`
+          : `connected: ${GMAIL_ACCOUNTS.join(', ')} (one shared token)`,
+        via: shared.via,
+      }
     }
     if (!live.length) {
       return {
@@ -84,10 +93,12 @@ export const gmail: SourceAdapter = {
 
   async fetch() {
     const cards: RawCard[] = []
+    let anyConnected = false
 
     for (const account of GMAIL_ACCOUNTS) {
       const tok = (await resolveToken(`gmail:${account}`)).token ?? (await resolveToken('gmail')).token
       if (!tok) continue
+      anyConnected = true
 
       const s = sessionFor(account)
       // Unread mail addressed to me, excluding the automated noise that would
@@ -148,6 +159,9 @@ export const gmail: SourceAdapter = {
         })
       }
     }
+    // Every configured address came back without a token: nothing was polled,
+    // which is a different answer from "polled and found nothing".
+    if (!anyConnected) throw new NotConnected('gmail')
     return cards
   },
 }

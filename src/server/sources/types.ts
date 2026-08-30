@@ -43,10 +43,29 @@ export type StoredCard = RawCard & {
   gone: number
 }
 
+/**
+ * Thrown by `fetch()` when there is nothing to poll — no token, no account, no
+ * `gh` login on the box.
+ *
+ * Returning an empty array instead is what made a disconnected source report a
+ * healthy, up-to-the-second sync: "ran against nothing and found nothing" and
+ * "ran against your inbox and found nothing new" are not the same fact, and the
+ * sync line was stamping both `ok`. It is also not an *error* — nothing is
+ * broken — so it is a type of its own rather than a message the ingest has to
+ * pattern-match.
+ */
+export class NotConnected extends Error {
+  constructor(public readonly source: SourceName) {
+    super(`${source} is not connected`)
+    this.name = 'NotConnected'
+  }
+}
+
 export interface SourceAdapter {
   name: SourceName
   label: string
   /** Whether this source can run right now, and why not if it can't. */
   status(): Promise<{ ok: boolean; detail: string; via?: string }>
+  /** Throws `NotConnected` rather than returning `[]` when nothing is attached. */
   fetch(): Promise<RawCard[]>
 }

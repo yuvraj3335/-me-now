@@ -11,7 +11,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Search } from 'lucide-react'
-import { STATIC_MODE } from '../lib/motion'
+import { useStill } from '../lib/motion'
 
 export type Command = {
   id: string
@@ -56,6 +56,7 @@ export function Palette({
 }: { open: boolean; onClose: () => void; commands: Command[] }) {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
+  const still = useStill()
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -115,15 +116,19 @@ export function Palette({
         <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4">
           <motion.div
             className="absolute inset-0 bg-scrim/70 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
+            exit={still ? undefined : { opacity: 0 }}
             transition={{ duration: 0.14 }}
             onClick={onClose}
           />
           <motion.div
             role="dialog" aria-modal="true" aria-label="Command palette"
-            initial={STATIC_MODE ? false : { opacity: 0, y: -8, scale: 0.99 }}
+            // An ungated exit here is worse than a missing animation: the
+            // palette stays mounted, over the page, until an animation frame
+            // that a hidden tab never schedules finally arrives.
+            initial={still ? false : { opacity: 0, y: -8, scale: 0.99 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.99 }}
+            exit={still ? undefined : { opacity: 0, y: -6, scale: 0.99 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
             className="relative w-full max-w-[560px] rounded-2xl bg-ink-850 shadow-2xl
                        border border-white/[0.06] overflow-hidden"

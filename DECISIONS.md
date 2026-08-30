@@ -662,3 +662,80 @@ the brief arrived with none. And skills are chosen in the composer now rather
 than fixed by the template, because a blank brief about a sync job still wants
 the sync-job validator. The catalog prefix is stripped when they are written out:
 `B/` is Wake's own index talking, and a session has never heard of it.
+
+## 30. Four answers to a production QA pass
+
+A read-only QA pass against `yuvraj-wake.truto.dev` produced eleven findings.
+Nine were straightforward. These four were decisions.
+
+### An animation that never runs is a bug, not a missing flourish
+
+The pass reported a modal whose primary button sat 438px below a 720px fold with
+nothing able to scroll to it, and a card that stayed on the list after Done
+while the count beside it had already dropped. Both were one cause: the tab was
+not being painted, so no animation frame ever arrived. `Sheet` applied
+`y: '100%'` and never got the frame that would take it back to zero; `Card`'s
+`exit` never completed, and `AnimatePresence` holds a removed child until it
+does.
+
+This is the failure `?static` was added for and the one the route transition in
+`App.tsx` already refuses to have — but both of those are opt-in, and neither
+helps a reader whose tab went to the background. So `useStill()` now folds in
+`document.hidden` alongside reduced motion and the static flag, and a contract
+test in `test/ui-contract.test.ts` requires every `initial=` and `exit=` in
+`src/web` to be gated on it. Two more instances turned up the moment the test
+existed: the command palette, which would have stayed on screen after Escape,
+and Work's "show done" collapse.
+
+The rule is not "animate less". It is that the end state has to be reachable
+without an animation, because sometimes there isn't one.
+
+### A source nobody connected is a third state
+
+`lastSync` recorded Slack as `ok: 1, count: 0` — a poll that ran, succeeded and
+found nothing — for a Slack that had no token at all, because `fetch()` answered
+a missing credential with `[]`. The Home page dutifully rendered "Slack now".
+
+Adapters now throw `NotConnected` instead, and a run records `connected`
+alongside `ok`. That splits one boolean into the three states a reader actually
+has: not connected, connected but the last poll failed, and synced. The middle
+one is the one that was missing in both directions — Gmail spent the QA window
+genuinely connected with every mailbox request failing, and the Home page said
+"Gmail needs connect" while Settings showed it in the same green as a healthy
+GitHub.
+
+A consequence worth naming: a disconnected source now keeps its stored cards
+rather than having them marked gone, because that is what the ingest already
+does for a source that failed. Losing your Slack cards because a token expired
+overnight was never the intent.
+
+### A truncated title is still a title
+
+A session titled from its own first prompt is cut at 72 characters and keeps the
+ellipsis, so Wake never shows a clipped title as a whole one. The cost was a
+missed merge: PR #2034 and the Claude session opened for it carried
+`subject:…so 2fa cannot be bypassed` and `subject:…so 2fa cannot be…`, which
+share no reference, so the same work occupied two rows of a count whose whole
+job is to say how much is open.
+
+`groupCards` now links an elided subject to the full one it is an opening of.
+Not by canonicalising every subject to its first N characters — that is exactly
+the fuzzy merge decision #4 exists to refuse, and it would collapse
+"pick permissions when minting a token" into "…when revoking a token". Only a
+subject that was *actually* cut participates, only against a prefix of at least
+32 characters, and only when the candidates are mutually consistent: if two
+different titles both start with the prefix, nothing merges. Ambiguity leaves
+two honest cards.
+
+### Done gets an undo, not a confirmation
+
+`e` marks a card done with no modifier and no dialog, and there was no way back:
+the sheet is unreachable once a card is off every pile, a re-sync does not lift
+the suppression, and `POST /cards/:group/restore` existed but nothing linked to
+it. The QA pass lost a card to its own script and could not return it.
+
+The fix is not a confirm step. Done is the action taken fifty times a day and it
+should stay one key; what it needed was to be reversible. So: an undo bar for
+the few seconds it is likely to be wanted, and `GET /cards/done` behind a
+"Done and not mine" palette command for everything after that. Restores are
+logged, like every other state change.

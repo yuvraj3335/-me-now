@@ -55,6 +55,8 @@ export function Sheet({
    */
   wide?: boolean
 }) {
+  const still = useStill()
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -74,7 +76,8 @@ export function Sheet({
         <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center">
           <motion.div
             className="absolute inset-0 bg-scrim/70 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
+            exit={still ? undefined : { opacity: 0 }}
             transition={{ duration: 0.18 }}
             onClick={onClose}
           />
@@ -82,9 +85,13 @@ export function Sheet({
             role="dialog" aria-modal="true" aria-label={title}
             className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} bg-ink-850
                        sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[88vh] flex flex-col pad-bottom`}
-            initial={{ y: '100%', opacity: 0.6, scale: 1 }}
+            // Not animated in when frames are not being produced. `y: '100%'`
+            // is a real transform the moment it is applied, so a slide-up that
+            // never runs leaves the panel a full panel-height below the fold —
+            // its buttons unreachable, with nothing to scroll to reach them.
+            initial={still ? false : { y: '100%', opacity: 0.6, scale: 1 }}
             animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0.6 }}
+            exit={still ? undefined : { y: '100%', opacity: 0.6 }}
             transition={spring}
             drag="y"
             dragConstraints={{ top: 0, bottom: 0 }}

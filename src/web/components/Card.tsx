@@ -84,7 +84,12 @@ export function Card({
         transition={spring}
         initial={still ? false : { opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, height: 0, marginTop: 0, transition: { duration: 0.2 } }}
+        // No exit when frames are not being produced: `AnimatePresence` holds a
+        // removed child until its exit animation *finishes*, so a row marked
+        // Done in a tab that isn't painting stays in the list — visibly, at full
+        // opacity — while the count beside it has already dropped. Without an
+        // exit target there is nothing to wait for and the row goes at once.
+        exit={still ? undefined : { opacity: 0, height: 0, marginTop: 0, transition: { duration: 0.2 } }}
         // Click, not tap-through: a drag must never open a link by accident.
         onClick={() => { if (!dragging) onOpen(card) }}
         className={`relative cursor-pointer select-none group

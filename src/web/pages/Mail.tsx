@@ -32,17 +32,26 @@ export function Mail() {
   const [box, setBox] = useState('inbox')
   const [account, setAccount] = useState('all')
   const [q, setQ] = useState('')
-  const [query, setQuery] = useState('')
+  /**
+   * The submitted query, plus the number of times it was submitted.
+   *
+   * The counter is what makes a second Enter on unchanged text do something:
+   * without it, `setQuery(q)` on an identical string is a no-op React skips,
+   * and a box whose own placeholder says "press enter" answers the second press
+   * with nothing at all.
+   */
+  const [query, setQuery] = useState({ text: '', n: 0 })
   const [selected, setSelected] = useState<MailThread | null>(null)
   const [composing, setComposing] = useState<Partial<Draft> | null>(null)
 
-  const list = useThreadList({ box, account, q: query })
+  const list = useThreadList({ box, account, q: query.text, nonce: query.n })
   const listReload = list.reload
 
   // Enter in the search box, not on every keystroke: mail search is a network
   // round trip per account, and search-as-you-type would fire four of them per
   // word for results nobody reads.
-  const submitSearch = () => setQuery(q)
+  const submitSearch = () => setQuery(p => ({ text: q, n: p.n + 1 }))
+  const clearSearch = () => { setQ(''); setQuery(p => ({ text: '', n: p.n + 1 })) }
 
   useEffect(() =>
     registerPaletteActions(() => [
@@ -87,12 +96,12 @@ export function Mail() {
             <input
               value={q}
               onChange={e => setQ(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') submitSearch(); if (e.key === 'Escape') { setQ(''); setQuery('') } }}
+              onKeyDown={e => { if (e.key === 'Enter') submitSearch(); if (e.key === 'Escape') clearSearch() }}
               placeholder="Search mail — press enter"
               className="flex-1 bg-transparent outline-none text-[13px] text-fg placeholder:text-fg-mute"
             />
-            {query && (
-              <button onClick={() => { setQ(''); setQuery('') }} className="text-fg-mute hover:text-fg-dim" title="Clear">
+            {q && (
+              <button onClick={clearSearch} className="text-fg-mute hover:text-fg-dim" title="Clear">
                 <X size={12} />
               </button>
             )}
@@ -119,12 +128,7 @@ export function Mail() {
         </header>
 
         <div className="px-2 sm:px-3">
-          {list.errors.map(e => (
-            <p key={e.account} className="flex items-start gap-1.5 text-[12px] text-warn px-2 py-2 leading-snug">
-              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-              {e.account}: {e.error}
-            </p>
-          ))}
+          {list.errors.map(e => <BoxError key={e.account} account={e.account} error={e.error} />)}
 
           {list.threads.map(t => (
             <ThreadRow
@@ -137,7 +141,7 @@ export function Mail() {
           ))}
 
           {!list.loading && !list.threads.length && (
-            <Empty>{query ? 'Nothing matches that search.' : 'Nothing here.'}</Empty>
+            <Empty>{query.text ? 'Nothing matches that search.' : 'Nothing here.'}</Empty>
           )}
           {list.loading && <p className="text-[12.5px] text-fg-mute py-6 text-center">Loading…</p>}
           {list.hasMore && !list.loading && (
@@ -175,9 +179,35 @@ export function Mail() {
   )
 }
 
+/**
+ * A mailbox that would not load.
+ *
+ * The sentence says what happened; the transport's own words are one click
+ * away. They used to be the whole message — an escaped JSON-RPC envelope,
+ * status code and endpoint URL included, sitting in a mail list where the
+ * threads should be. That detail is worth keeping (it is what makes a failure
+ * diagnosable) and worth not leading with.
+ */
+function BoxError({ account, error }: { account: string; error: string }) {
+  return (
+    <div className="px-2 py-2">
+      <p className="flex items-start gap-1.5 text-[12px] text-warn leading-snug">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+        <span>Wake couldn’t load this box for {account}.</span>
+      </p>
+      <details className="mt-1 ml-[18px]">
+        <summary className="cursor-pointer list-none text-[11.5px] text-fg-mute hover:text-fg-dim transition-colors">
+          What went wrong
+        </summary>
+        <p className="mt-1 text-[11.5px] font-mono text-fg-mute break-words leading-relaxed">{error}</p>
+      </details>
+    </div>
+  )
+}
+
 /* --------------------------------- list ----------------------------------- */
 
-function useThreadList(opts: { box: string; account: string; q: string }) {
+function useThreadList(opts: { box: string; account: string; q: string; nonce: number }) {
   const [threads, setThreads] = useState<MailThread[]>([])
   const [cursors, setCursors] = useState<Record<string, string | null>>({})
   const [errors, setErrors] = useState<Array<{ account: string; error: string }>>([])
@@ -203,7 +233,10 @@ function useThreadList(opts: { box: string; account: string; q: string }) {
         setLoading(false)
       }
     },
-    [opts.box, opts.account, opts.q],
+    // `nonce` is deliberately a dependency it never reads: re-submitting the
+    // same search has to re-run it, and identity of the query string alone
+    // cannot express "again".
+    [opts.box, opts.account, opts.q, opts.nonce],
   )
 
   useEffect(() => { void load(false, {}) }, [load])
@@ -635,6 +668,14 @@ function NotConnected({ state, onRetry }: { state: MailState; onRetry: () => voi
         <summary className="cursor-pointer text-[12.5px] text-fg-mute hover:text-fg-dim transition-colors list-none">
           Fix it from a terminal
         </summary>
+        {/* The resolution order, the dotfile and the environment variable live
+            here rather than in the paragraph above: they are the answer to
+            "how", and only for a reader who has already asked. */}
+        {state.reasonDetail && (
+          <p className="mt-2 text-[12.5px] text-fg-mute leading-relaxed max-w-[62ch]">
+            {state.reasonDetail}
+          </p>
+        )}
         <pre className="mt-2 p-3 rounded-[10px] bg-ink-850 text-[12px] font-mono text-fg-dim overflow-x-auto leading-relaxed">
 {`claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1
 claude mcp login gmail`}

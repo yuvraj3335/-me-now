@@ -67,6 +67,13 @@ export function Settings() {
   const [pushOn, setPushOn] = useState(false)
   const [devices, setDevices] = useState(0)
   const [msg, setMsg] = useState<string | null>(null)
+  /**
+   * A failure to start authorization belongs beside the source that failed.
+   * It used to be written into `msg`, which renders inside Notifications —
+   * three sections down the page, in a machine slug, so clicking Connect looked
+   * like clicking nothing at all.
+   */
+  const [connectError, setConnectError] = useState<{ name: string; text: string } | null>(null)
   const [audit, setAudit] = useState(false)
 
   const load = async () => {
@@ -85,6 +92,7 @@ export function Settings() {
 
   async function connect(s: SourceStatus) {
     setBusy(s.name)
+    setConnectError(null)
     try {
       const r = await actions.connectStart(s.name)
       if (r.url) {
@@ -92,12 +100,20 @@ export function Settings() {
         window.open(r.url, '_blank', 'width=620,height=760')
         setTimeout(load, 4000)
       } else if (r.error === 'needs_client_id') {
+        // 428, and the whole answer: this source has no dynamic registration,
+        // so it needs an app of your own. The sheet asks for exactly that.
+        if (r.redirectUri) setRedirectUri(r.redirectUri)
         setClientFor(s)
       } else {
-        setMsg(r.detail ?? r.error ?? 'Could not start authorization')
+        setConnectError({
+          name: s.name,
+          // `detail` is the sentence the server wrote; the slug is the fallback,
+          // and the status code is the fallback's fallback.
+          text: r.detail ?? r.error ?? `Could not start authorization (${r.status ?? 'no response'}).`,
+        })
       }
     } catch (e) {
-      setMsg((e as Error).message)
+      setConnectError({ name: s.name, text: (e as Error).message })
     } finally {
       setBusy(null)
     }
@@ -153,7 +169,30 @@ export function Settings() {
                 </span>
               </div>
               {s.ok && s.via && <p className="text-[11.5px] text-fg-mute mt-1">through {VIA[s.via] ?? s.via}</p>}
+              {/* Connected is not the same claim as working. A source whose own
+                  last poll failed used to render in exactly the green a healthy
+                  one does, with nothing anywhere on the page saying otherwise. */}
+              {s.ok && s.lastSync && !s.lastSync.ok && (
+                <div className="mt-1.5">
+                  <p className="text-[12px] text-warn leading-snug">
+                    Connected, but the last sync failed {ago(s.lastSync.at)}.
+                  </p>
+                  {s.lastSync.error && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer list-none text-[11.5px] text-fg-mute hover:text-fg-dim transition-colors">
+                        What went wrong
+                      </summary>
+                      <p className="mt-1 text-[11.5px] font-mono text-fg-mute break-words leading-relaxed">
+                        {s.lastSync.error}
+                      </p>
+                    </details>
+                  )}
+                </div>
+              )}
               {!s.ok && <Reason name={s.name} detail={s.detail} />}
+              {connectError?.name === s.name && (
+                <p className="text-[12.5px] text-warn mt-1.5 leading-snug">{connectError.text}</p>
+              )}
             </div>
             {s.oauthable && (
               <Button
@@ -197,10 +236,11 @@ export function Settings() {
             </p>
           )}
           {!over.mail.connected && over.mail.reason && (
-            // The first sentence is the answer; the rest is the mechanism, and
-            // it is already spelled out on the Mail page itself.
+            // `reason` is now one sentence by construction, so it no longer has
+            // to be cut at the first full stop — which used to lop the second
+            // half off a genuinely useful explanation.
             <p className="text-[12.5px] text-fg-mute pt-2 leading-relaxed">
-              {over.mail.reason.split('. ')[0]}. Open Mail for the full reason and the fix.
+              {over.mail.reason} Open Mail for the fix.
             </p>
           )}
         </Section>

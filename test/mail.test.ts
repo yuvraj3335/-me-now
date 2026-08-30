@@ -15,6 +15,7 @@ import {
 } from '../src/server/mail/normalize'
 import { sanitizeEmailHtml, splitQuoted, htmlToText } from '../src/server/mail/sanitize'
 import { sendFingerprintPayload, validateDraft } from '../src/server/mail/service'
+import { onlyDeclared } from '../src/server/mail/gmail'
 import { issueConfirmation, useConfirmation } from '../src/server/security'
 
 const ME = ['me@example.com', 'team@example.com']
@@ -226,5 +227,25 @@ describe('the send gate', () => {
     const a = sendFingerprintPayload({ ...draft, to: ['  Customer@Acme.com '] })
     const b = sendFingerprintPayload(draft)
     expect(a).toEqual(b)
+  })
+})
+
+describe('only what the tool says it takes', () => {
+  // Wake could not know whether a search tool wanted `maxResults` or `pageSize`,
+  // so it sent both. Google's Gmail MCP rejects the whole request over the one
+  // it does not recognise — `Unknown name "maxResults"` — which took out every
+  // mailbox at once, and surfaced as an escaped JSON-RPC envelope where the
+  // threads should have been.
+  test('an undeclared argument is dropped', () => {
+    expect(onlyDeclared({ query: 'x', maxResults: 20, pageSize: 20 }, ['query', 'pageSize']))
+      .toEqual({ query: 'x', pageSize: 20 })
+  })
+
+  test('a tool that declares nothing gets exactly what the caller passed', () => {
+    // Narrowing against a schema that does not exist would be guessing, and a
+    // dropped argument is as broken as an extra one.
+    const args = { query: 'x', maxResults: 20 }
+    expect(onlyDeclared(args, undefined)).toBe(args)
+    expect(onlyDeclared(args, [])).toBe(args)
   })
 })

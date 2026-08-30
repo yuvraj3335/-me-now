@@ -1,7 +1,8 @@
 import { MotionConfig, motion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
-  BarChart3, Inbox, Mail as MailIcon, MoreHorizontal, RefreshCw, Settings2, SquareCheck,
+  BarChart3, Inbox, Mail as MailIcon, MoreHorizontal, RefreshCw, RotateCcw, Settings2,
+  SquareCheck, Terminal,
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
 import { registerSW } from './lib/push'
@@ -14,6 +15,9 @@ import { spring, Sheet } from './components/primitives'
 import { STATIC_MODE, useStill } from './lib/motion'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
+import { DoneSheet } from './components/DoneSheet'
+import { ToastBar } from './components/toast'
+import { openLaunch } from './lib/launch'
 import { useMailBadge } from './lib/mailBadge'
 
 /**
@@ -66,6 +70,7 @@ export default function App() {
   const store = useStore()
   const [more, setMore] = useState(false)
   const [palette, setPalette] = useState(false)
+  const [doneList, setDoneList] = useState(false)
 
   useEffect(() => { void registerSW() }, [])
 
@@ -95,7 +100,11 @@ export default function App() {
 
   const badgeFor = (p: string) => (p === '/' ? nowCount : p === '/mail' ? mailBadge : 0)
 
-  const commands = useCommands(go)
+  // Stable, like `go`: an inline arrow here would be a fresh dependency on every
+  // render, rebuilding the whole command list each time — the loop the Now page
+  // already had to fix once.
+  const openDoneList = useCallback(() => setDoneList(true), [])
+  const commands = useCommands(go, openDoneList)
 
   // `?static` renders every motion element at its end state, and `useStill`
   // folds in the reader's own reduced-motion preference. Headless panes and
@@ -213,13 +222,15 @@ export default function App() {
 
       <Palette open={palette} onClose={() => setPalette(false)} commands={commands} />
       <LaunchSheet />
+      <DoneSheet open={doneList} onClose={() => setDoneList(false)} />
+      <ToastBar />
     </div>
     </MotionConfig>
   )
 }
 
 /** Navigation, global actions, and whatever the current page contributed. */
-function useCommands(go: (p: string) => void): Command[] {
+function useCommands(go: (p: string) => void, openDoneList: () => void): Command[] {
   const version = useSyncExternalStore(subscribePalette, paletteVersion, paletteVersion)
   return useMemo(() => {
     const nav: Command[] = TABS.map(t => ({
@@ -237,11 +248,36 @@ function useCommands(go: (p: string) => void): Command[] {
         icon: <RefreshCw size={14} />,
         run: () => void refresh(),
       },
+      {
+        /**
+         * The hand-off with nothing attached yet.
+         *
+         * Every other route to "Open in Claude" starts from an object — a card,
+         * a mail thread — which is the better version of it. This is the one for
+         * when the thing you want to hand over is not on any list: it opens the
+         * same sheet on the Blank template, where a repository and a brief can
+         * be chosen the same way.
+         */
+        id: 'launch:blank',
+        label: 'Open in Claude',
+        hint: 'a blank brief',
+        group: 'Wake',
+        icon: <Terminal size={14} />,
+        run: () => openLaunch([], { template: 'blank' }),
+      },
+      {
+        id: 'cards:done',
+        label: 'Done and not mine',
+        hint: 'bring something back',
+        group: 'Wake',
+        icon: <RotateCcw size={14} />,
+        run: openDoneList,
+      },
     ]
     // `version` is the dependency that makes a page's contributions appear.
     void version
     return [...nav, ...contributedCommands(), ...global]
-  }, [go, version])
+  }, [go, openDoneList, version])
 }
 
 function NavItem({

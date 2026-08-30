@@ -42,7 +42,9 @@ export type MailMessage = {
 
 export type MailState = {
   connected: boolean
+  /** One sentence. The mechanism, if any, is in `reasonDetail`. */
   reason: string | null
+  reasonDetail: string | null
   accounts: Array<{ address: string; connected: boolean; via: string; reason: string | null }>
   boxes: Array<{ id: string; label: string }>
   me: string[]

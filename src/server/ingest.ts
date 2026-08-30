@@ -11,7 +11,7 @@
  */
 import { db, logEvent, now } from './db'
 import { cardId, groupCards } from './dedup'
-import type { RawCard, SourceAdapter, SourceName } from './sources/types'
+import { NotConnected, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
 import { claudeSessions } from './sources/claudeSessions'
 import { slack } from './sources/slack'
@@ -23,7 +23,19 @@ export const adapterFor = (n: string) => ADAPTERS.find(a => a.name === n)
 
 export type IngestReport = {
   at: number
-  sources: Array<{ source: SourceName; ok: boolean; count: number; ms: number; error?: string }>
+  sources: Array<{
+    source: SourceName
+    ok: boolean
+    /**
+     * Whether there was anything to poll. A source nobody has connected is not
+     * a failure and not a success — reporting it as either is what made the
+     * Home page say "Slack now" about an account that does not exist.
+     */
+    connected: boolean
+    count: number
+    ms: number
+    error?: string
+  }>
   groups: number
   newGroups: number
 }
@@ -52,14 +64,22 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
       try {
         const cards = await a.fetch()
         fetched.set(a.name, cards)
-        report.sources.push({ source: a.name, ok: true, count: cards.length, ms: Date.now() - t0 })
-        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 1, count = ? WHERE id = ?`)
+        report.sources.push({ source: a.name, ok: true, connected: true, count: cards.length, ms: Date.now() - t0 })
+        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 1, connected = 1, count = ? WHERE id = ?`)
           .run(Date.now(), cards.length, runId?.id ?? 0)
       } catch (e) {
+        // "Nobody has connected this" is recorded as a run that did not happen,
+        // not as one that failed: there is nothing wrong to fix, and calling it
+        // an error would put a warning on the Home page for every source the
+        // reader has deliberately not set up.
+        const disconnected = e instanceof NotConnected
         const error = (e as Error).message
-        report.sources.push({ source: a.name, ok: false, count: 0, ms: Date.now() - t0, error })
-        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 0, error = ? WHERE id = ?`)
-          .run(Date.now(), error.slice(0, 500), runId?.id ?? 0)
+        report.sources.push({
+          source: a.name, ok: false, connected: !disconnected,
+          count: 0, ms: Date.now() - t0, error,
+        })
+        db.query(`UPDATE sync_runs SET finished_at = ?, ok = 0, connected = ?, error = ? WHERE id = ?`)
+          .run(Date.now(), disconnected ? 0 : 1, error.slice(0, 500), runId?.id ?? 0)
       }
     }),
   )

@@ -4,7 +4,7 @@
  */
 import { ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import type { RawCard, SourceAdapter } from './types'
+import { NotConnected, type RawCard, type SourceAdapter } from './types'
 
 /** Cut on a word boundary, and say so — never silently mid-word. */
 function clip(s: string | undefined, max: number): string | undefined {
@@ -88,7 +88,7 @@ export const github: SourceAdapter = {
 
   async fetch() {
     const token = await ghToken()
-    if (!token) return []
+    if (!token) throw new NotConnected('github')
     const since = new Date(Date.now() - LOOKBACK_DAYS * 864e5).toISOString().slice(0, 10)
     const me = ME.githubLogin
 

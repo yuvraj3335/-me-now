@@ -1,7 +1,9 @@
 import { expect, test, describe } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cardId, extractRefs, groupCards, normalizeSubject, pile, subjectRef } from '../src/server/dedup'
+import {
+  cardId, elidedPrefix, elisionPairs, extractRefs, groupCards, normalizeSubject, pile, subjectRef,
+} from '../src/server/dedup'
 import type { RawCard } from '../src/server/sources/types'
 
 const card = (p: Partial<RawCard> & Pick<RawCard, 'source' | 'source_id'>): RawCard => ({
@@ -162,5 +164,68 @@ describe('no source hand-rolls a subject ref', () => {
       }
     }
     expect(true).toBe(true)
+  })
+})
+
+describe('a title cut short still names the same thing', () => {
+  // The real case: a Claude session titled from its own first prompt is cut to
+  // 72 characters and keeps the ellipsis; PR #2034's title is 75 and is not.
+  const long = 'fix(mfa): make the login MFA token purpose-strict so 2FA cannot be bypassed'
+  const cut = 'fix(mfa): make the login MFA token purpose-strict so 2FA cannot be…'
+
+  test('the ellipsis is recognised and stripped', () => {
+    expect(elidedPrefix('a whole title')).toBeNull()
+    expect(elidedPrefix('half a title…')).toBe('half a title')
+    expect(elidedPrefix('half a title...')).toBe('half a title')
+    // Trailing punctuation left behind by the cut goes with it.
+    expect(elidedPrefix('cut on a comma, …')).toBe('cut on a comma')
+  })
+
+  test('a PR and the session cut from its title become one card', () => {
+    const groups = groupCards([
+      card({
+        source: 'github', source_id: '1', title: long,
+        refs: [{ t: 'gh', v: 'trutohq/truto#2034' }, subjectRef(long)!],
+      }),
+      card({ source: 'claude', source_id: 's1', title: cut, refs: [subjectRef(cut)!] }),
+    ])
+    const gh = groups.get(cardId({ source: 'github', source_id: '1' }))
+    const session = groups.get(cardId({ source: 'claude', source_id: 's1' }))
+    expect(session).toBe(gh!)
+    // And the durable identifier wins the label, as it does for any merge.
+    expect(gh).toBe('gh:trutohq/truto#2034')
+  })
+
+  test('two sessions cut at different points merge too', () => {
+    const shorter = 'fix(mfa): make the login MFA token purpose-strict so…'
+    const groups = groupCards([
+      card({ source: 'claude', source_id: 'a', title: cut, refs: [subjectRef(cut)!] }),
+      card({ source: 'claude', source_id: 'b', title: shorter, refs: [subjectRef(shorter)!] }),
+    ])
+    expect(groups.get('claude:a')).toBe(groups.get('claude:b')!)
+    // The group key is the least-truncated title in the component: half a
+    // sentence is a poor name for a thing.
+    expect(groups.get('claude:a')).not.toMatch(/purpose-strict so…$/)
+  })
+
+  test('an ambiguous prefix merges nothing', () => {
+    // Two real titles share this opening. Picking one would hide the other,
+    // which is the exact failure this whole file is built to avoid.
+    const a = 'feat(api-tokens): pick permissions when minting a token'
+    const b = 'feat(api-tokens): pick permissions when revoking a token'
+    const c = 'feat(api-tokens): pick permissions when…'
+    expect(elisionPairs([a, b, c])).toEqual([])
+
+    const groups = groupCards([
+      card({ source: 'github', source_id: '1', title: a, refs: [subjectRef(a)!] }),
+      card({ source: 'github', source_id: '2', title: b, refs: [subjectRef(b)!] }),
+      card({ source: 'claude', source_id: 's', title: c, refs: [subjectRef(c)!] }),
+    ])
+    expect(new Set([groups.get('github:1'), groups.get('github:2'), groups.get('claude:s')]).size).toBe(3)
+  })
+
+  test('a prefix too short to be distinctive is not a link', () => {
+    // Below the floor, an opening is a phrase rather than a subject.
+    expect(elisionPairs(['short opening line…', 'short opening line and the rest of it'])).toEqual([])
   })
 })

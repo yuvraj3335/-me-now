@@ -13,6 +13,7 @@ import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
 import { openLaunch } from '../lib/launch'
 import { cardContext, cardTitle, repoHintFor, templateFor } from '../lib/cardContext'
 import { registerPaletteActions } from '../components/palette'
+import { toast } from '../lib/toast'
 
 /** Every kind Now can hold, in the order the filter row offers them. */
 const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
@@ -90,8 +91,32 @@ export function Home() {
       return s
     })
 
-  const done = async (c: CardT) => { drop(c.group_key); await actions.doneCard(c.group_key); void reload() }
-  const snooze = async (c: CardT) => { drop(c.group_key); await actions.snooze(c.group_key, atHour(1, 9)); void reload() }
+  /**
+   * Done and Later, with a way back.
+   *
+   * `e` is one key, unmodified and unconfirmed, which is the right cost for
+   * the action people take fifty times a day — but only if it is reversible.
+   * The bar offers the undo for the few seconds it is likely to be wanted;
+   * "Done and not mine" in the palette covers everything after that.
+   */
+  const undoable = (c: CardT, text: string) =>
+    toast(text, {
+      label: 'Undo',
+      run: async () => { await actions.restore(c.group_key); await reload() },
+    })
+
+  const done = async (c: CardT) => {
+    drop(c.group_key)
+    await actions.doneCard(c.group_key)
+    undoable(c, 'Marked done.')
+    void reload()
+  }
+  const snooze = async (c: CardT) => {
+    drop(c.group_key)
+    await actions.snooze(c.group_key, atHour(1, 9))
+    undoable(c, 'Back tomorrow morning.')
+    void reload()
+  }
 
   // One context entry per place the card was seen, each with its own facts —
   // see lib/cardContext.ts for what the one-line version used to produce.
@@ -317,7 +342,19 @@ export function Home() {
  * One line, at the bottom, naming when each source last answered and which one
  * did not. It replaces the old habit of finding that out in Settings — the
  * question "is this list complete?" belongs next to the list.
+ *
+ * Three states, not two. "Not connected" and "connected but the sync itself
+ * failed" are different problems with different fixes, and collapsing them
+ * sent a reader to connect a source that was already connected — while a
+ * source that had never been connected at all read as freshly synced, because
+ * polling nothing succeeds.
  */
+function syncWord(r: { ok: number; connected: number; at: number }): { text: string; tone: string } {
+  if (!r.connected) return { text: 'not connected', tone: 'text-fg-mute' }
+  if (!r.ok) return { text: `sync failed ${ago(r.at)}`, tone: 'text-warn' }
+  return { text: ago(r.at), tone: '' }
+}
+
 function SyncLine() {
   const { state } = useStore()
   const rows = state?.lastSync ?? []
@@ -325,16 +362,19 @@ function SyncLine() {
 
   return (
     <p className="mt-10 text-[11.5px] text-fg-mute flex flex-wrap items-center gap-x-2 gap-y-1">
-      {rows.map((r, i) => (
-        <span key={r.source} className="inline-flex items-center gap-1.5">
-          {i > 0 && <span className="text-ink-600">·</span>}
-          <span className={r.ok ? '' : 'text-warn'}>
-            {SOURCE_LABEL[r.source as keyof typeof SOURCE_LABEL] ?? r.source}
-            {' '}
-            {r.ok ? ago(r.at) : 'needs connect'}
+      {rows.map((r, i) => {
+        const w = syncWord(r)
+        return (
+          <span key={r.source} className="inline-flex items-center gap-1.5">
+            {i > 0 && <span className="text-ink-600">·</span>}
+            {/* The error is the title, not the line: a sync line that grows a
+                paragraph stops being a line anyone reads. */}
+            <span className={w.tone} title={r.error ?? undefined}>
+              {SOURCE_LABEL[r.source as keyof typeof SOURCE_LABEL] ?? r.source}{' '}{w.text}
+            </span>
           </span>
-        </span>
-      ))}
+        )
+      })}
     </p>
   )
 }

@@ -26,6 +26,7 @@ mail.get('/state', async c => {
   return c.json({
     connected: caps.connected,
     reason: caps.reason,
+    reasonDetail: caps.reasonDetail,
     accounts: caps.accounts,
     boxes: BOXES.map(b => ({ id: b.id, label: b.label })),
     me: ME.emails,

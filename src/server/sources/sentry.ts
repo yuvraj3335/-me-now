@@ -7,7 +7,7 @@ import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import { MCP_SERVERS, LOOKBACK_DAYS } from '../env'
 import { extractRefs } from '../dedup'
-import type { RawCard, Ref, SourceAdapter } from './types'
+import { NotConnected, type RawCard, type Ref, type SourceAdapter } from './types'
 
 let session: McpSession | null = null
 export const getSession = () =>
@@ -74,9 +74,9 @@ export const sentry: SourceAdapter = {
 
   async fetch() {
     const { token } = await resolveToken('sentry')
-    if (!token) return []
+    if (!token) throw new NotConnected('sentry')
     const tool = await findIssuesTool()
-    if (!tool) return []
+    if (!tool) throw new Error('the Sentry server exposes no issue-search tool')
 
     // Unresolved and assigned to me — errors nobody owns are not "on me".
     const queries = [

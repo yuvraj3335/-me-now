@@ -15,6 +15,7 @@ type Tab = 'tasks' | 'goals'
 
 export function Work() {
   const { state } = useStore()
+  const still = useStill()
   const [tab, setTab] = useState<Tab>('tasks')
   const [editing, setEditing] = useState<Task | null>(null)
   const [creating, setCreating] = useState(false)
@@ -126,8 +127,11 @@ export function Work() {
               </button>
               <AnimatePresence>
                 {showDone && (
-                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                  <motion.div
+                    initial={still ? false : { height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={still ? undefined : { height: 0, opacity: 0 }}
+                    className="overflow-hidden">
                     <div className="pt-2">
                       {done.slice(0, 40).map(t => (
                         <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}

@@ -97,10 +97,12 @@ function every(ms: number, label: string, fn: () => Promise<unknown>) {
 if (!process.env.WAKE_NO_SCHEDULER) {
   every(POLL_INTERVAL_MS, 'ingest', async () => {
     const r = await ingest()
-    const failed = r.sources.filter(s => !s.ok)
+    // A source nobody connected is `=off`, not `=err`: it is a choice, not a
+    // fault, and a log that shouts about it hides the one that really broke.
+    const failed = r.sources.filter(s => !s.ok && s.connected)
     console.log(
       `ingest: ${r.groups} groups (+${r.newGroups} new) · ` +
-      r.sources.map(s => `${s.source}${s.ok ? `=${s.count}` : '=err'}`).join(' ') +
+      r.sources.map(s => `${s.source}=${!s.connected ? 'off' : s.ok ? s.count : 'err'}`).join(' ') +
       (failed.length ? ` · errors: ${failed.map(f => `${f.source}: ${f.error}`).join('; ')}` : ''),
     )
   })

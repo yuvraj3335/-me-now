@@ -91,6 +91,60 @@ describe('navigation cannot stall', () => {
   })
 })
 
+describe('nothing waits on a frame that may never come', () => {
+  // The same rule the route transition keeps, applied to everything else that
+  // animates. A tab that is not being painted schedules no animation frames, so
+  // an entrance freezes at `initial` — a sheet stuck a full panel-height below
+  // the fold, with its buttons unreachable — and an exit never finishes, which
+  // means AnimatePresence never unmounts the row it is animating away: a card
+  // marked Done stays on the list, at full opacity, next to a count that has
+  // already dropped. Both survive the tab becoming visible again.
+  test('`still` covers a document that is not being painted', () => {
+    const motion = read('src/web/lib/motion.ts')
+    expect(motion, 'useStill no longer notices a hidden document').toContain('document.hidden')
+    expect(motion).toContain('visibilitychange')
+  })
+
+  test('every entrance and exit is gated on `still`', () => {
+    for (const f of web) {
+      const src = read(f)
+      if (!/\buseStill\b|\bSTATIC_MODE\b/.test(src) && !/initial=\{|exit=\{/.test(src)) continue
+      for (const line of src.split('\n')) {
+        const m = /^\s*(initial|exit)=\{(.*)$/.exec(line)
+        if (!m) continue
+        const value = m[2]!
+        // `false`, `undefined` and a gate on still/STATIC_MODE are all fine;
+        // a bare target object is not.
+        // `reduce` is the same `useStill()` under a name several charts use.
+        const gated =
+          /\b(still|reduce|STATIC_MODE)\b/.test(value) ||
+          /^\s*(false|undefined)\s*\}/.test(value) ||
+          // `initial` is not a motion prop on every component that has one.
+          !/^\s*\{/.test(value)
+        expect(gated, `${f}: ${m[1]} is not gated on \`still\`: ${line.trim()}`).toBe(true)
+      }
+    }
+  })
+})
+
+describe('a card that leaves the list can come back', () => {
+  test('Done offers an undo', () => {
+    for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardSheet.tsx']) {
+      const src = read(f)
+      expect(src, `${f}: Done hides a card with no way back`).toMatch(/toast\(/)
+      expect(src, `${f}: the undo does not restore anything`).toContain('actions.restore')
+    }
+  })
+
+  test('the restore list is reachable without a card to open', () => {
+    // The sheet is unreachable once a card is off every pile, so the route back
+    // cannot start from the card.
+    const app = read('src/web/App.tsx')
+    expect(app).toContain('DoneSheet')
+    expect(app, 'no palette command opens the restore list').toMatch(/cards:done/)
+  })
+})
+
 describe('the hand-off has to be a real link', () => {
   test('Open in Claude is an anchor, not a scripted window.open', () => {
     // This is the whole reason the flow has two steps. On iOS,
@@ -194,5 +248,36 @@ describe('both themes stay complete', () => {
       }
     }
     expect(true).toBe(true)
+  })
+})
+
+describe('a source nobody connected is not a healthy sync', () => {
+  // `ok: 1, count: 0` was recorded for a source with no account attached, and
+  // the Home page rendered that as "Slack, just now" — a fresh, successful
+  // sync of something that does not exist. The two facts are now separate.
+  const server = walk('src/server')
+  const readSrv = (f: string) => readFileSync(f, 'utf8')
+
+  test('no adapter answers a missing credential with an empty list', () => {
+    for (const f of server.filter(f => f.includes('/sources/') && !f.endsWith('types.ts'))) {
+      const src = readSrv(f)
+      // The shape being outlawed: `if (!token) return []`.
+      expect(src, `${f}: a missing credential is reported as a successful empty poll`)
+        .not.toMatch(/if\s*\(!\s*(token|tok|t)\s*\)\s*return\s*\[\]/)
+    }
+  })
+
+  test('the run records whether there was anything to poll', () => {
+    const ingest = readSrv('src/server/ingest.ts')
+    expect(ingest).toContain('NotConnected')
+    expect(ingest).toMatch(/connected\s*=/)
+    expect(readSrv('src/server/api.ts'), '/state stopped reporting `connected`')
+      .toMatch(/SELECT source, MAX\(started_at\) AS at, ok, connected/)
+  })
+
+  test('the sync line distinguishes all three states', () => {
+    const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
+    expect(home).toContain('not connected')
+    expect(home).toContain('sync failed')
   })
 })
