@@ -23,6 +23,8 @@ import { audit, db, now, uid } from '../db'
 import { PACK_DIR, WORKSPACE_ROOT } from '../env'
 import { redact } from '../redact'
 import { getRepo } from '../registry/scan'
+import { getSession } from '../sources/claudeSessions'
+import { listSkills } from '../skills/catalog'
 import { handoffFor, type Handoff } from './handoff'
 import { getTemplate, TEMPLATES, type SlotKind, type Template } from './templates'
 import { formatUntrusted, inspect } from '../untrusted'
@@ -68,6 +70,49 @@ export type BuildPack = {
    * template did not think of, or drop one it did.
    */
   skills?: string[]
+  /**
+   * A Claude Code session on this box that this brief is about.
+   *
+   * Context, not continuity. `claude.ai/new?q=` opens a *new* conversation and
+   * no URL targets an existing one, so what the id buys is a `## How to run
+   * this` section naming the session, its directory and its branch, plus the
+   * `claude --resume` line to paste into a terminal. See DECISIONS #35.
+   */
+  sessionId?: string | null
+  /** How the brief tells you to run it. `bypassPermissions` is the default. */
+  permissionMode?: PermissionMode
+}
+
+/**
+ * The two modes a brief may name.
+ *
+ * Both are real `--permission-mode` values. The list is closed because this
+ * string is rendered into a command line a person will paste: a free string
+ * would put whatever arrived in the request body straight into it.
+ * `bypassPermissions` is the default because every other position asks a
+ * question at the terminal that the person who wrote the brief has already
+ * answered by writing it.
+ */
+export type PermissionMode = 'bypassPermissions' | 'acceptEdits'
+export const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits'] as const satisfies readonly PermissionMode[]
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'bypassPermissions'
+export const PERMISSION_MODE_WORDS: Record<PermissionMode, string> = {
+  bypassPermissions: 'Do not stop to ask permission for tool calls; I have already approved this work by sending it.',
+  acceptEdits: 'Apply file edits without asking, but still ask before anything else that changes state.',
+}
+
+/**
+ * Whatever arrived, narrowed to a mode.
+ *
+ * Absent means the default; anything present and unrecognised is an error
+ * rather than a silent fallback. Quietly downgrading a mode nobody asked for
+ * would put a word in the brief that the sender did not choose, and the brief
+ * is the thing they are meant to be able to read back.
+ */
+export function parsePermissionMode(v: unknown): { mode: PermissionMode } | { error: string } {
+  if (v === undefined || v === null || v === '') return { mode: DEFAULT_PERMISSION_MODE }
+  if (PERMISSION_MODES.includes(v as PermissionMode)) return { mode: v as PermissionMode }
+  return { error: `"${String(v)}" is not a permission mode — use ${PERMISSION_MODES.join(' or ')}` }
 }
 
 /* -------------------------------- the cwd --------------------------------- */
@@ -105,6 +150,54 @@ const KIND_LABEL: Record<SlotKind, string> = {
   session: 'Claude Code session',
   note: 'Note',
   task: 'Task',
+}
+
+/* ------------------------------ skill identity ---------------------------- */
+
+/**
+ * One skill, one line, whichever way it was named.
+ *
+ * A skill has two spellings: the catalog id Wake indexes it under
+ * (`B/truto-cli-toolbelt`) and the bare name a person — or a template — uses
+ * (`truto-cli-toolbelt`). Templates have always used the bare one and the
+ * picker stores the id, so `Customer incident` produced `SKILLS — 4` with
+ * `truto-cli-toolbelt` in it twice: once from the template and once from the
+ * row the operator then clicked, neither of which recognised the other.
+ *
+ * `getSkill` already accepts a bare name when it is unambiguous. This is the
+ * same rule applied to a list rather than to a lookup, so both sides agree.
+ */
+export function resolveSkillId(all: ReadonlyArray<{ id: string; name: string }>, value: string): string {
+  const v = value.trim()
+  if (!v) return v
+  if (all.some(s => s.id === v)) return v
+  const byName = all.filter(s => s.name === v)
+  return byName.length === 1 && byName[0] ? byName[0].id : v
+}
+
+/**
+ * Resolve, then collapse anything that renders identically.
+ *
+ * The brief carries bare names — `B/` is Wake's own index talking and a session
+ * has never heard of it — so two ids whose last segment matches would be two
+ * copies of one line. Deduplicating on what actually gets written is what makes
+ * that impossible even when the catalog is unavailable to resolve against.
+ */
+export function normaliseSkills(
+  all: ReadonlyArray<{ id: string; name: string }>,
+  values: readonly string[],
+): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const id = resolveSkillId(all, String(raw))
+    if (!id) continue
+    const bare = id.split('/').pop()!
+    if (seen.has(bare)) continue
+    seen.add(bare)
+    out.push(id)
+  }
+  return out
 }
 
 /**
@@ -177,6 +270,14 @@ function renderItem(i: number, it: PackItemInput): string[] {
   return lines
 }
 
+/** The session a brief is about, as the brief needs to state it. */
+export type PackSession = {
+  id: string
+  cwd?: string | null
+  branch?: string | null
+  lastPrompt?: string | null
+}
+
 export function renderPack(p: {
   template: string
   templates: string[]
@@ -187,7 +288,10 @@ export function renderPack(p: {
   instruction: string
   items: PackItemInput[]
   createdAt: number
+  permissionMode?: PermissionMode
+  session?: PackSession | null
 }): string {
+  const mode = p.permissionMode ?? DEFAULT_PERMISSION_MODE
   const lines: string[] = [
     `# ${p.title}`,
     '',
@@ -200,11 +304,45 @@ export function renderPack(p: {
       ? `A brief from Wake, my personal command centre. It concerns the **${p.repo}** repository, checked out at \`${p.cwd}\`.`
       : 'A brief from Wake, my personal command centre. It does not concern one specific repository.',
     '',
+    '## How to run this',
+    '',
+    PERMISSION_MODE_WORDS[mode],
+    '',
+  ]
+
+  /*
+   * The one place the picker's real semantics are stated in words.
+   *
+   * A link can only ever open a *new* conversation, so naming a session here is
+   * naming context: this is where the work was, this is the directory and the
+   * branch it was on, and here is the line that rejoins it on the machine it is
+   * actually on. Writing "resuming session …" would be the third time this
+   * product implied a process it does not start. See DECISIONS #35.
+   */
+  if (p.session?.id) {
+    lines.push(
+      `This brief carries a Claude Code session from my machine as **context**. You are not resuming it — ` +
+      'this is a new conversation, and that transcript is not in it beyond what is quoted below.',
+      '',
+      `- session: \`${p.session.id}\``,
+      ...(p.session.cwd ? [`- it ran in: \`${p.session.cwd}\``] : []),
+      ...(p.session.branch ? [`- on branch: \`${p.session.branch}\``] : []),
+      '',
+      'To pick it up on that machine instead, in a terminal:',
+      '',
+      '```',
+      `claude --resume ${p.session.id} --permission-mode ${mode}`,
+      '```',
+      '',
+    )
+  }
+
+  lines.push(
     '## What I need',
     '',
     p.instruction,
     '',
-  ]
+  )
 
   if (p.skills.length) {
     lines.push(
@@ -250,6 +388,8 @@ export type BuiltPack = {
   firstMessage: string
   skills: string[]
   items: PackItemInput[]
+  sessionId: string | null
+  permissionMode: PermissionMode
 }
 
 /**
@@ -300,7 +440,15 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
   ).trim()
   // The composer may add a skill the template did not think of, or drop one it
   // did; an explicit empty list has to mean empty rather than "fall back".
-  const skills = input.skills ?? [...new Set(chosen.flatMap(t => t.skills))]
+  //
+  // Both spellings are collapsed here rather than at the picker, because the
+  // template's list and the composer's list meet for the first time on this
+  // line and neither one alone can see the collision.
+  const catalog = skillIndex()
+  const skills = normaliseSkills(catalog, input.skills ?? chosen.flatMap(t => t.skills))
+
+  const permissionMode = input.permissionMode ?? DEFAULT_PERMISSION_MODE
+  const session = sessionFor(input.sessionId)
 
   const body = renderPack({
     template: template.id,
@@ -312,6 +460,8 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
     instruction,
     items,
     createdAt,
+    permissionMode,
+    session,
   })
 
   mkdirSync(PACK_DIR, { recursive: true })
@@ -332,6 +482,8 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
         skills,
         instruction,
         items: items.map(i => ({ ...i, excerpt: i.excerpt ? redact(i.excerpt) : null })),
+        session_id: session?.id ?? null,
+        permission_mode: permissionMode,
         created_at: createdAt,
       },
       null,
@@ -342,11 +494,13 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
 
   db.query(
     `INSERT INTO launch_packs (id, template, templates, title, cwd, repo_name, status,
-                               first_message, skills, pack_path, created_at)
-     VALUES (?,?,?,?,?,?, 'draft', ?,?,?,?)`,
+                               first_message, skills, pack_path, session_id, permission_mode,
+                               created_at)
+     VALUES (?,?,?,?,?,?, 'draft', ?,?,?,?,?,?)`,
   ).run(
     id, template.id, JSON.stringify(chosen.map(t => t.id)), title, cwd.path, cwd.repo,
-    redact(body), JSON.stringify(skills), packPath, createdAt,
+    redact(body), JSON.stringify(skills), packPath, session?.id ?? null, permissionMode,
+    createdAt,
   )
 
   const insert = db.query(
@@ -362,12 +516,46 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
     id, title, cwd: cwd.path,
     template: template.id, templates: chosen.map(t => t.id),
     packPath, firstMessage: redact(body), skills, items,
+    sessionId: session?.id ?? null, permissionMode,
   }
 }
 
 function defaultCwdFor(repoName: string | null): string | null {
   if (!repoName) return null
   return getRepo(repoName)?.path ?? null
+}
+
+/**
+ * The skills index, as the two fields identity needs.
+ *
+ * Read at build time rather than held: the catalogs are reindexed while the
+ * server runs, and a stale copy would resolve a name to a skill that has since
+ * been renamed. An empty index is survivable — `resolveSkillId` returns what it
+ * was given, and the brief carries the bare name either way.
+ */
+function skillIndex(): Array<{ id: string; name: string }> {
+  try {
+    return listSkills().map(s => ({ id: s.id, name: s.name }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The chosen session, as much of it as this machine can say.
+ *
+ * A session that is not on this box still gets its id and its resume line —
+ * that command is valid wherever the transcript actually lives. What is not
+ * invented is the directory and the branch: those are read off the transcript
+ * or they are absent.
+ */
+function sessionFor(id: string | null | undefined): PackSession | null {
+  const wanted = id?.trim()
+  if (!wanted) return null
+  const found = getSession(wanted)
+  return found
+    ? { id: found.id, cwd: found.cwd, branch: found.branch, lastPrompt: found.lastPrompt }
+    : { id: wanted }
 }
 
 /* ------------------------------- handing off ------------------------------- */
@@ -419,7 +607,14 @@ export function openPack(packId: string, brief?: string): OpenResult | { error: 
     // The brief itself is on disk and already redacted; logging its size and
     // whether it was trimmed is what makes "did it get everything?" answerable
     // without copying the whole thing into a second place.
-    detail: { packId, chars: handoff.sent, of: handoff.total, trimmed: handoff.trimmed, edited: !!edited },
+    //
+    // The session and the mode are read back off the row rather than passed in:
+    // this is the record of what was handed over, and the row is what was
+    // actually written.
+    detail: {
+      packId, chars: handoff.sent, of: handoff.total, trimmed: handoff.trimmed, edited: !!edited,
+      sessionId: pack.session_id ?? null, permissionMode: pack.permission_mode ?? null,
+    },
   })
 
   return {

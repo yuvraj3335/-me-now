@@ -5,10 +5,10 @@
  * Laptop sessions are deliberately not synced, and Cursor / the Claude chat app
  * are deliberately not included, per the brief.
  */
-import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { readdirSync, statSync, openSync, readSync, closeSync, readFileSync, rmSync } from 'node:fs'
 import { basename } from 'node:path'
 import {
-  CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR, LOOKBACK_DAYS,
+  CLAUDE_HOME, CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR, LOOKBACK_DAYS,
 } from '../env'
 import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
@@ -16,6 +16,17 @@ import { titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
 const TAIL_BYTES = 512 * 1024
+/**
+ * A smaller tail for the *list*.
+ *
+ * A list needs four things off each transcript — where it ran, the branch, the
+ * last prompt and roughly how much has happened — and all four are within a few
+ * kilobytes of the end. Measured over a year of history on this machine — 221
+ * transcripts — the full tail costs 1,532ms and this one costs 284ms. The card
+ * pile and `sessionExcerpt` keep the full tail, because they quote content
+ * rather than describe it.
+ */
+const LIST_TAIL_BYTES = 96 * 1024
 const MAX_SESSIONS = 24
 /**
  * Sessions age out faster than other sources. The full lookback over every
@@ -54,6 +65,14 @@ type SessionInfo = {
   pr: { url: string; repo: string; number: number } | null
   lastTs: number
   userTurns: number
+  /** The git branch the last recorded turn was on. */
+  branch: string | null
+  /** The Claude Code version that wrote the last turn, e.g. `2.1.247`. */
+  version: string | null
+  /** Where the session was started from: `claude-desktop`, `cli`, … */
+  entrypoint: string | null
+  /** The mode that session was actually running under, e.g. `bypassPermissions`. */
+  permissionMode: string | null
 }
 
 /**
@@ -61,14 +80,17 @@ type SessionInfo = {
  * the overwhelming majority of lines (assistant/attachment blobs), which is what
  * keeps a poll over ~200 transcripts cheap.
  */
-function parseSession(path: string, id: string, project: string, mtime: number): SessionInfo {
+function parseSession(
+  path: string, id: string, project: string, mtime: number, tailBytes = TAIL_BYTES,
+): SessionInfo {
   const info: SessionInfo = {
     id, project, cwd: null, title: null, lastPrompt: null, pr: null,
     lastTs: mtime, userTurns: 0,
+    branch: null, version: null, entrypoint: null, permissionMode: null,
   }
 
   let text: string
-  try { text = readTail(path, TAIL_BYTES) } catch { return info }
+  try { text = readTail(path, tailBytes) } catch { return info }
 
   for (const line of text.split('\n')) {
     if (line.length < 12 || line.charCodeAt(0) !== 123 /* { */) continue
@@ -91,6 +113,14 @@ function parseSession(path: string, id: string, project: string, mtime: number):
       case 'user':
         info.userTurns++
         if (d.cwd) info.cwd = d.cwd
+        // Only a turn that carries a real prompt records these; a `tool_result`
+        // user record has none of them. So each is assigned when present rather
+        // than defaulted, and the last turn that knew wins — which is the
+        // branch you are on and the mode you are running under *now*.
+        if (d.gitBranch) info.branch = d.gitBranch
+        if (d.version) info.version = d.version
+        if (d.entrypoint) info.entrypoint = d.entrypoint
+        if (d.permissionMode) info.permissionMode = d.permissionMode
         break
     }
   }
@@ -251,23 +281,220 @@ export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_D
     .filter(({ info }) => !isWakeRun({ cwd: info.cwd }))
 }
 
+/**
+ * Where a session ran, and what to call that place.
+ *
+ * The transcript's own `cwd` is the fact. The directory it is *filed* under is
+ * Claude Code's encoding of that fact, and the encoding is lossy: every
+ * non-alphanumeric becomes a dash, so `-Users-yuvrajmuley-work-truto-app` is
+ * `/Users/yuvrajmuley/work/truto-app` and `/Users/yuvrajmuley/work/truto/app`
+ * equally, and there is no way to tell from the name which. The old
+ * `replace(/^-/,'/').replace(/-/g,'/')` picked the second every time, which
+ * filed every dashed repository under a directory that does not exist — and the
+ * live `/state` response has sessions filed under `-Users-yuvrajmuley-work-truto`
+ * whose recorded `cwd` is `/Users/yuvrajmuley/work/wake`, so the name is not
+ * even reliably the same directory.
+ *
+ * With no recorded `cwd` the raw filed name is returned unchanged. It is not a
+ * path and does not pretend to be one; a wrong path is worse than an ugly name.
+ */
+function placeOf(info: SessionInfo, file: SessionFile): { cwd: string; project: string } {
+  const cwd = info.cwd ?? file.project
+  return { cwd, project: info.cwd ? basename(cwd) || file.project : file.project }
+}
+
+export type SessionRow = {
+  id: string
+  title: string
+  cwd: string
+  project: string
+  lastPrompt: string | null
+  /**
+   * User turns **in the tail that was read**, not in the session. Transcripts
+   * run to several megabytes and only `TAIL_BYTES` of each is opened, so this
+   * is a floor. Every surface that renders it says `turns in view`.
+   */
+  turns: number
+  lastTs: number
+  path: string
+  pr: { url: string; repo: string; number: number } | null
+  branch: string | null
+  version: string | null
+  entrypoint: string | null
+  permissionMode: string | null
+}
+
+function rowOf(file: SessionFile, info: SessionInfo): SessionRow {
+  const { cwd, project } = placeOf(info, file)
+  const prompt = cleanPrompt(info.lastPrompt)
+  return {
+    id: info.id,
+    title: titleOf(info.title, prompt, project),
+    cwd,
+    project,
+    lastPrompt: prompt,
+    turns: info.userTurns,
+    lastTs: info.lastTs,
+    path: file.path,
+    pr: info.pr,
+    branch: info.branch,
+    version: info.version,
+    entrypoint: info.entrypoint,
+    permissionMode: info.permissionMode,
+  }
+}
+
 /** Session metadata in the shape the launcher's picker and tools want. */
-export function listSessions(limit = 30, windowDays = 30) {
-  return scanSessions(limit, windowDays).map(({ file, info }) => {
-    const cwd = info.cwd ?? file.project.replace(/^-/, '/').replace(/-/g, '/')
-    const prompt = cleanPrompt(info.lastPrompt)
+export function listSessions(limit = 30, windowDays = 30): SessionRow[] {
+  return scanSessions(limit, windowDays).map(({ file, info }) => rowOf(file, info))
+}
+
+/**
+ * Every session in the window, not the newest `limit` files in it.
+ *
+ * `scanSessions` slices *before* parsing (242-244), which is right for the card
+ * pile — it wants the newest handful and nothing else. It is wrong for a page
+ * whose whole job is "show me my sessions in this repository": the newest 24
+ * files on this machine come from three or four directories, so every other
+ * repository looked empty however far back you looked.
+ *
+ * The cost of removing the slice is bounded rather than ignored. Files arrive
+ * newest-first, and the loop stops as soon as `limit` rows have been *accepted*
+ * — so a repo filter still walks until it has filled a page, and an unfiltered
+ * read still parses only a page's worth of tails.
+ */
+export function listAllSessions(
+  opts: { windowDays?: number; repo?: string; limit?: number } = {},
+): SessionRow[] {
+  const { windowDays = 30, repo, limit = 200 } = opts
+  const wanted = repo?.trim().toLowerCase() || null
+
+  const out: SessionRow[] = []
+  for (const file of sessionFiles(windowDays)) {
+    const info = parseSession(file.path, file.id, file.project, file.mtime, LIST_TAIL_BYTES)
+    // The second half of the Wake-run exclusion, against the transcript's own
+    // record of where it ran rather than the name it is filed under.
+    if (isWakeRun({ cwd: info.cwd })) continue
+    const row = rowOf(file, info)
+    if (wanted && !`${row.cwd}\n${row.project}`.toLowerCase().includes(wanted)) continue
+    out.push(row)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+/**
+ * One session, by id, over all of history.
+ *
+ * By filename, so naming a session costs one `readdir` and one tail read rather
+ * than a parse of everything in the window — the same reasoning as
+ * `sessionExcerpt`, which is the other place a session is named rather than
+ * listed. The window bounds the *list*; it does not decide what you may open
+ * once you have named it.
+ */
+export function getSession(id: string): SessionRow | null {
+  const hit = sessionFiles(ALL_HISTORY_DAYS).find(f => f.id === id)
+  if (!hit) return null
+  const info = parseSession(hit.path, hit.id, hit.project, hit.mtime)
+  return isWakeRun({ cwd: info.cwd }) ? null : rowOf(hit, info)
+}
+
+/* ------------------------------ live sessions ----------------------------- */
+
+export type LiveSession = { pid: number; name: string | null; cwd: string; startedAt: number }
+
+/**
+ * The sessions running on this box right now.
+ *
+ * Claude Code writes one `sessions/<pid>.json` per live process, carrying the
+ * pid, the session id, the cwd it started in and a messaging socket path. It is
+ * the only reliable "running right now" signal — a transcript's mtime says a
+ * session was *written to* recently, which a finished session also satisfies.
+ *
+ * The socket is deliberately not touched. Wake reads this directory and nothing
+ * else in it; writing to another process's control socket is a way to start
+ * work, and Wake starts nothing.
+ */
+export function liveSessions(): Map<string, LiveSession> {
+  const out = new Map<string, LiveSession>()
+  let entries: string[]
+  try { entries = readdirSync(`${CLAUDE_HOME}/sessions`) } catch { return out }
+
+  for (const e of entries) {
+    if (!e.endsWith('.json')) continue
+    let d: any
+    try { d = JSON.parse(readFileSync(`${CLAUDE_HOME}/sessions/${e}`, 'utf8')) } catch { continue }
+    if (!d?.sessionId) continue
+    out.set(String(d.sessionId), {
+      pid: Number(d.pid) || 0,
+      name: typeof d.name === 'string' ? d.name : null,
+      cwd: typeof d.cwd === 'string' ? d.cwd : '',
+      startedAt: Number(d.startedAt) || 0,
+    })
+  }
+  return out
+}
+
+/* -------------------------------- deletion -------------------------------- */
+
+/**
+ * The four places one session physically lives.
+ *
+ * Returned as paths rather than deleted here so the confirmation dialog can
+ * name them. Every one of these is under `~/.claude`, outside Wake's own
+ * `DATA_DIR` — `file-history/<uuid>` in particular is Claude Code's edit-undo
+ * history for real source files, which is why this is the one delete in the
+ * product that asks you to type something.
+ *
+ * A path is listed whether or not it exists: "these are the places" is the
+ * question this answers, and `deleteSession` reports which ones were actually
+ * there.
+ */
+export function sessionFilePaths(id: string): string[] {
+  const hit = sessionFiles(ALL_HISTORY_DAYS).find(f => f.id === id)
+  return [
+    ...(hit ? [hit.path, hit.path.replace(/\.jsonl$/, '')] : []),
+    `${CLAUDE_HOME}/session-env/${id}`,
+    `${CLAUDE_HOME}/file-history/${id}`,
+  ]
+}
+
+export type DeleteResult = { removed: string[]; kept: string[]; error?: string }
+
+/**
+ * Delete a session's files. Irreversible, and refused while it is running.
+ *
+ * Unlinking the transcript of a live session does not stop it — the process
+ * keeps its file descriptor and keeps appending to a file with no name, so you
+ * lose the history of a conversation that is still going. The live check is
+ * what makes that impossible rather than merely discouraged.
+ */
+export function deleteSession(id: string): DeleteResult {
+  if (!/^[0-9a-fA-F-]{8,64}$/.test(id)) return { removed: [], kept: [], error: 'that is not a session id' }
+  const live = liveSessions().get(id)
+  if (live) {
     return {
-      id: info.id,
-      title: titleOf(info.title, prompt, basename(cwd) || file.project),
-      cwd,
-      project: basename(cwd) || file.project,
-      lastPrompt: prompt,
-      turns: info.userTurns,
-      lastTs: info.lastTs,
-      path: file.path,
-      pr: info.pr,
+      removed: [], kept: [],
+      error: `that session is running right now (pid ${live.pid}) — close it first`,
     }
-  })
+  }
+
+  const removed: string[] = []
+  const kept: string[] = []
+  for (const p of sessionFilePaths(id)) {
+    try {
+      statSync(p)
+    } catch {
+      continue // never there is not a failure to remove it
+    }
+    try {
+      rmSync(p, { recursive: true, force: true })
+      removed.push(p)
+    } catch {
+      kept.push(p)
+    }
+  }
+  return { removed, kept }
 }
 
 /**
@@ -338,8 +565,7 @@ export const claudeSessions: SourceAdapter = {
       // A stub or a one-shot question is not work you are in the middle of.
       if (s.userTurns < MIN_TURNS && !s.title) continue
 
-      const cwd = s.cwd ?? f.project.replace(/^-/, '/').replace(/-/g, '/')
-      const projectName = basename(cwd) || f.project
+      const { cwd, project: projectName } = placeOf(s, f)
       const prompt = cleanPrompt(s.lastPrompt)
       const title = titleOf(s.title, prompt, projectName)
 
@@ -393,6 +619,10 @@ export const claudeSessions: SourceAdapter = {
           // its group key, and the resume command still needs it.
           session_id: s.id,
           cwd,
+          branch: s.branch,
+          // The mode it was actually last running under, so the brief can say
+          // so rather than assume. Wake's own default is a separate claim.
+          permission_mode: s.permissionMode,
           resume_cmd: `claude --resume ${s.id}`,
           turns: s.userTurns,
           pr: s.pr,

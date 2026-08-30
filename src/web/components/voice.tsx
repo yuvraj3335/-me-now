@@ -48,7 +48,7 @@ export function Mic({
           }
           listening ? stop() : start()
         }}
-        className={`p-1.5 rounded-lg transition-colors ${
+        className={`p-1.5 rounded-control transition-colors ${
           listening ? 'text-accent-ink bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-ink-800' : 'text-fg-mute/50'
         }`}
       >
@@ -64,9 +64,12 @@ export function Mic({
           <MicIcon size={14} />
         )}
       </button>
+      {/* Elevation is a 1px edge on a flat surface. This note was drawing itself
+          in a language nothing else here speaks: the only `shadow-xl` in the
+          product, on a radius that is not one of the three tokens. */}
       {note && (
         <p className="absolute right-0 top-8 z-20 w-60 text-sm text-fg-mute
-                      bg-ink-800 rounded-lg p-2 leading-snug shadow-xl">
+                      bg-ink-850 rounded-panel border border-edge p-2 leading-snug">
           {note}
         </p>
       )}

@@ -95,7 +95,7 @@ function metaFor(s: CardSource): Record<string, string | number | boolean | null
 
   switch (s.source) {
     case 'slack':
-      return pick({ channel: m.is_dm ? 'a direct message' : m.channel && `#${m.channel}`, reads_like: m.ask })
+      return pick({ channel: m.channel && `#${m.channel}`, reads_like: m.ask })
     case 'gmail':
       return pick({ account: m.account, addressed_to_me: m.direct })
     case 'github':
@@ -103,7 +103,13 @@ function metaFor(s: CardSource): Record<string, string | number | boolean | null
     case 'sentry':
       return pick({ project: m.project, level: m.level, events: m.events, users_affected: m.users })
     case 'claude':
-      return pick({ working_directory: m.cwd, exchanges: m.turns, resume_with: m.resume_cmd })
+      // `turns_in_view`, not `exchanges`: only the tail of a transcript is read,
+      // so the number is a floor. A brief that states it as a total invites a
+      // session to conclude the work was shorter than it was.
+      return pick({
+        working_directory: m.cwd, branch: m.branch, turns_in_view: m.turns,
+        permission_mode: m.permission_mode, resume_with: m.resume_cmd,
+      })
     default:
       return {}
   }

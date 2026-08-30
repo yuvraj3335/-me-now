@@ -10,14 +10,18 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildPack, getPack, openPack, PER_ITEM_QUOTE_CHARS, renderPack, resolveCwd, stripNestedBrief } from '../src/server/claudecode/launch'
+import {
+  buildPack, getPack, openPack, PER_ITEM_QUOTE_CHARS, renderPack, resolveCwd, resolveSkillId,
+  stripNestedBrief,
+} from '../src/server/claudecode/launch'
 import { withoutBrief } from '../src/server/claudecode/nestedBrief'
 import { handoffFor } from '../src/server/claudecode/handoff'
-import { HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../src/server/env'
+import { CLAUDE_PROJECTS_DIR, HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../src/server/env'
 import { TEMPLATES, getTemplate } from '../src/server/claudecode/templates'
 import { rescan } from '../src/server/registry/scan'
 
 const root = process.env.WAKE_WORKSPACE_ROOT!
+const SESSION_ID = 'bbbbbbbb-0000-4000-8000-000000000001'
 
 beforeAll(() => {
   // routing.test.ts builds the same fixture; building it again is harmless and
@@ -34,6 +38,19 @@ beforeAll(() => {
     Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'ignore', stderr: 'ignore', env })
   }
   rescan(root)
+
+  // One real transcript, so the session section is tested against what the
+  // reader actually produces rather than against an id the packer echoed back.
+  const dir = `${CLAUDE_PROJECTS_DIR}/-Users-me-work-truto`
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    `${dir}/${SESSION_ID}.jsonl`,
+    [
+      { type: 'user', cwd: '/Users/me/work/truto', gitBranch: 'fix/thing', message: { role: 'user', content: 'look at the sync' } },
+      { type: 'user', cwd: '/Users/me/work/truto', gitBranch: 'fix/thing', message: { role: 'user', content: 'carry on' } },
+      { type: 'last-prompt', lastPrompt: 'look at the sync' },
+    ].map(l => JSON.stringify(l)).join('\n'),
+  )
 })
 
 describe('templates', () => {
@@ -514,5 +531,172 @@ describe('templates are multi-select', () => {
     const body = readFileSync(built.packPath, 'utf8')
     expect(body).not.toContain('### Blank')
     expect(built.templates).toEqual(['blank'])
+  })
+})
+
+
+/* ---------------------------------------------------------------------------
+ * The instructions themselves.
+ *
+ * They are inlined into every brief, so their length is not a style question —
+ * it is how much of the packed Slack and Sentry evidence survives the URL.
+ * ------------------------------------------------------------------------- */
+
+const MAX_INSTRUCTION_CHARS = 1_200
+
+/** Roles, not tools. A template that names none is a paragraph, not a brief. */
+const ROLES = [
+  'architect', 'senior engineer', 'UI subagent', 'UX subagent', 'designer', 'QA lead',
+]
+
+describe('the instructions fit in a link', () => {
+  test('no instruction exceeds the per-template cap', () => {
+    for (const t of TEMPLATES) {
+      expect(t.instruction.length, `${t.id} is ${t.instruction.length} characters`)
+        .toBeLessThanOrEqual(MAX_INSTRUCTION_CHARS)
+    }
+  })
+
+  test('the three longest, selected together, still leave room for the evidence', () => {
+    // Multi-select concatenates them under one heading. Three long ones plus a
+    // couple of quoted threads is what `HANDOFF_MAX_CHARS` has to hold, and
+    // `PER_ITEM_QUOTE_CHARS` exists because the attachments lose that race.
+    const longest = [...TEMPLATES]
+      .sort((a, b) => b.instruction.length - a.instruction.length)
+      .slice(0, 3)
+      .reduce((n, t) => n + t.instruction.length, 0)
+    expect(longest).toBeLessThan(4_000)
+    expect(longest).toBeLessThan(HANDOFF_MAX_CHARS / 2)
+  })
+})
+
+describe('the instructions direct the work', () => {
+  test('every template but the blank one names a subagent role', () => {
+    // `blank` is "just the objects and your own instruction" — putting process
+    // into it would be putting a template into the template-less option.
+    for (const t of TEMPLATES.filter(x => x.id !== 'blank')) {
+      const named = ROLES.filter(r => t.instruction.toLowerCase().includes(r.toLowerCase()))
+      expect(named.length, `${t.id} names no subagent role`).toBeGreaterThan(0)
+    }
+  })
+
+  test('every template but the blank one says what it wants back', () => {
+    for (const t of TEMPLATES.filter(x => x.id !== 'blank')) {
+      expect(t.instruction, `${t.id} asks for nothing in particular`).toContain('DELIVER')
+    }
+  })
+
+  test('the customer template refuses to guess an environment', () => {
+    // His own words for this job: use the CLI, use the customer's profile, and
+    // if there isn't one, ask — do not pick an environment and find out later.
+    const t = getTemplate('customer-incident')!
+    expect(t.instruction).toContain('Truto CLI')
+    expect(t.instruction.toLowerCase()).toContain('profile')
+    expect(t.instruction.toLowerCase()).toContain('do not guess an environment')
+  })
+
+  test('continue-session says why it is not a resume', () => {
+    const t = getTemplate('continue-session')!
+    expect(t.instruction).toContain('not resuming')
+    expect(t.instruction, 'it asserts it without saying why').toContain('new conversation')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * A session is context, not continuity. DECISIONS.md #35.
+ * ------------------------------------------------------------------------- */
+
+describe('how the brief says to run it', () => {
+  test('a pack with no mode chosen still names one, and it is bypass', () => {
+    const built = buildPack({ template: 'blank', items: [] })
+    if ('error' in built) throw new Error(built.error)
+    expect(built.permissionMode).toBe('bypassPermissions')
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain('## How to run this')
+    expect(body).toContain('Do not stop to ask permission')
+  })
+
+  test('a chosen mode is what the brief says', () => {
+    const built = buildPack({ template: 'blank', items: [], permissionMode: 'acceptEdits' })
+    if ('error' in built) throw new Error(built.error)
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain('Apply file edits without asking')
+  })
+
+  test('a chosen session travels as context, with the command to rejoin it', () => {
+    const built = buildPack({ template: 'continue-session', items: [], sessionId: SESSION_ID })
+    if ('error' in built) throw new Error(built.error)
+    expect(built.sessionId).toBe(SESSION_ID)
+
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain(SESSION_ID)
+    expect(body).toContain(`claude --resume ${SESSION_ID} --permission-mode bypassPermissions`)
+    // Read off the transcript, not echoed from the request.
+    expect(body).toContain('/Users/me/work/truto')
+    expect(body).toContain('fix/thing')
+    // The one sentence that keeps the feature honest.
+    expect(body).toContain('You are not resuming it')
+  })
+
+  test('a pack with no session says nothing about resuming one', () => {
+    const built = buildPack({ template: 'blank', items: [] })
+    if ('error' in built) throw new Error(built.error)
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).not.toContain('--resume')
+    expect(body).not.toContain('You are not resuming it')
+  })
+
+  test('a session id this machine has never seen still gets its command', () => {
+    // The transcript may live on another box. The id and the resume line are
+    // valid there; the directory and the branch are not invented.
+    const built = buildPack({ template: 'blank', items: [], sessionId: 'cccccccc-0000-4000-8000-000000000009' })
+    if ('error' in built) throw new Error(built.error)
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain('--resume cccccccc-0000-4000-8000-000000000009')
+    expect(body).not.toContain('- it ran in:')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * A skill has two spellings, and they are one skill.
+ * ------------------------------------------------------------------------- */
+
+describe('skill identity', () => {
+  const line = (skills: string[]) => {
+    const built = buildPack({ template: 'blank', items: [], skills })
+    if ('error' in built) throw new Error(built.error)
+    return readFileSync(built.packPath, 'utf8').split('\n')
+      .find(l => l.includes('truto-cli-toolbelt')) ?? ''
+  }
+
+  test('the bare name and the catalog id write the same one line', () => {
+    // The template says `truto-cli-toolbelt`; the picker stores
+    // `B/truto-cli-toolbelt`. Before this they were two skills, and a brief
+    // from the Customer incident template listed the toolbelt twice.
+    expect(line(['truto-cli-toolbelt'])).toBe(line(['B/truto-cli-toolbelt']))
+  })
+
+  test('both spellings at once collapse to one', () => {
+    const built = buildPack({
+      template: 'blank', items: [],
+      skills: ['truto-cli-toolbelt', 'B/truto-cli-toolbelt'],
+    })
+    if ('error' in built) throw new Error(built.error)
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body.split('truto-cli-toolbelt').length - 1).toBe(1)
+  })
+
+  test('an ambiguous or unknown name is left exactly as it was given', () => {
+    // Resolution is a convenience, not a rewrite: a name the catalog cannot
+    // resolve uniquely has to survive to the brief unchanged.
+    const all = [
+      { id: 'A/thing', name: 'thing' },
+      { id: 'B/thing', name: 'thing' },
+      { id: 'B/other', name: 'other' },
+    ]
+    expect(resolveSkillId(all, 'thing')).toBe('thing')
+    expect(resolveSkillId(all, 'other')).toBe('B/other')
+    expect(resolveSkillId(all, 'B/thing')).toBe('B/thing')
+    expect(resolveSkillId(all, 'never-heard-of-it')).toBe('never-heard-of-it')
   })
 })
