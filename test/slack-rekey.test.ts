@@ -96,12 +96,31 @@ describe('a decision follows its thread', () => {
 
     const merged = stateOf(THREAD)!
     expect(merged.done_at).toBe(1_784_600_000_000)
-    expect(merged.not_mine).toBe(1)
     expect(merged.pinned).toBe(1)
-    // The pair decides and the enum follows it, which is the rule `migrateState`
-    // holds when dedup unions two groups — a row cannot be `done_at`-stamped and
-    // `in_progress` at once.
-    expect(merged.status).toBe('wont_do')
+    // The further-along status wins and the pair follows *it*, which is the rule
+    // `migrateState` holds when dedup unions two groups. Done outranks Won't do,
+    // so the thread is done — and it is not also disowned, because a row cannot
+    // carry a completion time and `not_mine` at once.
+    expect(merged.status).toBe('done')
+    expect(merged.not_mine).toBe(0)
+  })
+
+  test('a reply he disowned does not disown the thread he is working on', () => {
+    // The one shape that decides whether this migration is safe to run. `pile()`
+    // reads `not_mine`, so OR-ing it across the merge would take the live
+    // conversation off the desk on the morning of the upgrade, once, with
+    // nothing to re-run.
+    putCard(PARENT)
+    putCard('1784530800.200000')
+    putState(THREAD, { status: 'in_progress' })
+    putState(`slackthread:${CHANNEL}:1784530800.200000`, { not_mine: 1, status: 'wont_do' })
+
+    rekeySlackThreadGroups()
+
+    const merged = stateOf(THREAD)!
+    expect(merged.status).toBe('in_progress')
+    expect(merged.not_mine).toBe(0)
+    expect(merged.done_at).toBeNull()
   })
 
   test('a task made from one of those replies follows it', () => {

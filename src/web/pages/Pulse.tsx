@@ -1,48 +1,139 @@
 /**
  * Pulse.
  *
- * Three numbers on one baseline, then a two-column grid of charts sharing one
+ * Three numbers on one baseline, then a two-column grid of panels sharing one
  * gutter. Title only — no subtitles, no captions, no hints, no footer, and
  * nothing centred.
  *
- * Four things changed, all of them measured.
+ * The page used to draw seven time-series over a handful of counts: a 24-hour
+ * dial reading `00:00 / 2 done`, a by-weekday chart that was one bar, a
+ * five-colour stacked bar in shades nobody could tell apart, and four one-line
+ * rows of which Response time was a permanent em dash. Six marks replace them,
+ * chosen by what the data actually is rather than by what a dashboard usually
+ * has: a share of a whole is a donut, a distribution across five ordered
+ * buckets is one stacked bar, and two counted series that answer the same
+ * question are one chart, not two.
  *
- * **A series with no data does not hold a cell.** Two panels each spent 210px
- * centring an apology into a 572×132 hole, and a third then sat beside a
- * full-height neighbour with nothing under it. An empty series is an em dash on
- * a title row, the chart is not drawn, and the row is laid out after the grid so
- * it cannot leave a hole next to a short tile.
+ * Three rules survive from the pass before it, all of them measured.
  *
- * **The hint sentences are gone from the stat feet.** The `hint` prop left
- * `Panel` in an earlier pass and the sentences moved into the numbers'
- * subtitles: `4 replies on 1 day — not enough to trend` is forty characters of
- * explanation under a number.
+ * **A series with no data does not hold a cell.** An empty series is an em dash
+ * on a title row, the chart is not drawn, and the row is laid out after the grid
+ * so it cannot leave a hole next to a short tile.
  *
  * **`whileInView` is gone.** With `viewport={{ once: true }}` the panels below
  * the fold never enter the viewport in a capture, a print, a background tab or a
  * slow observer, so 838px of the phone page was present in the DOM, occupying
  * layout, and painting nothing.
  *
- * **The hero row is responsive.** `grid-cols-3` with no breakpoint gave three
- * 98px columns at 390px, so every label wrapped to three lines and the block had
- * a ragged bottom.
+ * **Every number is readable without a pointer.** The marks carry legends with
+ * counts and percentages as text; nothing here depends on `title=` or a hover.
  */
 
+import { useEffect, useState } from 'react'
 import { motion } from 'motion/react'
 import { useStill } from '../lib/motion'
-import { useEffect, useState } from 'react'
 import { actions } from '../lib/api'
-import type { Analytics } from '../lib/types'
+import type { Analytics, SourceName } from '../lib/types'
 import { duration } from '../lib/time'
-import { Bars, DayClock, StackedAging, Trend, TREND_MIN_POINTS, WeekdayBars } from '../components/charts'
+import {
+  Bars, Donut, Legend, PartBar, Ring, WEEKDAY, WeekdayBars, type DonutSlice,
+} from '../components/charts'
 import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
-import { Empty, Segmented } from '../components/primitives'
+import { Empty, PageTitle, Segmented } from '../components/primitives'
 import { setParam, useParam } from '../lib/route'
 
 const RANGES = ['7', '30', '90'] as const
 
+/**
+ * The order slices sit in around the ring.
+ *
+ * Fixed, not sorted by size. `sort(null)` on the pie generator stops d3 from
+ * reordering, and this is what it defers to — a ring whose slices trade places
+ * whenever a count changes looks like the data moved when only a number did.
+ *
+ * Claude leads at twelve o'clock: it is the great majority of rows here and its
+ * token is deliberately hueless, so putting it first makes the coloured minority
+ * read as the minority. Gmail and Sentry are kept apart because their tokens are
+ * about fifteen degrees of hue from each other and are not separable at 390px;
+ * `separated` below repairs the subsets where this order alone does not do it.
+ */
+const RING_ORDER: SourceName[] = ['claude', 'gmail', 'github', 'slack', 'sentry']
+
+const ringAdjacent = (i: number, j: number, n: number) =>
+  Math.abs(i - j) === 1 || Math.abs(i - j) === n - 1
+
+/**
+ * Move Sentry off Gmail's shoulder when the present subset lands them together.
+ *
+ * Below four slices every pair on a ring is adjacent, so there is nothing to
+ * repair and nothing is attempted.
+ */
+function separated(rows: DonutSlice[]): DonutSlice[] {
+  const n = rows.length
+  if (n < 4) return rows
+  const gi = rows.findIndex(r => r.id === 'gmail')
+  const si = rows.findIndex(r => r.id === 'sentry')
+  if (gi < 0 || si < 0 || !ringAdjacent(gi, si, n)) return rows
+  // Swap Sentry with its other neighbour: one step along the ring is always
+  // enough to break a single adjacency once there are four seats.
+  const other = si === n - 1 ? n - 2 : (si + 1) % n
+  const out = [...rows]
+  ;[out[si], out[other]] = [out[other]!, out[si]!]
+  return out
+}
+
+/**
+ * Ok → warn → bad across however many buckets there are, mixed in oklab so the
+ * middle steps are perceptually even rather than evenly spaced in sRGB. Every
+ * stop is a token: a hex here would not follow the theme, and light mode's
+ * palette is a different set of hues, not the same ones dimmed.
+ */
+function staleRamp(i: number, n: number): string {
+  const mid = (n - 1) / 2
+  if (i <= mid) {
+    const t = Math.round((i / mid) * 100)
+    return `color-mix(in oklab, var(--color-warn) ${t}%, var(--color-ok))`
+  }
+  const t = Math.round(((i - mid) / (n - 1 - mid)) * 100)
+  return `color-mix(in oklab, var(--color-bad) ${t}%, var(--color-warn))`
+}
+
+/** Four parts of a day, and the hours each one owns. */
+const DAY_PARTS: Array<{ id: string; label: string; from: number; to: number }> = [
+  { id: 'night', label: 'Night', from: 0, to: 5 },
+  { id: 'morning', label: 'Morning', from: 6, to: 11 },
+  { id: 'afternoon', label: 'Afternoon', from: 12, to: 17 },
+  { id: 'evening', label: 'Evening', from: 18, to: 23 },
+]
+
+// One hue, four steps — a ramp, not a palette. Parts of a day are ordered, and
+// an ordered variable takes a sequential ramp; four unrelated hues would say
+// they are four unrelated things, and re-using the five source hues here would
+// teach the reader that violet means Slack on one ring and evening on the next.
+//
+// The hue is the accent rather than a neutral. A grey ramp is the correct shape
+// drawn in the one colour that cannot hold four legible steps on this ground:
+// `fg-dim` into `ink-700` puts Morning and Evening close enough that the ring
+// has to be read against its own legend, which is the complaint this page
+// exists to answer. Amber is already the product's second colour and is spent
+// nowhere on the first donut, so it separates the two rings rather than
+// colliding with them.
+const partColor = (weight: number) =>
+  `color-mix(in oklab, var(--color-accent) ${weight}%, var(--color-ink-700))`
+
+/**
+ * Where the i-th of n drawn parts sits on that ramp.
+ *
+ * Derived from the parts that are actually drawn rather than fixed per part,
+ * which is the difference between using the ramp and wasting it: with one
+ * quiet part the remaining three used to land on 25/50/100 and put two of them
+ * a twentieth of a lightness step apart, because the missing one had taken a
+ * rung with it. Spread over what is present, the three sit 25/62/100 and the
+ * scale gives up as much separation as it has.
+ */
+const partWeight = (i: number, n: number) => (n < 2 ? 100 : 25 + (75 * i) / (n - 1))
+
 export function Pulse() {
-  const reduce = useStill()
   const days = Number(useParam('days') ?? 30) || 30
   const [a, setA] = useState<Analytics | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -58,33 +149,19 @@ export function Pulse() {
   if (err) return <div className="pt-4"><Header days={days} /><Empty>—</Empty></div>
   if (!a) return <div className="pt-4"><Header days={days} /></div>
 
-  /**
-   * One answer per fact. The median tile used to read `10.3h · p90 11.6h` while
-   * the panel under it, fed by the same object, said there was not enough
-   * history — because the tile counted every latency and the chart counted days
-   * that had one. Both ask the chart's question now.
-   */
-  const trendDays = a.responseTime.daily.filter(d => d.value !== null).length
-  const hasTrend = trendDays >= TREND_MIN_POINTS
   const period = `last ${a.pace.days}d`
-
-  const arrived = a.throughput.appeared.reduce((n, d) => n + d.value, 0)
-  const cleared = a.throughput.cleared.reduce((n, d) => n + d.value, 0)
 
   /**
    * One bar is not a chart.
    *
    * An axis exists to put a value next to the values around it. With a single
    * day in the window there is nothing to put it next to, so the axis is six
-   * empty slots and a label pair spanning days that hold nothing —
-   * `THROUGHPUT 08-24 … 08-30` over one 12px mark was 95% ruled paper. A series
-   * that thin is a number, and the row form the empty series already uses is
-   * where a number goes. Two days is the first window with a shape in it, and
-   * it draws.
+   * empty slots and a label pair spanning days that hold nothing — one 12px mark
+   * under 95% ruled paper. A series that thin is a number, and the row form the
+   * empty series already uses is where a number goes.
    *
-   * `days` reports the days that carry a value; `only` is that day when there
-   * is exactly one, so the row can say what it has rather than an em dash it
-   * would be lying with.
+   * `value` is that day's count when there is exactly one, so the row can say
+   * what it has rather than an em dash it would be lying with.
    */
   const shape = (series: Array<{ day: string; value: number }>) => {
     const marked = series.filter(d => d.value > 0)
@@ -94,103 +171,182 @@ export function Pulse() {
     }
   }
   const done = shape(a.throughput.done)
-  const appeared = shape(a.throughput.appeared)
   const clearedShape = shape(a.throughput.cleared)
 
   /**
-   * Every series this page can draw, and whether it has anything in it.
+   * The same rule, over the week rather than over the window.
    *
-   * Built as data rather than as JSX so the two answers can be laid out
-   * differently: a series with values takes a cell in the grid, and a series
-   * without one takes a row under it. Rendered in place, an empty panel held a
-   * full cell to print an em dash — `RESPONSE TIME —` sat beside a full-height
-   * `THROUGHPUT` with 210px of nothing under it.
+   * `By weekday` was the one mark on this page exempt from it, and it showed:
+   * with a single active day it drew one tall bar over six 4px stubs — the
+   * shape the throughput charts were collapsed for, six sevenths of the way.
+   * Seven empty slots do not put Sunday's number next to anything, so it says
+   * the number instead, the way every other thin series here already does.
    */
+  const weekday = (() => {
+    const marked = a.rhythm.byWeekday.filter(d => d.value > 0)
+    return {
+      thin: marked.length < 2,
+      value: marked.length === 1 ? `${marked[0]!.value} on ${WEEKDAY[marked[0]!.weekday]}` : undefined,
+    }
+  })()
+
+  /* --- panel 1: what is on the desk, by source --------------------------- */
+  const bySource = new Map(a.aging.map(r => [
+    r.source,
+    a.agingBuckets.reduce((n, b) => n + (r.buckets[b] ?? 0), 0),
+  ]))
+  const desk = separated(
+    RING_ORDER
+      .filter(s => (bySource.get(s) ?? 0) > 0)
+      .map(s => ({
+        id: s,
+        label: SOURCE_LABEL[s] ?? s,
+        value: bySource.get(s)!,
+        color: SOURCE_COLOR[s] ?? 'var(--color-fg-mute)',
+      })),
+  )
+  // A source the map has never heard of still has to appear, or the ring and the
+  // centre count disagree and one of them is wrong.
+  for (const [source, value] of bySource) {
+    if (value > 0 && !RING_ORDER.includes(source as SourceName)) {
+      desk.push({ id: source, label: source, value, color: 'var(--color-fg-mute)' })
+    }
+  }
+
+  /* --- panel 2: how stale ------------------------------------------------ */
+  const stale = a.agingBuckets.map((b, i) => ({
+    id: b,
+    label: b,
+    value: a.aging.reduce((n, r) => n + (r.buckets[b] ?? 0), 0),
+    color: staleRamp(i, a.agingBuckets.length),
+  }))
+  const staleMarked = stale.filter(s => s.value > 0)
+
+  /* --- panel 5: when you work -------------------------------------------- */
+  // Quiet parts are dropped before the ramp is laid over them, so a part with
+  // nothing in it neither takes a rung of the scale nor keeps a legend row
+  // reading `Afternoon 0 · 0%` beside a swatch pointing at no arc.
+  const worked = DAY_PARTS
+    .map(p => ({
+      ...p,
+      value: a.rhythm.byHour
+        .filter(h => h.hour >= p.from && h.hour <= p.to)
+        .reduce((n, h) => n + h.value, 0),
+    }))
+    .filter(p => p.value > 0)
+  const parts: DonutSlice[] = worked.map((p, i) => ({
+    id: p.id,
+    label: p.label,
+    value: p.value,
+    color: partColor(partWeight(i, worked.length)),
+  }))
+  const peak = a.rhythm.byHour.reduce((best, h) => (h.value > best.value ? h : best), a.rhythm.byHour[0]!)
+
   const panels: Array<{ title: string; empty: boolean; value?: string; node: React.ReactNode }> = [
     {
-      title: 'Throughput',
-      empty: done.thin,
-      value: done.value,
-      node: <Bars data={a.throughput.done} label={d => `${d.day.slice(5)} · ${d.value} done`} />,
-    },
-    {
-      title: 'Response time',
-      empty: !hasTrend,
-      node: <Trend data={a.responseTime.daily} format={v => duration(v)} />,
-    },
-    {
-      title: 'Arrived',
-      empty: appeared.thin,
-      value: appeared.value,
-      node: <Bars data={a.throughput.appeared} height={96} />,
-    },
-    {
-      title: 'Cleared',
-      empty: clearedShape.thin,
-      value: clearedShape.value,
-      node: <Bars data={a.throughput.cleared} height={96} />,
-    },
-    {
-      title: 'Your rhythm',
-      empty: a.rhythm.byHour.every(h => !h.value),
+      title: 'On the desk',
+      empty: !desk.length,
+      // Stacked until `lg`. Between 640 and 1023 a panel is half of a narrow
+      // page, and a 240px ring beside a legend there left `Claude Code`
+      // truncated to `Claude Co…` — the legend is the data, so it gets the
+      // width and the ring goes above it.
       node: (
-        <div className="grid sm:grid-cols-2 gap-6">
-          <DayClock data={a.rhythm.byHour} />
-          <div>
-            <SubLabel>By weekday</SubLabel>
-            <WeekdayBars data={a.rhythm.byWeekday} />
-          </div>
+        <div className="flex flex-col items-center gap-5 lg:flex-row lg:items-center lg:gap-6">
+          <Donut
+            slices={desk}
+            size={200}
+            centreTop="cards"
+            centreFoot={desk.length === 1 ? 'one source' : `${desk.length} sources`}
+          />
+          <div className="w-full grow min-w-0"><Legend items={desk} /></div>
         </div>
       ),
     },
     {
-      title: 'Ageing',
-      empty: !a.aging.length,
+      title: 'How stale',
+      // One non-empty bucket is five segments of one colour and a legend of one
+      // row. That is a number, and it takes the quiet row a number takes.
+      empty: staleMarked.length < 2,
+      value: staleMarked.length === 1 ? `${staleMarked[0]!.value} · ${staleMarked[0]!.label}` : undefined,
+      node: <PartBar segments={stale} />,
+    },
+    {
+      title: 'Flow',
+      empty: clearedShape.thin,
+      value: clearedShape.value,
+      // Arrived behind, cleared in front, on one axis. As two charts they were
+      // side by side with independent maxima, so the one comparison worth making
+      // — is more coming in than going out — had to be done in the reader's head
+      // against two different rulers.
       node: (
-        <>
-          <StackedAging
-            rows={a.aging}
-            buckets={a.agingBuckets}
-            /* The same names every other surface uses: this legend said `Claude`
-               and `Github` where the rest of the product says `Claude Code` and
-               `GitHub`. */
-            labelOf={(s: string) => SOURCE_LABEL[s as keyof typeof SOURCE_LABEL] ?? s}
-            colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
-          />
-          <div className="mt-4 flex items-end gap-1">
-            {a.agingBuckets.map((b, i) => (
-              <span key={b} className="flex-1">
-                <span className="block h-1.5 rounded-chip bg-fg-dim"
-                      style={{ opacity: 0.3 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.7 }} />
-                <span className="block mt-1 text-sm text-fg-mute">{b}</span>
-              </span>
-            ))}
+        <Bars
+          data={a.throughput.cleared}
+          secondary={a.throughput.appeared}
+          title="cards cleared each day, against the cards that arrived"
+          label={d => `${d.day.slice(5)} · ${d.value} cleared`}
+        />
+      ),
+    },
+    {
+      title: 'Done each day',
+      empty: done.thin,
+      value: done.value,
+      node: (
+        <Bars
+          data={a.throughput.done}
+          title="tasks finished each day"
+          label={d => `${d.day.slice(5)} · ${d.value} done`}
+        />
+      ),
+    },
+    {
+      title: 'When you work',
+      empty: a.rhythm.byHour.every(h => !h.value),
+      // Two marks stacked, each with the whole panel to itself. Side by side
+      // they were three things in one half-column: the day-part legend clipped
+      // its own words to `N…` and `A…`, and seven weekday names collided into
+      // `SunMonTueWedThuFri Sat`.
+      node: (
+        <div className="space-y-6">
+          <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-center sm:gap-6">
+            {/* The centre counts this ring, like the desk ring's does: the
+                total finished in the window, which is what the four arcs are
+                shares of. The peak hour is the secondary fact and reads as one
+                — as the headline it was a clock over a count from a single
+                hour, so a ring summing to four announced two. */}
+            <Donut
+              slices={parts}
+              size={160}
+              centreTop="finished"
+              centreFoot={`peak ${String(peak.hour).padStart(2, '0')}:00`}
+            />
+            <div className="w-full grow min-w-0"><Legend items={parts} /></div>
           </div>
-        </>
+          <div>
+            <SubLabel>By weekday</SubLabel>
+            {weekday.thin
+              ? <Empty>{weekday.value ?? '—'}</Empty>
+              : <WeekdayBars data={a.rhythm.byWeekday} />}
+          </div>
+        </div>
       ),
     },
     {
       title: 'Goals',
       empty: !a.goals.length,
       node: (
-        <div className="space-y-4">
-          {a.goals.map((g, i) => {
-            const pctDone = g.total ? g.done / g.total : 0
-            return (
-              <div key={g.id}>
-                <div className="flex items-baseline justify-between mb-2">
-                  <span className="text-sm text-fg-dim">{g.title}</span>
-                  <span className="tnum text-sm text-fg-mute">{g.done}/{g.total}</span>
-                </div>
-                <div className="h-1 bg-ink-800 rounded-full overflow-hidden">
-                  <motion.div className="h-full rounded-full bg-fg-dim"
-                    style={g.color ? { background: g.color } : undefined}
-                    initial={reduce ? false : { width: 0 }} animate={{ width: `${pctDone * 100}%` }}
-                    transition={{ delay: 0.1 + i * 0.06, duration: 0.7, ease: [0.22, 1, 0.36, 1] }} />
-                </div>
-              </div>
-            )
-          })}
+        <div className="flex flex-wrap gap-6">
+          {a.goals.map(g => (
+            <Ring
+              key={g.id}
+              label={g.title}
+              value={g.done}
+              total={g.total}
+              /* A goal's own colour is the one amber this page is allowed, and
+                 only because he chose it. Everything else here is neutral. */
+              color={g.color ?? undefined}
+            />
+          ))}
         </div>
       ),
     },
@@ -212,17 +368,22 @@ export function Pulse() {
             : `${a.pace.delta >= 0 ? '+' : ''}${Math.round(a.pace.delta * 100)}% against ${a.pace.previous}`} />
         <Stat value={a.rhythm.streak} label="day streak · all time"
           foot={`best ${a.rhythm.bestStreak}`} />
-        {/* Arrived against cleared, which is a fact this database actually has,
-            rather than a median over four samples on one day. */}
-        <Stat value={cleared} label={`cleared · ${period}`} foot={`${arrived} arrived`} />
+        {/* Revives a real measurement the page had stopped printing. Response
+            time had a whole panel and it rendered an em dash at every range,
+            because a line needs two days with a sample and the median needs one.
+            The median is the fact; the panel was the wrong shape for it. */}
+        {a.responseTime.count > 0 && (
+          <Stat value={duration(a.responseTime.p50)} label={`median reply · ${period}`}
+            foot={`p90 ${duration(a.responseTime.p90)}`} />
+        )}
       </section>
 
       {/* One gutter, one row gap, and no `items-start`: a 109px cell beside a
           320px cell in an `items-start` grid is where the 275px hole came from.
-          Only the series that have something to draw are in the grid — an empty
-          one held a full cell to print one character, which is the hole beside a
-          short tile this page is not allowed to have. */}
-      <div className="lg:grid lg:grid-cols-2 lg:gap-6">
+          The break is at `sm`, not `lg` — a 640–1023px tablet was reading every
+          panel full-width in one stack, which is a phone layout on a screen with
+          room for two columns. */}
+      <div className="sm:grid sm:grid-cols-2 sm:gap-6 lg:gap-8">
         {drawn.map((p, i) => (
           <Panel
             key={p.title}
@@ -260,7 +421,7 @@ export function Pulse() {
 function Header({ days }: { days: number }) {
   return (
     <header className="flex items-center gap-3 pt-4 pb-2">
-      <h1 className="text-lg font-medium">Pulse</h1>
+      <PageTitle>Pulse</PageTitle>
       <Segmented
         className="ml-auto"
         options={RANGES.map(d => ({ id: d, label: `${d}d` }))}
@@ -315,7 +476,7 @@ function Panel({
     <motion.section
       /* Spans both columns when the caller says the count is odd, so the last
          row cannot orphan a 470×130 hole beside itself. */
-      className={`mt-8 ${wide ? 'lg:col-span-2' : ''}`}
+      className={`mt-8 ${wide ? 'sm:col-span-2' : ''}`}
       initial={still ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}

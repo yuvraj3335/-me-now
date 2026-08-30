@@ -869,7 +869,188 @@ silent failures visible immediately, and both are fixed here:
   gone. Rate-limiting GitHub's four searches would have wiped the desk and
   reported "synced". A partial poll now keeps its rows and loses its authority.
 
-## 32. A thread is one row, and a swipe is a first-class action
+## 32. A card has a status, and it is stored
+
+**Partially reverses #9.** Piles are computed, never filed — that was the rule,
+and most of it still holds. What broke it is that "done" and "not mine" were
+already filed, as two timestamps pretending to be a classification, and the
+product had no way at all to say *in progress* or *in review*. A desk where the
+only two things you can assert about a piece of work are "gone" and "not gone"
+is a desk that makes you keep the middle in your head.
+
+`card_state` now carries `status`, one of five values: `not_started`,
+`in_progress`, `in_review`, `done`, `wont_do`.
+
+### What survives from #9
+
+The pile is still computed, from the snooze, the manual override and the
+adapter's own claim. It is not a folder and it is not a status. The two are
+orthogonal, and deliberately so: **there is no `parked` status**, because a park
+is a statement about *when he wants to see it*, not about whether the work has
+begun. "In progress, and parked until Monday" is the normal state of half the
+desk, and one column could not have held both facts.
+
+### What changes
+
+Whether something is finished or disowned is `card_state.status`. `done_at` and
+`not_mine` survive as derived values, written by the same code path that writes
+the status and never independently — `done_at` for the hidden-list sort and for
+undo records written before this shipped, `not_mine` because `pile()` still
+reads it. They are maintained, not trusted. The intent is to drop both once no
+stored `undo_json` predates migration 9.
+
+### The back-fill, and what it refuses to guess
+
+`done_at IS NOT NULL` became `done`. `not_mine = 1` became `wont_do`. A park
+kept its park and its snooze moved to `due_at`, because a park always was a
+snooze with a wake time. Everything else became `not_started`.
+
+`acked_at` was left implying nothing, and that was the one real decision in the
+migration. An ack suppressed a notification; it never claimed the work had
+begun. Reading it as `in_progress` would have been the system asserting, about
+most of the desk, something only he can assert — and `in_progress` and
+`in_review` are worth having precisely because they are his claims. They start
+empty. The read path agrees: `statusOf` in `src/server/api.ts` derives a status
+from `done_at` and `not_mine` when a group has no state row at all, and does not
+consult `acked_at` there either.
+
+### Why the old events are still emitted
+
+`POST /cards/:group/status` still logs `card_done`, `card_not_mine` and
+`card_acked` alongside the new `card_status`. Pulse is built out of events, not
+columns — the Cleared chart, both response-time percentiles, both heatmaps and
+the streak are all counts of those three kinds. A status column is a snapshot
+and a snapshot is not a history. Dropping the events would have emptied five
+charts silently, with nothing failing.
+
+---
+
+## 33. Priority is an integer, and normal renders nothing
+
+`0` urgent, `1` high, `2` normal, `3` low. Named once, in
+`src/server/sources/types.ts` and `src/web/lib/types.ts`, so it cannot become
+three lookup tables that disagree about whether high is 1 or 3.
+
+A card starts at `2`, and **a card at `2` draws no mark at all**. Not a grey
+chip, not a dash. Almost every row is normal, so a glyph there is a column the
+eye has to skip on every line to find the two rows that matter — which is the
+opposite of what a priority is for. Only `0` and `1` get a mark.
+
+Priority is also the one field an undo will not touch. `undo_json` snapshots
+every field an undoable action replaced, and no undoable action writes priority,
+so including it would only give Undo a way to clobber a value the action it is
+undoing never saw.
+
+---
+
+## 34. The alert channels are read, not searched
+
+Wake was blind to bot traffic: `slack_search_messages` does not reliably surface
+app posts, and the three channels that carry production alerts are almost
+entirely app posts. They are read directly with `slack_read_channel` now, and
+the tool's shape drove several choices that look arbitrary and are not.
+
+* **`include_bots` goes to search and never to the channel read.** It is not in
+  that tool's schema; channel history is bot-inclusive by construction.
+* **`oldest` and `latest` are always sent together.** With `oldest` alone the
+  server anchors to the *oldest* end of the range and returns founding join
+  messages from the day the channel was created. This is the most dangerous
+  behaviour in the tool, because the result looks like data.
+* **`response_format` is `detailed`.** `concise` discards attachments, and for
+  Datadog and Alertmanager the attachment *is* the message.
+* **Only `#sentry-alerts` emits a subteam token**, so `paged` is a fact about
+  that channel and is false elsewhere rather than unknown.
+* **`#intent-alerts` is not on the list.** Its newest message is fourteen months
+  old and it is marketing intent, not production. A dead channel in the list
+  sits in `settle`'s denominator, where one failed read can mark the whole Slack
+  poll not-ok for nothing.
+* **A recovery emits no card.** `Recovered:` and the green-tick digests are the
+  end of an incident, and a desk that fills up with things that have stopped
+  being true is a desk nobody reads.
+
+A Sentry alert in Slack and the same issue from the Sentry API are one row,
+keyed on the short id (`TRUTO-38`), because they are one thing.
+
+---
+
+## 35. The hand-off still opens a new conversation
+
+**Confirms #26 after re-checking it.** The session picker lists real Claude Code
+transcripts, and it would be natural to assume that picking one resumes it.
+It does not, and cannot:
+
+* `claude.ai/new?q=` opens a *new* conversation. There is no documented URL that
+  targets an existing one, and none was found by inspection.
+* `claude --help` at v2.1.233 has `--resume <id>`, which is a terminal command
+  on the box — not something a link from a phone can reach.
+
+So the picker supplies **context**, not continuity: the chosen session's repo,
+cwd and last exchanges go into the brief, and the brief prints a copyable
+`claude --resume <uuid> --permission-mode bypassPermissions` line for the
+terminal. That is the honest version of the feature. Naming it "resume" in the
+UI would have been the third time this product implied a process it does not
+start.
+
+---
+
+## 36. A credential that cannot refresh is not connected
+
+`resolveToken` used to return the stored access token when a refresh failed. The
+reasoning was that a stale token is better than none. It is not: the caller then
+made a real request with a known-dead credential and got a 401, which surfaced
+as `sync failed · 401 from https://mcp.slack.com/mcp` — a sentence that blames
+the sync for a problem in the grant, and offers no way to fix it.
+
+A refusal is now classified before anything else happens:
+
+* **Terminal** — a 4xx whose body names `invalid_grant`, `invalid_client`,
+  `unauthorized_client` or `invalid_request`. The grant is dead. The stored
+  tokens are cleared, `last_auth_error` records the provider's own word for it,
+  and Settings says `reconnect — invalid_grant`.
+* **Transient** — a 5xx, a network failure, a timeout, unparseable JSON. Nothing
+  is cleared, because nothing has been established. The call returns null and
+  the next poll tries again.
+
+Two columns carry this: `oauth_tokens.last_auth_ok_at` and `.last_auth_error`.
+`ok` alone could never have said it — a source can poll successfully at the same
+moment its refresh token is dead, and it will keep doing so until the access
+token expires.
+
+Refreshes are also single-flighted per server. Five adapters poll in parallel,
+`headers()` resolves a token on every JSON-RPC request, and where the provider
+rotates refresh tokens the losers of that race hold an invalidated one — so the
+stored row could end up an older generation than the provider last issued, which
+is the same dead-credential failure arriving by a different road.
+
+---
+
+## 37. The desk is paged in the browser, not on the wire
+
+Every table in the product pages now, and `GET /api/state` still returns the
+whole desk.
+
+That looks backwards until you ask what the search box is for. Search spans
+every row he has, not the fifty in front of him — a desk you can only search a
+page at a time is a filing cabinet. Paging server-side would mean either
+shipping the query to the server and giving up the instant local filter, or
+searching one page and calling it a search.
+
+The number makes it easy: the desk is around a hundred groups, and each is a
+short object. Filtering, then searching, then slicing a page out of the result
+is a few milliseconds of work on a phone, and the whole payload is smaller than
+one of the icons the page already loads.
+
+The order is load-bearing and is the same everywhere: **filter, then search,
+then page**. Paging first would page a list the reader cannot see the rest of,
+and the page number resets to 1 whenever any axis above it changes — otherwise
+narrowing a filter lands you on an empty page 4 with no way of knowing why.
+The page lives in the URL, like every other axis, so reload and Back both work.
+
+Mail is the exception, and it is a real one rather than an oversight: it already
+pages server-side, against a mailbox that is far too large to hold, and it
+stays that way.
+
+## 38. A thread is one row, and a swipe acts without opening it
 
 Two halves, one release, because they are the same complaint: the desk was
 showing him *messages* when what is on him is *conversations*, and the only way
@@ -881,19 +1062,15 @@ Measured on the deployed database, not inferred:
 
 | | |
 |---|---|
-| Live Slack cards | 40 |
-| …whose kind was `dm` | 20 |
 | `#truto` thread `1787812499.720579` | **3 rows** |
 | `#truto` thread `1787900782.835249` | **3 rows** |
 | `#spendflo-truto` thread `1784530611.515999` | **2 rows**, parent not on the desk at all |
 
-Half the Slack desk was direct messages, which are somebody talking to him
-rather than work anybody assigned. The other half double-counted: a question and
-the two answers under it were three separate rows, in three separate places in
-the sort, each with its own Done button, and finishing one of them did nothing to
-the other two.
+A question and the two answers under it were three separate rows, in three
+separate places in the sort, each with its own Done button, and finishing one of
+them did nothing to the other two.
 
-The cause is one line. A Slack permalink carries the parent it belongs to —
+The cause is one line. A Slack permalink carries the conversation it belongs to —
 
 ```
 …/archives/C04D9HKDWAV/p1787812499720579?thread_ts=1787812499.720579   the parent
@@ -904,74 +1081,120 @@ The cause is one line. A Slack permalink carries the parent it belongs to —
 — and the poller was storing `meta.thread_ts` as the *message's own* ts. Every
 message was therefore its own thread. A standalone message carries a `thread_ts`
 equal to its own ts, so the rule is uniform and there is no second case:
-`parentTs = permalink.thread_ts ?? hit.ts`. Verified against all forty rows.
+`parentTs = permalink.thread_ts ?? hit.ts`. Verified against all forty live rows.
 
-Cards are now keyed on the parent, so replies land on the row that already
-exists. Old rows keyed on a reply's ts stop being returned and would be swept —
-but the *state* on them would be orphaned, so a card he had marked done a week
-ago would come back the morning this shipped. Migration 10 recovers the parent
-from each stored card's own permalink and merges the state forward under the same
-"already handled wins" rule `migrateState` has always used.
+Cards are keyed on the parent now, so replies land on the row that already
+exists. The old rows stop being returned and are swept — but the *state* on them
+would be orphaned, and a card he marked done a week ago would come back the
+morning this shipped. Migration 12 recovers the parent from each stored card's
+own permalink and merges the state forward under the same "already handled wins"
+rule `migrateState` has always used.
+
+This is about the *mention* path only. An alert row is keyed on a monitor or a
+Sentry short id (#34), which is a different and already-correct identity, and its
+`thread_ts` still points at the newest message rather than the oldest — the row's
+identity comes from the oldest so it does not churn when Cursor follows up, and
+everything a reader sees, `Open` included, comes from the newest.
+
+The two identities do collide in exactly one place, and it is the most ordinary
+thing anyone does in an alert channel: reply under the Sentry post with
+"`@yuvraj` can you take this". A thread bucket's key and an alert card's
+`source_id` are the same string, `<channel>:<ts>`, so the mention search and the
+channel read describe one message from two sides. The alert keeps the row — it
+is the side carrying `alert`, `short_id`, `paged`, `alert_state` and the
+`sentry:TRUTO-38` reference that merges it with the Sentry API's own row — and
+the thread is folded into it, bringing the human replies, who is waiting, and
+the `@you` mark. Skipping either side instead is not neutral: skipping the alert
+made it vanish from the desk the moment a person triaged it, because the poll is
+authoritative and the sweep then marked the stored row gone.
 
 ### The parent is read, not guessed
 
-He is usually named in a reply, not in the question, so the search that finds a
-thread frequently does not contain the thing the row has to be titled with. One
-`slack_read_thread` per distinct thread answers all of it at once: the parent's
-text, `=== THREAD REPLIES (10 total) ===` as an authoritative count, and every
-reply's author and timestamp. Capped at twenty threads a poll, spent on the ones
-whose parent we do not already hold, because a thread we can title loses only its
-count while a thread we cannot title loses the row.
+He is usually named in a reply rather than in the question, so the search that
+finds a thread frequently does not contain the thing the row has to be titled
+with. One `slack_read_thread` per distinct thread answers all of it at once: the
+parent's text, `=== THREAD REPLIES (10 total) ===` as an authoritative count, and
+every reply's author and timestamp. Capped at twenty threads a poll, spent first
+on the ones whose parent we do not already hold — a thread we can title loses
+only its count, and a thread we cannot title loses the row.
 
-A thread read that fails degrades **one row** and says so on it. A failed
-*alert-channel* read is a failed poll, because a channel that did not answer is a
-channel whose alerts are missing.
+The read needed a parser of its own. `readThread` was handing thread markdown to
+`parseSlackResults`, which splits on `### Result N of M` — a separator that
+appears nowhere in that payload — so it had been returning an empty array for
+every thread ever read, silently. That is now three parsers for three formats,
+each written against a capture (see `FIXTURES.md`), and there is a test that
+feeds the thread payload to the search parser to prove they are not
+interchangeable.
+
+A thread read that fails degrades **one row** and says so on it with
+`meta.thread_partial`. A failed search or alert-channel read is still a failed
+poll, because a channel that did not answer is a channel whose alerts are
+missing. Those are different facts and they must not share a fate, which is why
+the thread reads are deliberately outside the settled array.
+
+"Degrades" has to mean something, though: the hits become the conversation. The
+search already returned the message that named him — that is why the row exists —
+so reading the replies off the failed read alone left the pane showing the
+question with nothing under it and no `@you` anywhere. The two sources union by
+`ts`, which also recovers a hit that fell outside a truncated read, and the mark
+is drawn beside the excerpt as well as beside the list, because one message is
+the shape a degraded row most often takes and the list declines to draw at one.
 
 ### `+2`, and the amber edge, are one fact
 
 A row wears a count of the messages that landed since he last opened it —
-excluding his own, because eleven of the twelve messages on that `#truto` thread
+excluding his own, because ten of the eleven messages on that `#truto` thread
 were his and none of them are news. The badge appears when the count is above
 zero and the row's left edge goes amber under exactly the same expression, so
-they can never disagree. Opening the row clears it; the pane's resting state,
-which shows the top row before anything is clicked, deliberately does not — a
-pane that acknowledged what it displayed would clear every count on every load.
+they can never disagree. It is computed once, in `activityOf`, and the browser
+does no arithmetic on it at all.
 
-The 2px left edge is the one this table's own docblock deleted, and it is back for
+The browser does no arithmetic, but it does have to *draw* the same set, and
+that is one expression — `isFreshLine` — rather than a second, shorter rule at
+the one place that paints it. The pane once compared a line's timestamp to the
+baseline and nothing else, so his own replies came out in the brighter "new" ink
+beside a row reading `+0`, and a thread merging into a week-old group lit all
+twelve of its pre-existing replies. Both clamps live on the line now, which is
+why a card's `sources` carry their own `first_seen_at`.
+
+Three things bound what counts, and all three are the same sentence: nothing a
+card brought with it when it arrived is something he has missed. A member's
+history counts from when *that member* landed, not from when the group did — a
+Slack thread merging into a pull request's group inherits a `first_seen_at` from
+weeks ago. A card's own `ts` is an event only on the poll it arrived on, because
+a Claude session's `ts` is its transcript's mtime and his own work would
+otherwise come back to him as an amber edge. And events are keyed by *when*, so a
+Slack card's `ts` and the newest entry in its own thread are one event rather
+than two.
+
+Opening the row clears it. The pane's resting state — the top row it shows before
+anything is clicked — deliberately does not, and that is the whole subtlety: a
+pane that acknowledged what it happened to be displaying would clear every count
+on the desk every morning, with nothing to see.
+
+Gmail counts under the same rule from the other end. A mail thread was already
+one card, but the later messages in it were thrown away, so a conversation that
+had moved on looked exactly like one that had not. `search_threads` was already
+returning them.
+
+One consequence worth stating: an ack is no longer counted as work. That was
+harmless while nothing emitted one; now the pane emits one every time a thread
+with a reply on it is read, and a thread that gets answered on twelve different
+days would have reported twelve clears while still sitting on the desk. Pulse
+asked the same question in three places — the throughput chart's `cleared`, the
+"when I actually work" clock and the streak — so the answer is written once, as
+`FINISHED_KINDS`, or a week of only reading reports a seven-day streak with
+nothing finished.
+
+The 2px left edge is the one `CardTable`'s own docblock deleted, back for exactly
 the reason it was deleted: it used to paint every visible row, which encoded
 nothing. It paints two or three.
 
-### Alert channels are read, and most of what they say is not on him
-
-Slack *search* does not index Block Kit, and Sentry's page of `@truto-eng` lives
-there:
-
-```
-notes: <!subteam^S06HDT77E1M|@truto-eng>
-Project: truto    Alert: Notify #sentry-alerts via Slack    Short ID: TRUTO-38
-```
-
-So the four alert channels are read by id rather than searched. What is *not*
-done is turn them into a feed. `#truto-api-alerts` was described as posting
-digests; read live, it posts paired Datadog `Warn:` / `Recovered: Number of
-requests is high` every few minutes, addressed to `@slack-truto-api-alerts`.
-`#truto-grafana-alerts` is Alertmanager and `#intent-alerts` is Koala reporting
-anonymous website visitors. One card per message would have put a metronome on
-the desk and made Wake a worse copy of Slack.
-
-So an alert-channel message becomes a row under the same rule as everything else:
-it names him, it pages a usergroup he is in, or it carries a Sentry reference.
-In practice `#sentry-alerts` lands and the other three answer only the question
-of whether they answered. The Sentry post, Cursor's root-cause reply and the
-Sentry API's own row all carry `TRUTO-38`, so they are one group — which is what
-the short id was taught to `extractRefs` for.
-
 ### A swipe, because a thumb has no hover
 
-Every row that has a status now slides left under a finger, a trackpad or a mouse
-drag to reveal three solid, labelled actions: `Done`, `Status`, `Delete`. Not a
-kebab — there is no `⋯` left in the product, and the one that was in the detail
-pane took its contents with it onto the surface.
+Every row that has a status slides left under a finger, a trackpad or a mouse
+drag to reveal three solid, labelled actions: `Done`, `Status`, `Delete`. Words,
+not glyphs, because a thumb-sized box with a picture in it is a guess.
 
 Two things about the implementation are not incidental. The drawer is a
 right-anchored clip window whose *width* tracks the pointer, rather than a
@@ -981,16 +1204,27 @@ required not to have one. And the gesture locks to whichever axis wins first, so
 the page still scrolls under a finger that is not swiping and a task can still be
 dragged up and down to reorder.
 
-Delete removes a task or a goal. On a card it sets `Won't do`, which is how Wake
-already dismisses work — a card he did not want is still in the hidden list and
-still comes back. Inventing a fourth word for it would have been a fourth word.
+`touch-action` is in the stylesheet rather than inline, and that is not taste
+either. The property does not apply to a table row at all — rows, row groups,
+columns and column groups are excluded by the property's own definition — so an
+inline `touchAction` on the desk's `<tr>` is dropped by every browser while
+looking entirely correct in the source. It goes on the cells. And a
+`Reorder.Item` writes `touch-action: pan-x` inline, which no other inline style
+can outrank, so the task row carries the one `!important` in the product.
 
-### The words
+`Status` opens the five-way picker in place, from `STATUS_ORDER` (#32), so the
+control cannot offer a value the route refuses. A task gets the three it has and
+a goal the two it has, both labelled from the same table, so the product does not
+grow a second vocabulary that happens to agree today.
 
-`Now`, `Open`, `Parked`, `Later`, `Not mine`, `Wake now` and `pile` are gone from
-everything anyone reads. `Now` was the page, the tab, a group heading and a field
-name, so one word answered four questions; `Open` was a group heading and the verb
-on the button beside it. The desk is `Desk`, its groups are `On you`, `Waiting`
-and `Snoozed`, and a card's own state is a status: `Not started`, `In progress`,
-`In review`, `Done`, `Won't do`. The JSON still says `pile`, because it is not a
-word anybody reads, and what each group computes did not change at all.
+`Delete` removes a task or a goal outright, with an undo — which, since there is
+no soft delete for either, is a re-creation carrying every field including the
+frozen provenance and the stickies. That is why `POST /tasks` and `POST /goals`
+take a `restore` flag: an undo is not work that happened, and a restored task
+that lost its `completed_at` would come back finished with no finish time and
+sort below work completed weeks earlier.
+
+On a card `Delete` sets `Won't do`, which is how Wake already dismisses work — it
+leaves the desk, stays reachable through the Status filter, and undoes. A red
+button that irreversibly destroyed a card would be the only irreversible action
+in the product, and inventing a fourth word for it would have been a fourth word.

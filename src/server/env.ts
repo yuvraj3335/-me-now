@@ -27,6 +27,17 @@ export const CLAUDE_PROJECTS_DIR = `${CLAUDE_HOME}/projects`
 export const claudeCredentialsPath = () =>
   `${str('WAKE_CLAUDE_HOME', `${homedir()}/.claude`)}/.credentials.json`
 
+/**
+ * The signed-in Slack user, as a constant rather than a discovery.
+ *
+ * Slack MCP publishes it in the search tool's own description, which is still
+ * read at `discoverTools`. But the alert-channel reads happen whether or not a
+ * search tool ever answered, and "who am I" decides which messages are my own
+ * and never worth showing back to me — so it needs a default that does not
+ * depend on a handshake succeeding first.
+ */
+export const ME_SLACK_DEFAULT = 'U09617LRRDF'
+
 /** Who I am, so "is this addressed to me?" is answerable without a model. */
 export const ME = {
   githubLogin: str('WAKE_GITHUB_LOGIN', 'yuvraj3335'),
@@ -35,7 +46,7 @@ export const ME = {
   // it is Wake claiming to be someone it is not.
   emails: str('WAKE_EMAILS', 'yuvraj@truto.one')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
-  slackUserId: str('WAKE_SLACK_USER_ID'), // discovered at runtime if unset
+  slackUserId: str('WAKE_SLACK_USER_ID', ME_SLACK_DEFAULT),
   /** The organisation Fetch's second standing question is about. */
   org: str('WAKE_ORG', 'TrutoEngineering'),
   githubOrg: str('WAKE_GITHUB_ORG', 'trutohq'),
@@ -46,71 +57,65 @@ export const ME = {
 export const GMAIL_ACCOUNTS = str('WAKE_GMAIL_ACCOUNTS', ME.emails.join(','))
   .split(',').map(s => s.trim()).filter(Boolean)
 
-/* -------------------------------------------------------------------------- */
-/* Slack — what is asked, and where                                           */
-/* -------------------------------------------------------------------------- */
-
-const list = (k: string, d: string) =>
-  str(k, d).split(',').map(s => s.trim()).filter(Boolean)
-
 /**
- * Usergroups whose name means him.
- *
- * `<!subteam^S06HDT77E1M|@truto-eng>` is how Sentry pages the engineering team,
- * and being on that list is the same fact as being named personally as far as
- * "is this on me" is concerned. The raw id is what search matches; the handle is
- * discovered from the message text, because a usergroup's display name is a
- * thing people rename.
+ * The workspace, needed to build a `slack://` link the desktop and phone apps
+ * answer. It is readable out of any `botuser-<TEAM>-<BOT>@slack-bots.com`
+ * address in a channel read, so this is the fallback for the reads that carry
+ * no bot address at all — Alertmanager renders without one.
  */
-export const SLACK_USERGROUPS = list('WAKE_SLACK_USERGROUPS', 'S06HDT77E1M')
+export const SLACK_TEAM_ID = str('WAKE_SLACK_TEAM_ID', 'T04CWR1AM1R')
 
 /**
- * Channels that are READ rather than searched, and why that distinction exists.
+ * The user groups whose mention means the page was aimed at my team.
  *
- * Slack's search index does not cover Block Kit. Sentry's alert carries its
- * `notes: <!subteam^S06HDT77E1M|@truto-eng>` inside a block, so a search for the
- * usergroup returns nothing at all for the channel where the usergroup is
- * actually paged — measured live, see FIXTURES §2. Reading the channel returns
- * the same text search cannot see.
- *
- * Written `<id>:<name>` because the channel read answers with the name anyway
- * and a config that only holds opaque ids is unreadable.
+ * Two ids, because Datadog pages both: `S06HDT77E1M` is @truto-eng and
+ * `S09475M3UM8` is the second on-call group, whose handle Slack renders
+ * nowhere. A page naming either one is the difference between an alert that is
+ * on me now and one that is merely posted where I can see it.
  */
-export const SLACK_ALERT_CHANNELS: Array<{ id: string; name: string }> = list(
-  'WAKE_SLACK_ALERT_CHANNELS',
-  'C0BERTMS9K4:sentry-alerts,C05UPHVT2CQ:truto-api-alerts,C0B53TSLGLA:truto-grafana-alerts,C07UWPPLSGN:intent-alerts',
-).map(entry => {
-  const [id = '', name = ''] = entry.split(':')
-  return { id: id.trim(), name: name.trim() || id.trim() }
-}).filter(c => c.id)
+export const SLACK_USERGROUPS = str('WAKE_SLACK_USERGROUPS', 'S06HDT77E1M,S09475M3UM8')
+  .split(',').map(s => s.trim()).filter(Boolean)
+
+export type AlertChannel = {
+  id: string
+  name: string                       // no leading '#'
+  /** 'sentry' | 'datadog' | 'grafana' — selects the body parser + card builder. */
+  family: 'sentry' | 'datadog' | 'grafana'
+}
 
 /**
- * Channels that fire constantly and are about nobody in particular.
+ * The channels read directly rather than searched.
  *
- * `#github-updates` posts every push in the organisation. Matching the query is
- * not the same as being on him, so a hit from one of these lands only when he is
- * personally named in the message itself.
- */
-export const SLACK_FIREHOSE = list('WAKE_SLACK_FIREHOSE', 'github-updates')
-
-/**
- * The workspace host, for the one case where Slack does not hand one over: a
- * channel read carries no permalink, so the link has to be built.
- */
-export const SLACK_WORKSPACE = str('WAKE_SLACK_WORKSPACE', 'truto')
-
-/**
- * How many threads one poll will read in full.
+ * Search cannot see this content: bot search results come back with empty text,
+ * and a `<!subteam^…>` token inside an attachment is not indexed at all — a
+ * search for `truto-eng in:#truto-api-alerts` returns zero rows on a day when
+ * Datadog paged the group twice. So these three are read as history.
  *
- * Each read is a round trip, and a poll runs every three minutes. Twenty is a
- * budget rather than a limit on how many threads may exist: the ones that need a
- * read most take it first (see `slack.ts`), and the rest degrade to the earliest
- * hit as their parent, carrying `meta.thread_partial`.
+ * `#intent-alerts` (C07UWPPLSGN) is deliberately absent. Its newest message is
+ * over a year old, it is website-visitor marketing, and every read of it would
+ * sit in `settle`'s denominator where a failure marks the whole Slack run
+ * not-ok for nothing.
+ */
+export const SLACK_ALERT_CHANNELS: AlertChannel[] = [
+  { id: 'C0BERTMS9K4', name: 'sentry-alerts',        family: 'sentry'  },
+  { id: 'C05UPHVT2CQ', name: 'truto-api-alerts',     family: 'datadog' },
+  { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
+]
+
+/**
+ * How many threads one poll is allowed to read in full.
+ *
+ * Each read is a round trip, and a fortnight of mentions is a bounded but not
+ * tiny number of distinct conversations. The ones that need it most go first —
+ * a thread whose parent the search did not return cannot be titled without one
+ * — so the cap degrades reply counts on the oldest threads rather than titles
+ * on the newest. Twenty covers every measured poll on this deployment with room
+ * over.
  */
 export const SLACK_THREAD_READS = num('WAKE_SLACK_THREAD_READS', 20)
 
-/** Messages read per alert channel per poll, newest first. */
-export const SLACK_ALERT_CHANNEL_LIMIT = num('WAKE_SLACK_ALERT_CHANNEL_LIMIT', 25)
+/** Preferred over `find_organizations`, which costs a round trip to learn one word. */
+export const SENTRY_ORG = str('WAKE_SENTRY_ORG', 'truto')
 
 /** Poll cadence. Jittered per source so they never stampede together. */
 export const POLL_INTERVAL_MS = num('WAKE_POLL_INTERVAL_MS', 3 * 60_000)

@@ -1,14 +1,19 @@
 /**
- * What the Pulse page is allowed to call work.
+ * What the product is allowed to call work.
  *
- * Both series here are throughput claims, and both had a way of counting
- * something that never happened. "Cleared" summed `card_acked` back when nothing
- * emitted one — and the detail pane emits one automatically now, the moment a
- * card with unread activity is opened, so a thread read on twelve different days
- * reported twelve clears while still sitting on the desk. "Created" counted
- * every `POST /tasks`, including the one an undo makes to put a deleted task
- * back. A chart that overstates is worse than no chart: it is the same page that
- * ends "nothing is estimated".
+ * Two throughput claims, and both had a way of counting something that never
+ * happened. "Cleared" summed `card_acked`, which was harmless while nothing
+ * emitted one — the detail pane emits one automatically now, the moment a card
+ * with unread activity is opened, so one Slack thread that gets a reply on
+ * twelve different days and is read each time reported twelve clears while
+ * still sitting on the desk. And `task_created` counted every `POST /tasks`,
+ * including the one the swipe's undo makes to put a deleted task back.
+ *
+ * A chart that overstates is worse than no chart: it is the same page that ends
+ * "nothing is estimated". `task_created` is no longer *drawn* — Pulse retired
+ * the series — but it is still written, still queryable, and still the record of
+ * how much work was made, so it is checked at the event rather than at a chart
+ * that would hide the mistake.
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
@@ -28,6 +33,11 @@ const post = (path: string, body?: unknown) =>
 
 const pulse = async () => (await (await api.request('/analytics')).json()) as Any
 const total = (series: Array<{ value: number }>) => series.reduce((n, d) => n + d.value, 0)
+
+/** How many of an event kind the log actually holds. */
+const events = (kind: string) =>
+  db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM events WHERE kind = ?`)
+    .get(kind)?.n ?? 0
 
 beforeEach(() => {
   db.query(`DELETE FROM events`).run()
@@ -50,10 +60,11 @@ describe('reading a card is not clearing it', () => {
     expect(total((await pulse()).throughput.cleared)).toBe(2)
   })
 
-  test('the status control counts when it lands on one of those two', async () => {
-    // The swipe's picker writes through `/status`, which logs one event kind
-    // whatever it is handed — so the two that take a row off the list have to be
-    // told apart by what is in the event rather than by its name.
+  test('the status control counts once when it lands on one of those two', async () => {
+    // The swipe's picker writes through `/status`, and `setStatus` emits the
+    // same `card_done` / `card_not_mine` the buttons do — so the count comes out
+    // of one vocabulary however the move was made, and a move that lands on one
+    // of the two is counted once rather than once per event kind it wrote.
     for (const status of ['in_progress', 'in_review', 'done', 'wont_do', 'not_started']) {
       await post(`/cards/${encodeURIComponent(GROUP)}/status`, { status })
     }
@@ -67,12 +78,12 @@ describe('an undo puts something back rather than making one', () => {
 
   test('a restored task is not a task created', async () => {
     await create({ title: 'real work' })
-    expect(total((await pulse()).throughput.created)).toBe(1)
+    expect(events('task_created')).toBe(1)
 
     await create({ title: 'real work', status: 'done', restore: true })
     expect(
-      total((await pulse()).throughput.created),
-      'undoing a delete added a point to the throughput chart',
+      events('task_created'),
+      'undoing a delete was recorded as work that happened',
     ).toBe(1)
   })
 
@@ -97,6 +108,13 @@ describe('an undo puts something back rather than making one', () => {
     })).json()) as Any
     expect(g.completed_at, 'the undo un-finished a goal he had marked Done').toBe(at)
     expect(g.sort, 'the undo moved a goal it had not been asked to move').toBe(-7)
+  })
+
+  test('a restored goal is not a goal created either', async () => {
+    await post('/goals', { title: 'ship the thing' })
+    expect(events('goal_created')).toBe(1)
+    await post('/goals', { title: 'ship the thing', restore: true })
+    expect(events('goal_created')).toBe(1)
   })
 
   test('an ordinary create still starts from nothing', async () => {

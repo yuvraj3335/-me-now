@@ -5,12 +5,20 @@
  * legends, drop-shadowed tooltips) are exactly the admin-dashboard look the
  * brief ruled out, and overriding them costs more than drawing the mark.
  * See DECISIONS.md #6.
+ *
+ * Every mark in this file prints its numbers as text somewhere the reader can
+ * see without a pointer. The set that came before it did not: a 24-hour dial
+ * whose value only appeared on `onPointerEnter`, a stacked bar whose segments
+ * were readable only through `title=`, and a line chart with a hover crosshair.
+ * On a phone none of those events fire at all, so three of seven panels were
+ * decoration. That is the rule the shapes here are chosen to satisfy — a legend
+ * with counts beats a tooltip with counts, always.
  */
 import { motion } from 'motion/react'
 import { useStill } from '../lib/motion'
-import { scaleBand, scaleLinear, scaleSqrt } from 'd3-scale'
-import { area, curveMonotoneX, line } from 'd3-shape'
-import { useId, useState } from 'react'
+import { scaleBand, scaleLinear } from 'd3-scale'
+import { arc, pie, type PieArcDatum } from 'd3-shape'
+import { useState } from 'react'
 
 /**
  * Chart marks are neutral.
@@ -34,15 +42,21 @@ const MARK = 'var(--color-fg-dim)'
 const MIN_SLOTS = 4
 const MAX_BAR = 26
 
+const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0)
+
 /* ------------------------------ bar chart -------------------------------- */
 
 export function Bars({
-  data, height = 132, color = MARK, format = (n: number) => String(n), label,
+  data, secondary, height = 132, color = MARK, format = (n: number) => String(n), label, title,
 }: {
   data: Array<{ day: string; value: number }>
+  /** Drawn behind, unfilled. What lets Arrived and Cleared be one chart. */
+  secondary?: Array<{ day: string; value: number }>
   height?: number; color?: string
   format?: (n: number) => string
   label?: (d: { day: string; value: number }) => string
+  /** The accessible name. Without one, `role="img"` is an unlabelled graphic. */
+  title?: string
 }) {
   const [hover, setHover] = useState<number | null>(null)
   // With motion disabled, an animated-in mark must already be at its end state.
@@ -50,7 +64,8 @@ export function Bars({
   // bars of zero height, which is worse than no animation.
   const reduce = useStill()
   const w = 720, padB = 18
-  const rawMax = Math.max(0, ...data.map(d => d.value))
+  const behind = new Map((secondary ?? []).map(d => [d.day, d.value]))
+  const rawMax = Math.max(0, ...data.map(d => d.value), ...(secondary ?? []).map(d => d.value))
 
   // Nothing to draw is not a hole to fill with a sentence. The panel's title row
   // carries an em dash and the chart is not drawn at all. A 572×132 box
@@ -61,8 +76,8 @@ export function Bars({
    * A sparse series compacts to its own extent, and says what that extent is.
    *
    * Measured: `Throughput` drew thirty day-slots across 572px and painted one
-   * 11px bar at slot thirty — 98% of the axis empty — and `The pile` did it
-   * twice more. That is a formatting decision, not a data problem: the chart
+   * 11px bar at slot thirty — 98% of the axis empty — and two more panels did
+   * the same. That is a formatting decision, not a data problem: the chart
    * shows the days it has, and the axis labels say which days those are.
    */
   const first = data.findIndex(d => d.value > 0)
@@ -85,13 +100,28 @@ export function Bars({
   const bx = (d: string) => x(d)! + (x.bandwidth() - bw) / 2
 
   const active = hover != null ? data[hover] : null
+  const total = data.reduce((n, d) => n + d.value, 0)
 
   return (
     <div className="relative">
-      <svg viewBox={`0 0 ${w} ${height}`} className="w-full block overflow-visible"
-           preserveAspectRatio="none" role="img">
+      {/*
+        `height` is set, not inferred.
+
+        With only `w-full` and a 720×132 viewBox the browser derived the height
+        from the intrinsic ratio, so in a 358px phone column a chart that
+        declares 132 units rendered 66px tall — every geometric constant in this
+        component was wrong by half at the size it is most often read.
+        `preserveAspectRatio="none"` stays with it: the y axis is now exact
+        (132 units in a 132px box), and the x axis is a band scale, which is
+        meant to stretch to whatever width it is given.
+      */}
+      <svg viewBox={`0 0 ${w} ${height}`} height={height} className="w-full block overflow-visible"
+           preserveAspectRatio="none" role="img"
+           aria-label={title ?? `${total} across ${data.length} days`}>
         {data.map((d, i) => {
           const h = Math.max(d.value > 0 ? 2 : 0, height - padB - y(d.value))
+          const bg = behind.get(d.day) ?? 0
+          const bh = Math.max(bg > 0 ? 2 : 0, height - padB - y(bg))
           return (
             <g key={d.day}>
               {/* A full-height transparent target: hitting a 2px bar with a
@@ -100,6 +130,12 @@ export function Bars({
                 x={x(d.day)!} y={0} width={x.bandwidth()} height={height} fill="transparent"
                 onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}
               />
+              {secondary && bh > 0 && (
+                <rect
+                  x={bx(d.day)} y={height - padB - bh} width={bw} height={bh}
+                  rx={Math.min(3, bw / 2)} fill="var(--color-ink-700)"
+                />
+              )}
               {/* Geometry is static and the growth is a CSS transform. Animating
                   the `height`/`y` attributes instead looks equivalent but is not:
                   motion drives those as geometry properties and the spring never
@@ -134,244 +170,272 @@ export function Bars({
   )
 }
 
-/* ----------------------------- area + line ------------------------------- */
+/* --------------------------------- donut --------------------------------- */
 
-/** How many days with a value a line needs before it is a line. */
-export const TREND_MIN_POINTS = 2
-
-export function Trend({
-  data, height = 132, color = MARK, format = (n: number) => String(n),
-}: {
-  data: Array<{ day: string; value: number | null }>
-  height?: number; color?: string; format?: (n: number) => string
-}) {
-  const gid = useId()
-  const [hover, setHover] = useState<number | null>(null)
-  const reduce = useStill()
-  const w = 720, padB = 18
-  const points = data.map((d, i) => ({ i, v: d.value, day: d.day }))
-  const known = points.filter(p => p.v != null) as Array<{ i: number; v: number; day: string }>
-
-  // A line needs two points, and the caller is told the same threshold through
-  // `TREND_MIN_POINTS`, so the tile above cannot state a median the chart below
-  // refuses to draw. Not enough is not a 572×132 box saying so: the panel puts
-  // an em dash on its title row and draws nothing.
-  if (known.length < TREND_MIN_POINTS) return null
-
-  const max = Math.max(...known.map(p => p.v))
-  const x = scaleLinear().domain([0, data.length - 1]).range([0, w])
-  const y = scaleLinear().domain([0, max || 1]).range([height - padB, 4])
-
-  const mkLine = line<{ i: number; v: number }>().x(p => x(p.i)).y(p => y(p.v)).curve(curveMonotoneX)
-  const mkArea = area<{ i: number; v: number }>()
-    .x(p => x(p.i)).y0(height - padB).y1(p => y(p.v)).curve(curveMonotoneX)
-
-  const active = hover != null ? known.find(p => p.i === hover) : null
-
-  return (
-    <div className="relative">
-      <svg viewBox={`0 0 ${w} ${height}`} className="w-full block overflow-visible" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.26} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-
-        <motion.path
-          d={mkArea(known)!} fill={`url(#${gid})`}
-          initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }}
-          transition={{ duration: 0.6, delay: 0.25 }}
-        />
-        {/* Draw the line on rather than fading it in — the stroke reads as the
-            data arriving, which is the one bit of showmanship here. */}
-        <motion.path
-          d={mkLine(known)!} fill="none" stroke={color} strokeWidth={1.75}
-          strokeLinecap="round" vectorEffect="non-scaling-stroke"
-          initial={reduce ? false : { pathLength: 0 }} animate={{ pathLength: 1 }}
-          transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
-        />
-
-        {active && (
-          <>
-            <line x1={x(active.i)} x2={x(active.i)} y1={0} y2={height - padB}
-                  stroke="var(--color-ink-600)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
-            <circle cx={x(active.i)} cy={y(active.v)} r={3.5} fill={color} />
-          </>
-        )}
-
-        {points.map(p => (
-          <rect key={p.i} x={x(p.i) - w / data.length / 2} y={0}
-                width={w / data.length} height={height} fill="transparent"
-                onPointerEnter={() => setHover(p.i)} onPointerLeave={() => setHover(null)} />
-        ))}
-      </svg>
-      <div className="flex justify-between mt-2 text-sm text-fg-mute tnum">
-        <span>{data[0]?.day.slice(5)}</span>
-        <span className={active ? 'text-fg' : ''}>
-          {active ? `${active.day.slice(5)} · ${format(active.v)}` : ''}
-        </span>
-        <span>{data.at(-1)?.day.slice(5)}</span>
-      </div>
-    </div>
-  )
-}
-
-/* --------------------------- radial day clock ---------------------------- */
+export type DonutSlice = { id: string; label: string; value: number; color: string }
 
 /**
- * When I actually work, drawn as a 24-hour dial. A bar chart of hours is
- * readable but forgettable; a clock is instantly legible because everyone
- * already knows how to read one, and it makes a late-night habit obvious.
+ * The shape a share-of-a-whole actually has.
+ *
+ * A donut answers "how much of this is Claude?" in one glance, which is the
+ * question the page opens with, and it answers it without an axis — so there is
+ * no long empty ruler when four of five sources are quiet. The counts and
+ * percentages live in `Legend` beside it, as text.
+ *
+ * **The centre is this ring's own total, and it is not a prop.** It used to be
+ * one, and the two rings on Pulse then said different kinds of thing in the
+ * same place: `112 / cards / 5 sources`, which is the sum of its slices, beside
+ * `00:00 / peak hour / 2 done`, which is a clock reading over a count that
+ * belongs to one hour rather than to the ring — so the second one read as a
+ * donut whose middle disagreed with its own arcs, four of them summing to 4.
+ * A caller cannot pass a number that fails to add up if it cannot pass one.
+ * `centreTop` names what the number counts and `centreFoot` is the one
+ * secondary fact worth the space; neither is a second total.
  */
-export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; value: number }>; size?: number }) {
-  const [hover, setHover] = useState<number | null>(null)
+export function Donut({
+  slices, centreTop, centreFoot, size = 240,
+}: {
+  slices: DonutSlice[]
+  centreTop: string
+  centreFoot: string
+  size?: number
+}) {
   const reduce = useStill()
-  const cx = size / 2, cy = size / 2
-  const stroke = size * 0.026
-  const rIn = size * 0.19, rOut = size * 0.45
-  const max = Math.max(1, ...data.map(d => d.value))
-  // A square-root scale, not linear: one dominant hour would otherwise squash
-  // every other spoke to a stub against the inner ring, hiding the shape of the
-  // day. Sqrt keeps the peak obvious while leaving the quiet hours readable.
-  // The half-stroke inset stops round caps from spilling past the outer ring.
-  const r = scaleSqrt().domain([0, max]).range([rIn, rOut - stroke / 2])
+  const sum = slices.reduce((n, s) => n + s.value, 0)
+  if (!sum) return null
 
-  const peak = data.reduce((a, b) => (b.value > a.value ? b : a), data[0]!)
-  const shown = hover != null ? data[hover]! : peak
+  /**
+   * A bucket with nothing in it is not a slice.
+   *
+   * `pie()` gives a zero value a zero angle, and `padAngle` then draws that
+   * nothing as a degenerate two-point path — `M-75.196,0.752L-47.998,0.48Z`,
+   * a hairline with its own fill sitting in the ring. `PartBar` has always
+   * filtered its segments; this did not, and only the desk donut was safe
+   * because its caller happened to filter first. Doing it here is what makes
+   * every mark on the page agree about what an empty bucket looks like.
+   */
+  slices = slices.filter(s => s.value > 0)
+
+  // `sort(null)` is mandatory: without it d3 re-sorts by value on every render,
+  // so two sources that trade places between polls swap sides of the ring and
+  // the picture appears to have changed when only a count did. The caller owns
+  // the order, and it owns it for reasons this component cannot see — Claude
+  // first at twelve o'clock because it is hueless and dominant, gmail and sentry
+  // never adjacent because they are fifteen degrees apart in hue.
+  const arcs = pie<DonutSlice>().value(s => s.value).sort(null).padAngle(0.02)(slices)
+  const shape = arc<PieArcDatum<DonutSlice>>()
+    .innerRadius(size * 0.30)
+    .outerRadius(size * 0.47)
+    .cornerRadius(2)
 
   return (
-    <div className="flex flex-col">
-      <svg viewBox={`0 0 ${size} ${size}`} className="w-full max-w-56" role="img">
-        {/* midnight / noon guides, the only chrome on this chart */}
-        <circle cx={cx} cy={cy} r={rOut} fill="none" stroke="var(--color-ink-800)" strokeWidth={1} />
-        <circle cx={cx} cy={cy} r={rIn} fill="none" stroke="var(--color-ink-800)" strokeWidth={1} />
+    <svg
+      viewBox={`0 0 ${size} ${size}`} width={size} height={size}
+      className="block max-w-full h-auto" role="img"
+      aria-label={slices.map(s => `${s.label} ${s.value}, ${pct(s.value, sum)}%`).join('; ')}
+    >
+      <g transform={`translate(${size / 2} ${size / 2})`}>
+        {arcs.map((d, i) => (
+          <motion.path
+            key={d.data.id}
+            d={shape(d) ?? undefined}
+            fill={d.data.color}
+            /* Gated, like every other entrance in this codebase. An ungated
+               `initial` leaves the whole ring at opacity 0 in a screenshot, a
+               print, a background tab and `?static=1` — a donut that is only
+               there for readers who watched it arrive. */
+            initial={reduce ? false : { opacity: 0, scale: 0.94 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.05 + i * 0.05, duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+            style={{ transformOrigin: 'center' }}
+          />
+        ))}
+      </g>
+      <text x={size / 2} y={size / 2 - 2} textAnchor="middle"
+            className="fill-[var(--color-fg)] text-xl font-medium tnum">
+        {sum}
+      </text>
+      <text x={size / 2} y={size / 2 + 16} textAnchor="middle"
+            className="fill-[var(--color-fg-mute)] text-sm">
+        {centreTop}
+      </text>
+      <text x={size / 2} y={size / 2 + 32} textAnchor="middle"
+            className="fill-[var(--color-fg-mute)] text-sm">
+        {centreFoot}
+      </text>
+    </svg>
+  )
+}
 
-        {data.map(d => {
-          // 0h at the top, clockwise, so it reads like a real clock face.
-          const a0 = (d.hour / 24) * Math.PI * 2 - Math.PI / 2
-          const a1 = ((d.hour + 0.82) / 24) * Math.PI * 2 - Math.PI / 2
-          const mid = (a0 + a1) / 2
-          const len = r(d.value)
-          const isHot = d.hour === shown.hour
-          return (
-            <g key={d.hour}
-               onPointerEnter={() => setHover(d.hour)} onPointerLeave={() => setHover(null)}>
-              {/* Static endpoints, animated by drawing the stroke on — same
-                  reasoning as the bars above. */}
-              <motion.line
-                x1={cx + Math.cos(mid) * rIn} y1={cy + Math.sin(mid) * rIn}
-                x2={cx + Math.cos(mid) * len} y2={cy + Math.sin(mid) * len}
-                initial={reduce ? false : { pathLength: 0, opacity: 0 }}
-                animate={{ pathLength: 1, opacity: 1 }}
-                transition={{ delay: 0.1 + d.hour * 0.018, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                stroke={isHot ? 'var(--color-fg)' : 'var(--color-fg-mute)'}
-                strokeOpacity={isHot ? 1 : d.value ? 0.55 : 0.16}
-                strokeWidth={stroke} strokeLinecap="round"
-              />
-              <line
-                x1={cx + Math.cos(mid) * rIn} y1={cy + Math.sin(mid) * rIn}
-                x2={cx + Math.cos(mid) * rOut} y2={cy + Math.sin(mid) * rOut}
-                stroke="transparent" strokeWidth={size * 0.05}
-              />
-            </g>
-          )
-        })}
+/**
+ * The donut's numbers, as text.
+ *
+ * This is the load-bearing half. It replaces `title=` and `onPointerEnter`
+ * readouts, neither of which fires on a touch screen, and it is what a reader on
+ * a phone actually reads — the ring beside it is the summary, not the data.
+ */
+export function Legend({ items }: { items: DonutSlice[] }) {
+  const sum = items.reduce((n, s) => n + s.value, 0)
+  // Zero rows go with the zero slices they key. `Afternoon 0 · 0%` beside a
+  // colour swatch reads as a slice that failed to draw rather than as a bucket
+  // nothing landed in, and the swatch is pointing at an arc that is not there.
+  const shown = items.filter(s => s.value > 0)
+  return (
+    <ul className="min-w-0">
+      {shown.map(s => (
+        <li key={s.id} className="flex items-center gap-2 h-8 min-w-0">
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} aria-hidden />
+          <span className="text-sm text-fg-dim truncate grow">{s.label}</span>
+          <span className="tnum text-sm text-fg-mute shrink-0">
+            {s.value} · {pct(s.value, sum)}%
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
-        <text x={cx} y={cy - 4} textAnchor="middle"
-              className="fill-[var(--color-fg)] text-md font-medium tnum">
-          {String(shown.hour).padStart(2, '0')}:00
-        </text>
-        <text x={cx} y={cy + 13} textAnchor="middle"
-              className="fill-[var(--color-fg-mute)] text-sm">
-          {shown.value} done
-        </text>
-      </svg>
+/* ------------------------------- part bar -------------------------------- */
 
+/**
+ * One 100%-stacked bar, and its numbers underneath.
+ *
+ * Widths are a share of the sum with no gaps between them, which is the whole
+ * difference from the five-colour thing this replaces: that one drew
+ * `value / max` inside a gapped flex row, so the widest row systematically
+ * under-read its own total and no two rows were comparable.
+ */
+export function PartBar({
+  segments,
+}: {
+  segments: Array<{ id: string; label: string; value: number; color: string }>
+}) {
+  const reduce = useStill()
+  const sum = segments.reduce((n, s) => n + s.value, 0)
+  if (!sum) return null
+  const shown = segments.filter(s => s.value > 0)
+
+  return (
+    <div>
+      <div className="flex h-3 rounded-chip overflow-hidden"
+           role="img"
+           aria-label={shown.map(s => `${s.label} ${s.value}`).join('; ')}>
+        {shown.map((s, i) => (
+          <motion.div
+            key={s.id}
+            style={{ background: s.color }}
+            initial={reduce ? false : { width: 0 }}
+            animate={{ width: `${(s.value / sum) * 100}%` }}
+            transition={{ delay: 0.08 + i * 0.05, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          />
+        ))}
+      </div>
+      <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
+        {shown.map(s => (
+          <li key={s.id} className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.color }} aria-hidden />
+            <span className="text-sm text-fg-dim">{s.label}</span>
+            <span className="tnum text-sm text-fg-mute">{s.value}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
 
-/* ------------------------------- stacked --------------------------------- */
+/* --------------------------------- ring ---------------------------------- */
 
-export function StackedAging({
-  rows, buckets, colorOf, labelOf = s => s,
+/** A single-series donut, small enough to sit in a row of them. */
+export function Ring({
+  value, total, color = MARK, label, size = 56,
 }: {
-  rows: Array<{ source: string; buckets: Record<string, number> }>
-  buckets: string[]
-  colorOf: (s: string) => string
-  /** The name the rest of the product uses. `capitalize` gave `Claude`, `Github`. */
-  labelOf?: (s: string) => string
+  value: number; total: number; color?: string; label: string; size?: number
 }) {
   const reduce = useStill()
-  const totals = rows.map(r => buckets.reduce((n, b) => n + (r.buckets[b] ?? 0), 0))
-  const max = Math.max(1, ...totals)
+  const done = pct(value, total)
+  const r = size / 2 - 5
+  const c = 2 * Math.PI * r
 
   return (
-    <div className="space-y-4">
-      {rows.map((r, i) => {
-        const total = totals[i]!
-        return (
-          <div key={r.source}>
-            <div className="flex items-baseline justify-between mb-2">
-              <span className="inline-flex items-center gap-2 text-sm text-fg-dim">
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: colorOf(r.source) }} />
-                {labelOf(r.source)}
-              </span>
-              <span className="tnum text-sm text-fg-mute">{total}</span>
-            </div>
-            <div className="flex gap-[2px] h-2">
-              {buckets.map((b, bi) => {
-                const v = r.buckets[b] ?? 0
-                if (!v) return null
-                return (
-                  <motion.div
-                    key={b} title={`${v} · ${b}`}
-                    className="rounded-chip"
-                    style={{
-                      background: colorOf(r.source),
-                      // Older items are drawn stronger, so a pile that is going
-                      // stale looks worse than one that is merely large.
-                      opacity: 0.28 + (bi / Math.max(1, buckets.length - 1)) * 0.72,
-                    }}
-                    initial={reduce ? false : { width: 0 }}
-                    animate={{ width: `${(v / max) * 100}%` }}
-                    transition={{ delay: 0.1 + i * 0.05, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-                  />
-                )
-              })}
-            </div>
-          </div>
-        )
-      })}
+    <div className="flex items-center gap-3 min-w-0">
+      <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} className="block shrink-0"
+           role="img" aria-label={`${label}: ${value} of ${total}, ${done}%`}>
+        <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none"
+                  stroke="var(--color-ink-800)" strokeWidth={5} />
+          <motion.circle
+            cx={size / 2} cy={size / 2} r={r} fill="none"
+            stroke={color} strokeWidth={5} strokeLinecap="round"
+            strokeDasharray={c}
+            initial={reduce ? false : { strokeDashoffset: c }}
+            animate={{ strokeDashoffset: c - (c * done) / 100 }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          />
+        </g>
+        <text x={size / 2} y={size / 2 + 4} textAnchor="middle"
+              className="fill-[var(--color-fg-dim)] text-sm tnum">
+          {done}
+        </text>
+      </svg>
+      <div className="min-w-0">
+        <div className="text-sm text-fg-dim truncate">{label}</div>
+        <div className="tnum text-sm text-fg-mute">{value}/{total}</div>
+      </div>
     </div>
   )
 }
 
 /* -------------------------------- weekday -------------------------------- */
 
-const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+/**
+ * Exported, because a week with one active day is not drawn as a chart at all —
+ * the page prints `9 on Sun` on a row instead, and it has to say the day in the
+ * same words the axis would have.
+ */
+export const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: number }> }) {
   const reduce = useStill()
   const max = Math.max(1, ...data.map(d => d.value))
+
+  /**
+   * Three rows on one seven-column grid: the values, the bars, the names.
+   *
+   * The values used to sit inside each column above its own bar, which put them
+   * at seven different heights — a ragged line of numbers that reads as noise
+   * rather than as a row you can compare across. On a shared grid they share a
+   * baseline, and every column's three parts stay in the same column.
+   *
+   * Three letters, not one. `T` and `T`, `S` and `S` are the same character, so
+   * half the axis was unreadable at the width this chart is usually given.
+   */
   return (
-    <div className="flex items-end gap-2 h-26">
-      {data.map(d => (
-        <div key={d.weekday} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-          <motion.div
-            className="w-full rounded-chip"
+    <div role="img" aria-label={data.map(d => `${WEEKDAY[d.weekday]} ${d.value}`).join('; ')}>
+      <div className="grid grid-cols-7 gap-2">
+        {data.map(d => (
+          <span key={d.weekday} className="tnum text-sm text-fg-mute text-center">{d.value || ''}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-2 items-end h-24 mt-1">
+        {data.map(d => (
+          <motion.span
+            key={d.weekday}
+            className="w-full rounded-chip block"
             style={{
               background: d.value === max ? 'var(--color-fg-dim)' : 'var(--color-ink-700)',
               opacity: d.value === max ? 0.9 : 1,
             }}
             initial={reduce ? false : { height: 0 }}
-            animate={{ height: `${Math.max(3, (d.value / max) * 82)}%` }}
+            animate={{ height: `${Math.max(3, (d.value / max) * 100)}%` }}
             transition={{ delay: d.weekday * 0.04, type: 'spring', stiffness: 200, damping: 24 }}
           />
-          <span className="text-sm text-fg-mute">{WD[d.weekday]!.slice(0, 1)}</span>
-        </div>
-      ))}
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-2 mt-2">
+        {data.map(d => (
+          <span key={d.weekday} className="text-sm text-fg-mute text-center truncate">{WEEKDAY[d.weekday]}</span>
+        ))}
+      </div>
     </div>
   )
 }

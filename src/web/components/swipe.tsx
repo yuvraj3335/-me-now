@@ -168,6 +168,20 @@ export function useSwipe(
       travelled = 0
       if (!engagedWheel) return
       engagedWheel = false
+      /*
+       * 120ms is long enough for another row to have taken the store.
+       *
+       * The wheel path publishes on the *first* engaged frame rather than at the
+       * end, so this timer fires after a gesture that already said which row is
+       * open — and macOS momentum keeps extending it well past the point where
+       * two fingers have moved on. Flick one row half-open, flick the next: the
+       * first row's timer would land afterwards and publish its own verdict,
+       * shutting the drawer the reader had just opened, or stealing the key back
+       * to a row with no drawer showing — and `openSwipeKey` is what the desk
+       * hands the keyboard to. A row that no longer owns the store closes
+       * itself and says nothing.
+       */
+      if (openSwipeKey() !== key) { put(0); return }
       const landed = snapSwipe(dxRef.current, width)
       setOpenSwipe(landed ? key : null)
       put(landed)

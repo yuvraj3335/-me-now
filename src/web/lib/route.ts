@@ -10,10 +10,11 @@
  *     killed the screenshot harness's own `?static=1` on the first tab click.
  *  2. **The fragment is the open detail.** `#card/<group_key>` is why the
  *     phone's Back button closes the detail instead of leaving Wake, and it is
- *     why the laptop's pane and the phone's full-screen view are one piece of
- *     state read twice rather than two `useState`s that can disagree.
+ *     why the laptop's pane and the phone's sheet are one piece of state read
+ *     twice rather than two `useState`s that can disagree. The bare `#card/` is
+ *     a third state — closed on purpose — and the reason the X now works.
  *  3. **A filter change is a replace; opening a row is a push.** Twenty filter
- *     clicks must not be twenty presses of Back to get out of Now, and one
+ *     clicks must not be twenty presses of Back to get off the desk, and one
  *     press of Back must close one detail.
  *
  * A module-level store rather than context: a card is opened from the table, the
@@ -76,9 +77,26 @@ export function useParam(key: string): string | null {
 }
 
 /**
+ * Several parameters, live, from one subscription.
+ *
+ * The desk reads six of them — source, query, due, priority, status, page — and
+ * six `useParam` calls is six `useSyncExternalStore` subscriptions to the same
+ * store, each re-reading and re-parsing the same string. The keys are spread
+ * into the dependency so a caller can pass an inline array without the object
+ * identity changing on every render.
+ */
+export function useParams(keys: string[]): Record<string, string | null> {
+  const { search } = useRoute()
+  const params = new URLSearchParams(search)
+  const out: Record<string, string | null> = {}
+  for (const k of keys) out[k] = params.get(k)
+  return out
+}
+
+/**
  * The parameters that survive a navigation between destinations.
  *
- * Deliberately short. `?src=` is Now's filter and means nothing on Mail, so it
+ * Deliberately short. `?src=` is the desk's filter and means nothing on Mail, so
  * is dropped; `?static` is the screenshot harness telling every animated mark to
  * render at its end state, and losing it on the first tab click is what made
  * captures of every page but the first one look broken.
@@ -131,11 +149,26 @@ export function setParam(key: string, value: string | null) {
 
 const CARD = 'card/'
 
-/** Which card the address bar says is open, if any. */
+/**
+ * Which card the address bar says is open — and the difference between *closed*
+ * and *never chose*, which is the whole close-button bug.
+ *
+ * Three answers, not two:
+ *   - a key   — this card is open
+ *   - `''`    — closed, deliberately, by pressing the X
+ *   - `null`  — nothing has been said either way
+ *
+ * The old version was `decodeURIComponent(hash.slice(5)) || null`, which
+ * collapsed the empty hash into `null`. Home's resting state is "show the top
+ * row when nothing is chosen", so clearing the selection put it straight back
+ * into that state and the pane never left. No amount of local `useState` in the
+ * pane could fix that, because the address bar was the thing that could not say
+ * it.
+ */
 export function detailKeyOf(hash: string): string | null {
   if (!hash.startsWith(CARD)) return null
   try {
-    return decodeURIComponent(hash.slice(CARD.length)) || null
+    return decodeURIComponent(hash.slice(CARD.length))
   } catch {
     return null
   }
@@ -153,11 +186,21 @@ export function useDetailKey(): string | null {
  * closing it is the behaviour the whole platform already trained. Moving from
  * one row to the next replaces instead of pushing: twenty rows read in sequence
  * is one thing you were doing, not twenty places you went.
+ *
+ * Before the first push it stamps the sentinel onto the entry it is leaving.
+ * That entry is what Back — and therefore the X, which unwinds the same way —
+ * lands on, and an entry with no hash at all means "nothing said", which the
+ * desk answers by showing its top row. Without this the close button unwound
+ * to a state that immediately re-opened a card, which is the reported blocker:
+ * closing the pane put the top row straight back into it.
  */
 export function openDetail(key: string) {
-  const url = `${base()}#${CARD}${encodeURIComponent(key)}`
-  const method = window.history.state?.wakeDetail ? 'replaceState' : 'pushState'
-  window.history[method]({ wakeDetail: true }, '', url)
+  if (!window.history.state?.wakeDetail) {
+    window.history.replaceState(window.history.state, '', `${base()}#${CARD}`)
+    window.history.pushState({ wakeDetail: true }, '', `${base()}#${CARD}${encodeURIComponent(key)}`)
+  } else {
+    window.history.replaceState({ wakeDetail: true }, '', `${base()}#${CARD}${encodeURIComponent(key)}`)
+  }
   sync()
 }
 
@@ -165,6 +208,10 @@ export function closeDetail() {
   // If Wake pushed the entry, unwind it, so the history stack does not grow a
   // step that Back would use to re-open what was just closed.
   if (window.history.state?.wakeDetail) return window.history.back()
-  window.history.replaceState({}, '', base())
+  // Otherwise write the sentinel rather than clearing the fragment. An absent
+  // hash means "nothing said", and the desk answers that with its top row; the
+  // bare `#card/` is how a person says they closed it on purpose. See
+  // `detailKeyOf`.
+  window.history.replaceState({}, '', `${base()}#${CARD}`)
   sync()
 }

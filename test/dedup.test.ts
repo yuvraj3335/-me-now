@@ -2,7 +2,8 @@ import { expect, test, describe } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  cardId, elidedPrefix, elisionPairs, extractRefs, groupCards, normalizeSubject, pile, subjectRef,
+  cardId, elidedPrefix, elisionPairs, extractAlertRefs, extractRefs, groupCards,
+  normalizeSubject, pile, subjectRef,
 } from '../src/server/dedup'
 import type { RawCard } from '../src/server/sources/types'
 
@@ -104,6 +105,56 @@ describe('grouping', () => {
     const c = card({ source: 'claude', source_id: 'lonely', refs: [] })
     expect(groupCards([c]).get('claude:lonely')).toBe('claude:lonely')
   })
+
+  test('an alert in Slack and the same issue from Sentry are one row, named TRUTO-38', () => {
+    // The numeric id is what performs the merge — it is the only reference the
+    // two paths are guaranteed to share. The short id is what a person can
+    // actually look up, so it has to win the label; with equal ranks the
+    // tiebreak is lexicographic and `sentry:7700748352` won it.
+    const cards = [
+      card({ source: 'slack', source_id: 'C0BERTMS9K4:1788094379.882969', refs: [
+        { t: 'slackthread', v: 'C0BERTMS9K4:1788094379.882969' },
+        { t: 'sentry', v: 'TRUTO-38' },
+        { t: 'sentry', v: '7700748352' },
+      ] }),
+      card({ source: 'sentry', source_id: 'TRUTO-38', refs: [
+        { t: 'sentry', v: 'TRUTO-38' },
+        { t: 'sentry', v: '7700748352' },
+      ] }),
+    ]
+    const groups = groupCards(cards)
+    const keys = new Set(cards.map(c => groups.get(cardId(c))))
+    expect(keys.size).toBe(1)
+    expect([...keys][0]).toBe('sentry:TRUTO-38')
+  })
+})
+
+describe('an alert body is read blind to GitHub', () => {
+  // The Cursor triage bot links the *fixing PR*. That is a different unit of
+  // work, and `gh` outranks every other reference — so letting it in merges the
+  // alert into the PR's card, relabels the group `gh:trutohq/truto#2037`, and
+  // the alert stops being findable as TRUTO-38.
+  const body = [
+    '_TRUTO-38_ — `TypeError: Cannot read properties of undefined`',
+    '<https://truto.sentry.io/issues/7700748352/>',
+    '<https://github.com/trutohq/truto/pull/2037|View PR>',
+  ].join('\n')
+
+  test('the issue is a reference and the pull request is not', () => {
+    const refs = extractAlertRefs(body)
+    expect(refs).toContainEqual({ t: 'sentry', v: 'TRUTO-38' })
+    expect(refs).toContainEqual({ t: 'sentry', v: '7700748352' })
+    expect(refs.some(r => r.t === 'gh')).toBe(false)
+    // The general extractor still sees it — the PR arrives on its own from the
+    // GitHub adapter, and this is a narrowing for one caller, not a rule change.
+    expect(extractRefs(body)).toContainEqual({ t: 'gh', v: 'trutohq/truto#2037' })
+  })
+
+  test('a short id keeps its whole suffix', () => {
+    expect(extractAlertRefs('Short ID: TRUTO-APP-1BY'))
+      .toContainEqual({ t: 'sentry', v: 'TRUTO-APP-1BY' })
+    expect(extractAlertRefs('Short ID: TRUTO-APP-1BY').map(r => r.v)).not.toContain('TRUTO-A')
+  })
 })
 
 describe('piles', () => {
@@ -130,6 +181,16 @@ describe('piles', () => {
 
   test('not-mine outranks a manual move, so dismissal is permanent', () => {
     expect(pile(c, { not_mine: 1, pile_override: 'now' })).toBe('hidden')
+  })
+
+  test('a finished status hides it, and outranks a manual move too', () => {
+    // Status is the authoritative claim about the work; the two older columns
+    // are kept in sync beside it rather than replaced under it.
+    expect(pile(c, { status: 'done' })).toBe('hidden')
+    expect(pile(c, { status: 'wont_do' })).toBe('hidden')
+    expect(pile(c, { status: 'wont_do', pile_override: 'now' })).toBe('hidden')
+    expect(pile(c, { status: 'in_progress' })).toBe('now')
+    expect(pile(c, { status: 'in_review', pile_override: 'parked' })).toBe('parked')
   })
 })
 

@@ -1,26 +1,27 @@
 /**
- * The three shapes mcp.slack.com actually answers with.
+ * The one shape mcp.slack.com answers with that `slack.ts` does not already read.
  *
- * Slack's MCP does not return JSON. Search, thread reads and channel reads each
- * answer with a different Markdown-ish text block, and each block was captured
- * live on 2026-08-30 before a line of this was written — see FIXTURES.md. Every
- * regex here is against a real payload rather than against a schema somebody
- * documented.
+ * Slack's MCP does not return JSON, and it does not return *one* format either:
+ * search results, channel history and thread reads are three different
+ * Markdown-ish blocks. Two of the three live next door in `slack.ts` —
+ * `parseSlackResults` and `parseChannelMessages` — because that file is where
+ * the queries that produce them are asked. This file holds the third, the thread
+ * read, plus the two identity questions that only a thread makes sense of.
  *
- * Three details cost real bugs and are worth stating once:
+ * Every regex here is written against a payload captured live on 2026-08-30 (see
+ * `FIXTURES.md`) rather than against a schema somebody documented. Three details
+ * cost real bugs and are worth stating once:
  *
  *   1. The search tool spells the timestamp `Message_ts:` and the thread and
- *      channel readers spell it `Message TS:`. Both are handled everywhere,
- *      because "which tool produced this text" is not a question a parser should
- *      have to ask.
- *   2. A message body is taken by index, not by a `/m`-flagged regex. With `/m`
- *      a `$` terminator matches the end of the first *line*, which silently
+ *      channel readers spell it `Message TS:`. Both are handled here, because
+ *      "which tool produced this text" is not a question a parser should have to
+ *      ask.
+ *   2. A message body is taken by index, not by a `/m`-flagged regex. With `/m` a
+ *      `$` terminator matches the end of the first *line*, which silently
  *      truncates every multi-line message to its opening sentence.
  *   3. Every field is optional-safe. A missing one degrades to a usable row; it
  *      never throws away the whole poll.
  */
-
-import { SLACK_WORKSPACE } from '../env'
 
 /* ------------------------------- timestamps ------------------------------- */
 
@@ -28,6 +29,11 @@ import { SLACK_WORKSPACE } from '../env'
  * A Slack ts is "<epoch seconds>.<6 digits>", where the fraction is a sequence
  * number rather than real sub-second time. Parsing it as a float introduces a
  * rounding error, so take the first three digits as milliseconds directly.
+ *
+ * It lives here rather than in `slack.ts` — which re-exports it, and is where
+ * everything else in the product still imports it from — for one mechanical
+ * reason: `slack.ts` imports this module, so a copy in each would be two
+ * implementations of one rule and an import the other way would be a cycle.
  */
 export function slackTsToMs(ts: string): number {
   if (!ts) return Date.now()
@@ -36,21 +42,9 @@ export function slackTsToMs(ts: string): number {
   return Number(secs) * 1000 + (Number.isFinite(ms) ? ms : 0)
 }
 
-/* ---------------------------------- hits ---------------------------------- */
+/* --------------------------------- messages ------------------------------- */
 
-export type SlackHit = {
-  channelId: string
-  channelName: string
-  isDm: boolean
-  fromName: string
-  fromId: string
-  ts: string
-  epochMs: number
-  permalink: string
-  text: string
-}
-
-/** One message inside a thread or a channel, as the readers describe it. */
+/** One message inside a thread, as the reader describes it. */
 export type SlackMessage = {
   ts: string
   epochMs: number
@@ -71,14 +65,6 @@ export type SlackThreadRead = {
    */
   replyTotal: number
 }
-
-export type SlackChannelRead = {
-  channelId: string
-  channelName: string
-  messages: SlackMessage[]
-}
-
-/* ------------------------------- shared bits ------------------------------ */
 
 /**
  * `From: Nidhi <nidhi@truto.one> (U0BBZV4HQHH)` in the readers, and
@@ -110,8 +96,8 @@ function bodyAfterTs(block: string): string {
   const nl = block.indexOf('\n', idx)
   if (nl === -1) return ''
   const after = block.slice(nl + 1)
-  // Belt and braces: the callers already split on these, but a reader that
-  // gains a fourth block type must not start eating the next message.
+  // Belt and braces: the caller already split on these, but a reader that gains
+  // a third block type must not start eating the next message.
   const stop = after.search(/^(?:---|===)/m)
   return (stop === -1 ? after : after.slice(0, stop))
     .split('\n')
@@ -122,61 +108,12 @@ function bodyAfterTs(block: string): string {
 
 const tsIn = (block: string) => block.match(/^Message[ _][Tt][Ss]:\s*([\d.]+)\s*$/m)?.[1] ?? ''
 
-/** One `From:` / `Message TS:` / body block, whichever reader produced it. */
+/** One `From:` / `Message TS:` / body block. */
 function parseMessageBlock(block: string, whoRaw?: string): SlackMessage | null {
   const ts = tsIn(block)
   if (!ts) return null
   const { who, whoId } = parseWho(whoRaw ?? block.match(/^From:\s*(.+)$/m)?.[1] ?? '')
   return { ts, epochMs: slackTsToMs(ts), who, whoId, text: bodyAfterTs(block) }
-}
-
-/* ------------------------------ search results ---------------------------- */
-
-/**
- * Parse the Markdown block the Slack search tool returns.
- */
-export function parseSlackResults(md: string): SlackHit[] {
-  const out: SlackHit[] = []
-  for (const block of md.split(/^###\s+Result\s+\d+\s+of\s+\d+\s*$/m).slice(1)) {
-    const field = (re: RegExp) => block.match(re)?.[1]?.trim()
-
-    const channelRaw = field(/^Channel:\s*(.+)$/m) ?? ''
-    const channelId = channelRaw.match(/\(ID:\s*([A-Z0-9]+)\)/)?.[1] ?? ''
-    const channelName = channelRaw.replace(/\s*\(ID:.*?\)\s*/, '').trim()
-
-    const fromRaw = field(/^From:\s*(.+)$/m) ?? ''
-    const { who, whoId } = parseWho(fromRaw)
-
-    const ts = field(/^Message[ _][Tt][Ss]:\s*([\d.]+)$/m) ?? ''
-    const permalink = block.match(/^Permalink:.*?\((https?:\/\/[^)]+)\)/m)?.[1] ?? ''
-
-    // Text runs to the end of the block or to the --- separator. Done by index
-    // rather than by regex: with the /m flag a `$` terminator matches the end of
-    // the first *line*, which silently truncates every multi-line message.
-    let text = ''
-    const tIdx = block.search(/^Text:[ \t]*$/m)
-    if (tIdx !== -1) {
-      const after = block.slice(block.indexOf('\n', tIdx) + 1)
-      const sep = after.search(/^---\s*$/m)
-      text = (sep === -1 ? after : after.slice(0, sep)).trim()
-    } else {
-      text = (block.match(/^Text:[ \t]*(.*)$/m)?.[1] ?? '').trim()
-    }
-
-    if (!ts && !permalink) continue
-    out.push({
-      channelId,
-      channelName: channelName || (channelId.startsWith('D') ? 'DM' : channelId),
-      isDm: isDirectMessage({ channelId, channelName: channelRaw }),
-      fromName: who,
-      fromId: whoId,
-      ts,
-      epochMs: slackTsToMs(ts),
-      permalink,
-      text,
-    })
-  }
-  return out
 }
 
 /* -------------------------------- thread read ----------------------------- */
@@ -190,6 +127,11 @@ const REPLY_HEADER = /^---\s*Reply\s+\d+\s+of\s+\d+\s*---[ \t]*$/m
  * everything a thread row needs: the parent's text (which search often never
  * returns, because he was named in a reply rather than in the parent), the
  * authoritative reply count, and every reply's author and body.
+ *
+ * It is not `parseSlackResults` with a different separator. That parser splits
+ * on `### Result N of M`, which appears nowhere in this payload — pointed at a
+ * thread read it returns an empty array, silently, which is exactly what the
+ * shipped `readThread` was doing.
  */
 export function parseThreadRead(md: string): SlackThreadRead {
   const empty: SlackThreadRead = { parent: null, replies: [], replyTotal: 0 }
@@ -212,35 +154,6 @@ export function parseThreadRead(md: string): SlackThreadRead {
     .filter((m): m is SlackMessage => !!m)
 
   return { parent: parseMessageBlock(parentBlock), replies, replyTotal }
-}
-
-/* -------------------------------- channel read ---------------------------- */
-
-/**
- * `=== Message from Cursor <botuser-…@slack-bots.com> (U092446PCTV) at 2026-08-30 18:27:14 IST ===`
- *
- * The header is one line with the author, the address and the local time all
- * inside it, and it may carry a trailing space. The time is decoration here —
- * `Message TS:` on the next line is the fact — so the trailing ` at <when>` is
- * stripped off the author rather than parsed.
- */
-const CHANNEL_MESSAGE_HEADER = /^===\s*Message from\s+(.+?)\s*===[ \t]*$/m
-const AT_WHEN = /\s+at\s+\d{4}-\d{2}-\d{2}[ T][\d:]+(?:\s+\S+)?\s*$/
-
-export function parseChannelRead(md: string, fallbackId = ''): SlackChannelRead {
-  const head = md.match(/^Channel:\s*(#?[^\s(]+)\s*\(([A-Z0-9]+)\)/m)
-  const channelId = head?.[2] ?? fallbackId
-  const channelName = head?.[1] ?? (fallbackId ? fallbackId : '')
-
-  // A capturing split hands back [preamble, author1, body1, author2, body2, …],
-  // which is how the header's author survives being used as a separator.
-  const parts = md.split(CHANNEL_MESSAGE_HEADER)
-  const messages: SlackMessage[] = []
-  for (let i = 1; i + 1 < parts.length; i += 2) {
-    const m = parseMessageBlock(parts[i + 1]!, (parts[i] ?? '').replace(AT_WHEN, ''))
-    if (m) messages.push(m)
-  }
-  return { channelId, channelName, messages }
 }
 
 /* --------------------------------- identity ------------------------------- */
@@ -271,80 +184,11 @@ export function parentTs(hit: { permalink?: string; ts: string }): string {
 }
 
 /**
- * A direct or group message, in one place.
+ * Whether a message names him personally, in Slack's own markup.
  *
- * DMs are banned from the desk outright, and the ban is worth exactly one
- * function: three call sites each deciding what "DM" means is how one of them
- * ends up deciding it slightly differently. Three independent tells, because
- * each of the two readers and the search tool describes a DM its own way.
- *
- * The `#` check is load-bearing: a public channel arrives as `#dm-tools`, and a
- * name test without it would drop a real channel for starting with two letters.
+ * Decided on the raw text, before `clean` turns `<@U09617LRRDF|Yuvraj Muley>`
+ * into `@Yuvraj Muley`. Once the markup is gone the id is gone with it, and "is
+ * this on me" would be a string match on a display name anybody can change.
  */
-export function isDirectMessage(h: {
-  channelId?: string | null
-  channelName?: string | null
-  isDm?: boolean
-}): boolean {
-  if (h.isDm === true) return true
-  if ((h.channelId ?? '').startsWith('D')) return true
-  const name = (h.channelName ?? '').trim()
-  if (name.startsWith('#')) return false
-  return /^(dm|mpim|group dm|multi[- ]person dm)\b/i.test(name)
-}
-
-/**
- * A channel read hands back no permalink at all, so build one. The workspace
- * host is not in the payload either; it is configuration, defaulting to the one
- * workspace this deployment is signed into.
- */
-export function archiveLink(channelId: string, ts: string, host?: string): string {
-  const base = host || `https://${SLACK_WORKSPACE}.slack.com`
-  return `${base}/archives/${channelId}/p${ts.replace('.', '')}`
-}
-
-/** The `https://<workspace>.slack.com` origin a real permalink was minted from. */
-export function hostOf(permalink: string): string | null {
-  try {
-    return new URL(permalink).origin
-  } catch {
-    return null
-  }
-}
-
-/* --------------------------------- markup --------------------------------- */
-
-/**
- * Slack's own markup, out. Exported because the search path in
- * `sources/search.ts` reads the same text and must normalise it the same way:
- * without it a Fetch row's title is `<@U09617LRRDF|Yuvraj Muley> can you look`,
- * which is the raw wire format sitting on the desk.
- */
-export const clean = (t: string) =>
-  t.replace(/<!subteam\^[A-Z0-9]+\|([^>]+)>/g, '$1')
-   .replace(/<!subteam\^([A-Z0-9]+)>/g, '@$1')
-   .replace(/<@([A-Z0-9]+)\|([^>]+)>/g, '@$2')
-   .replace(/<@([A-Z0-9]+)>/g, '@$1')
-   .replace(/<(https?:\/\/[^|>]+)\|([^>]+)>/g, '$2')
-   .replace(/<(https?:\/\/[^>]+)>/g, '$1')
-   .replace(/\s+/g, ' ')
-   .trim()
-
-/** Whether a message names him personally, in Slack's own markup. */
 export const namesUser = (text: string, userId: string) =>
   !!userId && new RegExp(`<@${userId}(\\||>)`).test(text)
-
-/**
- * Which of his usergroups a message pages, as the handle people read.
- *
- * `<!subteam^S06HDT77E1M|@truto-eng>` carries both halves; the id is what is
- * configured and the handle is what a row should say, so the text is the source
- * for the display name rather than a second config entry that can go stale.
- */
-export function namesUsergroup(text: string, ids: readonly string[]): string | null {
-  for (const id of ids) {
-    const m = new RegExp(`<!subteam\\^${id}(?:\\|([^>]+))?>`).exec(text)
-    if (m) return m[1] ?? `@${id}`
-  }
-  return null
-}

@@ -1,8 +1,11 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { useStill } from '../lib/motion'
 import { useOverlay } from '../lib/overlay'
-import { X } from 'lucide-react'
+import { toLocalInput, fromLocalInput } from '../lib/time'
+import { PAGE_TITLE } from '../lib/typography'
+import { WakeMark } from './WakeMark'
+import { ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
 
 export const spring = { type: 'spring', stiffness: 520, damping: 40, mass: 0.7 } as const
 export const softSpring = { type: 'spring', stiffness: 260, damping: 30 } as const
@@ -10,57 +13,58 @@ export const softSpring = { type: 'spring', stiffness: 260, damping: 30 } as con
 /* --------------------------------- buttons -------------------------------- */
 
 export type ButtonSize = 'sm' | 'md' | 'lg'
-export type ButtonVariant = 'primary' | 'default' | 'ghost' | 'danger'
+export type ButtonVariant = 'primary' | 'secondary' | 'default' | 'ghost' | 'danger'
 
 /**
- * One height. The sizes differ in padding, and the hit area is not the ink.
+ * Three real heights, and the hit area is not the ink.
  *
  * There were nine painted control heights in this product against four row
  * heights — 24, 26, 28, 32, 36, 38, 44, 45, 48, 52, 60, 65 — and not one control
- * equalled a row. A control is 32px now, everywhere, with a glyph of at most
- * 14px inside it, and `.hit` grows the touch target to 44px on a coarse pointer
- * while the painted box stays 32. Small ink, generous target: that is what
- * "feels like a tool" means. See the note in `styles.css` for why the hit box is
- * scoped to touch.
+ * equalled a row, so everything collapsed to one 32px box. That collapse went
+ * one step too far: a page-level commit and a row action ended up the same
+ * 32px, and a commitment that is the same size as a row action reads as a row
+ * action. The three heights are back, but as three *jobs* rather than three
+ * paddings — 28 for something that lives inside a row, 32 for page chrome, 40
+ * for the one control that commits. `lg` is allowed on a sheet-footer commit
+ * and a page-header primary and nowhere else; never in a table row, never in a
+ * chip rail.
  *
- * Every label is `text-sm`. `text-xs` was on the filter chips, every row action
- * and every `sm` button — which is most of what gets read before a decision, at
- * 12px, under this file's own stated floor.
+ * `.hit` grows the touch target to 44px on a coarse pointer while the painted
+ * box stays small — see the note in `styles.css` for why that is scoped to
+ * touch. `lg` takes it too. It used not to, on the grounds that 40px already
+ * clears the target; 40 is not 44, and the box is centred rather than outset
+ * now, so the whole of what `lg` costs a phone is two pixels above and below.
+ *
+ * Every label is `text-sm` bar `lg`. `text-xs` was on the filter chips, every
+ * row action and every `sm` button — which is most of what gets read before a
+ * decision, at 12px, under this file's own stated floor.
  *
  * `primary` is the amber fill. At most one per surface, and only when pressing
- * it commits something. It is never `Open`, `Connect`, `Turn on`, `Instruction`
- * or `Fetch` — those are decisions, not commitments, and they are ghost text.
+ * it commits something. It is never `Connect`, `Turn on`, `Instruction` or
+ * `Fetch` — those are decisions, not commitments.
  */
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'hit h-8 px-2 text-sm font-medium gap-2',
-  md: 'hit h-8 px-3 text-sm font-medium gap-2',
-  lg: 'hit h-8 px-4 text-sm font-medium gap-2',
-}
-
-const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-on-accent hover:brightness-110',
-  default: 'border border-edge text-fg-dim hover:text-fg hover:bg-ink-800',
-  ghost: 'text-fg-mute hover:text-fg-dim hover:bg-ink-800',
-  danger: 'border border-edge text-bad hover:bg-ink-800',
+  sm: 'hit h-7 px-2 text-sm gap-2',
+  md: 'hit h-8 px-3 text-sm gap-2',
+  lg: 'hit h-10 px-4 text-base gap-2',
 }
 
 /**
- * The painted control, as a class list rather than an element.
+ * Weight lives here rather than on the size, because weight is what the button
+ * is *for*: a commit is semibold whatever height it is drawn at, and a ghost
+ * stays medium even when it is the biggest thing on the row.
  *
- * One thing in the product needs a control that is genuinely a link — the
- * detail pane's `Open`, which hands a `slack://` or an `https://` URL to
- * whatever owns it. A scripted `window.open` is the wrong tool for that: on iOS
- * only a real link navigation reaches an installed app, which is the whole
- * reason the hand-off to Claude is an anchor too. Exporting the classes is how
- * an `<a>` can be that control without a second control language growing beside
- * this one.
+ * `secondary` is the new one, and it is what an action bar is made of — a
+ * filled, bordered, full-contrast button that is unmistakably pressable without
+ * spending the accent. Four ghost labels in a row read as a caption.
  */
-export const controlClass = (
-  variant: ButtonVariant = 'default', size: ButtonSize = 'md', extra = '',
-) =>
-  `relative inline-flex items-center justify-center rounded-control whitespace-nowrap
-   transition-colors duration-100 disabled:opacity-40 disabled:pointer-events-none
-   ${SIZE[size]} ${VARIANT[variant]} ${extra}`
+const VARIANT: Record<ButtonVariant, string> = {
+  primary: 'bg-accent text-on-accent font-semibold hover:brightness-110',
+  secondary: 'bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700',
+  default: 'border border-edge text-fg-dim font-medium hover:text-fg hover:bg-ink-800',
+  ghost: 'text-fg-mute font-medium hover:text-fg-dim hover:bg-ink-800',
+  danger: 'bg-bad text-on-bad font-semibold hover:brightness-110',
+}
 
 export function Button({
   children, onClick, variant = 'default', size = 'md', className = '',
@@ -79,7 +83,9 @@ export function Button({
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={onClick}
-      className={controlClass(variant, size, className)}
+      className={`relative inline-flex items-center justify-center rounded-control whitespace-nowrap
+        transition-colors duration-100 disabled:opacity-40 disabled:pointer-events-none
+        ${SIZE[size]} ${VARIANT[variant]} ${className}`}
     >
       {children}
     </button>
@@ -89,9 +95,14 @@ export function Button({
 /**
  * A set of sibling choices is one control, not N buttons.
  *
- * `Later today / Tonight / Tomorrow / Next week` was four 36px lozenges taking a
- * whole row of the detail pane; `Move to: Now / Open` was two more. They are the
- * same decision asked once, so they render as one 32px segmented control.
+ * A row of lozenges is N controls that look like N decisions; a segmented box
+ * is one control that looks like the one decision it is. Two of the deferral
+ * ladders this replaced took a whole row of the detail pane each, to ask one
+ * question between them.
+ *
+ * Use it for three or four short, fixed choices that fit side by side. Beyond
+ * that — the five statuses, the four priorities — it is a `Select`: a segmented
+ * control wide enough to hold five words is a toolbar.
  */
 export function Segmented<T extends string>({
   options, value, onChange, ariaLabel, className = '',
@@ -103,15 +114,21 @@ export function Segmented<T extends string>({
   className?: string
 }) {
   return (
+    /* The group used to clip itself, so the active segment's fill would stay
+       inside the rounded corner. That also clipped each segment's touch target
+       to the 32px the group paints — three theme segments measured 30px tall on
+       a phone. The fill rounds its own outer corner instead: 5px, which is the
+       group's 6px radius less the 1px border it sits inside. */
     <div role="group" aria-label={ariaLabel}
-      className={`inline-flex h-8 rounded-control border border-edge overflow-hidden ${className}`}>
+      className={`inline-flex h-8 rounded-control border border-edge ${className}`}>
       {options.map((o, i) => (
         <button
           key={o.id}
           disabled={o.disabled}
           onClick={() => onChange(o.id)}
           aria-pressed={value === o.id}
-          className={`relative px-3 text-sm font-medium transition-colors duration-100
+          className={`hit relative px-3 text-sm font-medium transition-colors duration-100
+            first:rounded-l-[5px] last:rounded-r-[5px]
             disabled:opacity-40 disabled:pointer-events-none
             ${i > 0 ? 'border-l border-edge' : ''}
             ${value === o.id ? 'bg-ink-800 text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}
@@ -193,7 +210,21 @@ export function Sheet({
                 </Button>
               </div>
             )}
-            <div className="overflow-y-auto px-4 py-4 grow">{children}</div>
+            {/*
+              The bottom pad is on the content, not on the scroller.
+
+              A `position: sticky` box is held inside the scrollport *less the
+              scroll container's padding*, so a scroller with `py-4` parks a
+              `bottom-0` bar 16px above its own bottom edge — measured — and
+              rows then scroll through the strip underneath the one control on
+              the surface that commits. Moving that 16px inside the scrolled
+              content leaves every other sheet's breathing room exactly where it
+              was and lets a sticky bar cancel it with `-mb-4`, the way it
+              already cancels the horizontal pad with `-mx-4`.
+            */}
+            <div className="overflow-y-auto px-4 pt-4 grow">
+              <div className="pb-4">{children}</div>
+            </div>
             {footer && <div className="px-4 py-3 shrink-0 border-t border-rule">{footer}</div>}
           </motion.div>
         </div>
@@ -227,6 +258,159 @@ export const inputClass =
   `w-full bg-ink-850 border border-edge rounded-control px-3 py-2 text-base text-fg
    placeholder:text-fg-mute outline-none transition-shadow
    focus:ring-1 focus:ring-accent/50`
+
+/**
+ * A closed set of values, as one control that fits inside a table row.
+ *
+ * A native `<select>`, deliberately. Every hand-rolled dropdown in a scrolling
+ * table has to solve clipping, focus return and pointer capture, and iOS gives
+ * a native one a wheel picker that is better than anything that could be built
+ * here. `appearance-none` takes the platform chrome off and the chevron is
+ * drawn back on behind `pointer-events-none`, so the whole box is the target.
+ *
+ * 28px, so it sits inside a 44px data row without setting the row's height —
+ * and 44px to a finger, which is why the box is painted by the wrapper and not
+ * by the control. A `<select>` generates no `::after`, so `.hit` cannot reach
+ * it and all three desk filters plus Status and Priority measured 27px of
+ * target; `.hit-native` grows the control itself and gives the height back as a
+ * negative margin, which only works if the border it would otherwise draw at
+ * 44px lives on something else. See the note in `styles.css`.
+ *
+ * `onClick`/`onPointerDown` stop propagating: a Status control lives in a row
+ * whose own click opens the detail, and changing a status is not asking to read
+ * the card.
+ */
+export function Select<T extends string>({
+  value, options, onChange, ariaLabel, className = '',
+}: {
+  value: T
+  options: ReadonlyArray<{ id: T; label: string }>
+  onChange: (v: T) => void
+  ariaLabel: string
+  className?: string
+}) {
+  return (
+    <span className={`relative inline-flex items-center shrink-0 h-7 rounded-control
+                      border border-edge text-fg-dim hover:text-fg hover:bg-ink-800
+                      transition-colors duration-100 ${className}`}>
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={e => onChange(e.target.value as T)}
+        onClick={e => e.stopPropagation()}
+        onPointerDown={e => e.stopPropagation()}
+        className="hit-native appearance-none h-full w-full pl-2 pr-5 border-0
+                   bg-transparent text-sm text-inherit outline-none truncate"
+      >
+        {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      <ChevronDown size={13} aria-hidden
+        className="absolute right-1 text-fg-mute pointer-events-none" />
+    </span>
+  )
+}
+
+/**
+ * A real calendar, not four presets.
+ *
+ * `datetime-local` is the whole point: the operator asked to pick a date, and
+ * every preset ladder this product shipped answered a different question — how
+ * far away, rather than when. Presets may sit beside this; they may not replace
+ * it. `toLocalInput`/`fromLocalInput` handle the wall-clock round trip and its
+ * daylight-saving trap; see `lib/time.ts`.
+ *
+ * The Clear control is separate and only rendered once there is something to
+ * clear, because an empty field with a cross beside it is two ways to say the
+ * same nothing.
+ *
+ * The border sits on the wrapper for the same reason it does on `Select`: the
+ * input grows to a 44px target on a finger and gives the height straight back,
+ * and a border on the input would paint that target instead of the 32px field.
+ * The focus ring follows the border, so `:has()` puts it on the wrapper.
+ */
+export function DateField({
+  value, onChange, ariaLabel,
+}: { value: number | null; onChange: (ms: number | null) => void; ariaLabel: string }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className="relative inline-flex items-center h-8 rounded-control border border-edge
+                       transition-shadow has-[input:focus]:ring-1 has-[input:focus]:ring-accent/50">
+        <input
+          type="datetime-local"
+          aria-label={ariaLabel}
+          value={toLocalInput(value)}
+          onChange={e => onChange(fromLocalInput(e.target.value))}
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+          className="hit-native [--hit-ink:32px] h-full px-2 border-0 bg-transparent
+                     text-sm text-fg-dim outline-none"
+        />
+      </span>
+      {value !== null && (
+        <Button size="sm" variant="ghost" title="Clear" ariaLabel="Clear"
+          onClick={() => onChange(null)}>
+          <X size={13} />
+        </Button>
+      )}
+    </span>
+  )
+}
+
+/**
+ * How many rows a page holds, everywhere in the product.
+ *
+ * One number rather than one per list: `Pager` renders the range it is standing
+ * over, so a caller that sliced by 25 and a pager that counted by 50 would
+ * print a range that does not describe the rows underneath it. `pageCount` and
+ * `pageSlice` are here so nobody has to re-derive the clamp either.
+ */
+export const PAGE_SIZE = 50
+
+export const pageCount = (total: number) => Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+/** The rows for `page`, with `page` clamped into the list that actually exists. */
+export function pageSlice<T>(rows: readonly T[], page: number): T[] {
+  const p = Math.min(Math.max(page, 1), pageCount(rows.length))
+  return rows.slice((p - 1) * PAGE_SIZE, p * PAGE_SIZE) as T[]
+}
+
+/**
+ * One page of a list, and how to get to the next.
+ *
+ * Prev and Next, and no numbered strip: a strip is N controls to say what two
+ * plus a count already say, and at page 40 it is either a scrolling row of
+ * digits or an ellipsis menu, which this product does not have. The range and
+ * the total are the orientation; the two buttons are the movement.
+ *
+ * The disabled ends are real `disabled` attributes rather than a dimmed style,
+ * so a screen reader and a finger get the same answer as the eye.
+ *
+ * It renders nothing when one page holds everything — a pager over 12 rows is
+ * chrome reporting that there is no second page.
+ */
+export function Pager({
+  page, pages, total, onPage,
+}: { page: number; pages: number; total: number; onPage: (n: number) => void }) {
+  if (total === 0 || pages <= 1) return null
+  const from = (page - 1) * PAGE_SIZE + 1
+  const to = Math.min(page * PAGE_SIZE, total)
+
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <span className="text-sm text-fg-mute tnum">{from}–{to} of {total}</span>
+      <span className="ml-auto flex items-center gap-2">
+        <Button size="md" variant="default" disabled={page <= 1}
+          title="Previous page" ariaLabel="Previous page" onClick={() => onPage(page - 1)}>
+          <ChevronLeft size={14} />
+        </Button>
+        <Button size="md" variant="default" disabled={page >= pages}
+          title="Next page" ariaLabel="Next page" onClick={() => onPage(page + 1)}>
+          <ChevronRight size={14} />
+        </Button>
+      </span>
+    </div>
+  )
+}
 
 export function Chip({
   active, onClick, children, dot, mark, disabled, title, ariaLabel, flexible,
@@ -288,4 +472,76 @@ export function Empty({ children = '—' }: { children?: ReactNode }) {
   return (
     <p className="text-sm text-fg-mute h-11 flex items-center">{children}</p>
   )
+}
+
+/**
+ * A page's title, and the mark only a phone needs.
+ *
+ * On the laptop the rail carries the mark. A phone has no rail, and a header
+ * band added just to hold a logo would cost 48px of the fold on the one screen
+ * where the fold is the product — so the mark rides the title row instead. Six
+ * routes hand-rolled that row and four of them forgot it: Mail, Sessions, Pulse
+ * and Settings each opened with a bare word in the body font, which is what the
+ * rail looked like before it had a mark at all.
+ *
+ * A fragment rather than a wrapper, so each header keeps its own flex row — the
+ * count, the range control and the one commit all sit on that row and none of
+ * them belong to this.
+ */
+export function PageTitle({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <WakeMark size={16} className="text-accent shrink-0 sm:hidden" />
+      <h1 className={PAGE_TITLE}>{children}</h1>
+    </>
+  )
+}
+
+/**
+ * Whether a rail still has something past its right edge.
+ *
+ * A hidden scrollbar is the right call — a scrollbar under six filter chips is
+ * noise — but it leaves a rail that overflows looking like a rail that is
+ * broken: the last chip is sliced by the screen edge and nothing says why. This
+ * is the one bit of state the fade in `styles.css` needs; hang it on the
+ * wrapper as `data-spill`.
+ *
+ * `spill` rather than `more`, which is the word this describes and the word the
+ * product has already spent. `More` is what an overflow menu is called here,
+ * and a contract test bans that setter's name across `src/web` on sight — this
+ * is not one, so it does not borrow the name.
+ *
+ * Three listeners and a re-read, because four different things change the
+ * answer: scrolling it, resizing the window, resizing the rail alone, and
+ * putting one more chip in a rail that has not moved. The window listener is
+ * not redundant with the observer — a `ResizeObserver` delivers on an animation
+ * frame, and a hidden tab produces none, so the rail would come back from the
+ * background still describing the width it had when it left.
+ */
+export function useRail<T extends HTMLElement>(): { ref: RefObject<T | null>; spill: boolean } {
+  const ref = useRef<T>(null)
+  const [spill, setSpill] = useState(false)
+
+  const read = () => {
+    const el = ref.current
+    if (el) setSpill(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
+  }
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.addEventListener('scroll', read, { passive: true })
+    window.addEventListener('resize', read)
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', read)
+      window.removeEventListener('resize', read)
+      ro.disconnect()
+    }
+  }, [])
+
+  useEffect(read)
+
+  return { ref, spill }
 }

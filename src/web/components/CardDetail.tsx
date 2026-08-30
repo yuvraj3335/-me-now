@@ -1,88 +1,63 @@
 /**
- * The detail: a glance, not a document.
+ * The detail: a glance, not a document — and now the only home for everything
+ * the table dropped.
  *
- * What it renders, top to bottom, and nothing else: the title, one line of
- * `why · who · when`, ONE fact table of at most four rows, the conversation
- * itself, one mono line to resume, one line of where it was seen, and one block
- * of controls above one row of actions.
+ * Top to bottom: the title, one line of `why · who · when`, the three controls
+ * that change what the card *is* (status, priority, due), the facts, the
+ * excerpt, one mono line to resume, where it was seen, and one row of actions.
  *
- * What it replaced, measured on the live page: a five-row PULL REQUEST table
- * *and* a three-row SESSION table — one `Block` per source, so the dedup
- * engine's success was what made the pane worst — with `Why` printed twice, a
- * bordered filled box around the resume command, and under it a 224px scrolling
- * `<pre>` holding 1,776 characters of Wake's own handoff pack. Wake was printing
- * its own paperwork back to itself in a 400px pane.
+ * Two things changed here and both were reported.
  *
- * Four things are new here, and each one was a thing the pane claimed to do and
- * did not:
+ * **The overflow menu is gone.** One 32px glyph in the footer held every
+ * deferral control in the product, and it appended its contents to the bottom
+ * of a scrolling body while its trigger stayed pinned — so on a card with a
+ * transcript you pressed it and four controls appeared about 1400px below the
+ * viewport. Nothing appeared to happen. A control worth hiding in a menu was
+ * worth a button; a control not worth a button was not worth shipping. Status,
+ * priority and due are visible without pressing anything now, and pin is a
+ * plain toggle.
  *
- * **The cross closes it.** `closeDetail()` only ever cleared the fragment, and
- * the laptop pane falls back to showing the top row — so pressing X changed
- * nothing visible and read as a dead control. The dismissal is a fact the page
- * holds now (`Home.tsx`), and this only reports the press.
+ * **The action bar is four solid buttons.** They used to be four ghost labels
+ * of identical weight, on the theory that they were the same kind of decision —
+ * which made the row read as a caption rather than as controls. They are
+ * `secondary` now, with exactly one `primary` among them, so the pane still
+ * spends the accent once.
  *
- * **Opening a row acknowledges it.** The `+N` and the amber edge are answers to
- * "what have I not seen", so reading a row has to be what makes them go away.
- * The subtlety, and it is the whole of it: the pane's *resting* state — the top
- * row it shows before anything has been clicked — must not acknowledge
+ * `Open` prefers the native application. See `lib/appLinks.ts` for why the
+ * browser link beside it is a visible link rather than a fallback timer.
+ *
+ * **The conversation is here now.** A Slack card carries its parent and the
+ * newest twenty replies, and a Gmail card carries its messages; this drew none
+ * of them, so a thread's row said "you were mentioned" and then showed a
+ * 400-character excerpt of the same text. Parent first, replies oldest to
+ * newest, three lines each — a Cursor root-cause post is 1,400 characters and
+ * does not get to own a 400px pane.
+ *
+ * **And opening a row acknowledges it.** The `+N` and the amber edge are the
+ * answer to "what have I not seen", so reading a row is what makes them go
+ * away. The subtlety, and it is the whole of it: the pane's *resting* state —
+ * the top row it shows before anything has been clicked — must not acknowledge
  * anything, or the feature silently destroys itself every morning at 7am.
- *
- * **The conversation is here.** The card carries the parent and the newest
- * twenty replies, and this drew none of them: a thread's row said "you were
- * mentioned in #truto" and then showed a 400-character excerpt of the same
- * text. Parent first, replies oldest to newest, three lines each — a Cursor
- * root-cause essay is 1,400 characters and does not get to own a 400px pane.
- *
- * **The `⋯` is gone.** Everything behind it — deferral, the group, the pin —
- * has a real home on the surface, and the status control sits with them. That
- * button was also broken in a way worth remembering: it appended its contents to
- * the bottom of the scrolling body while its trigger sat in the pinned action
- * bar, so on a long card the reader pressed it and four controls appeared about
- * 1400px below the viewport.
- *
- * `Open` is not amber. The file's own docblock used to claim it had fixed that,
- * 175 lines above the hand-rolled `bg-accent` anchor that had not.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUpRight, Check, ChevronDown, Copy, ListPlus, Pin, PinOff, Sunrise, Terminal, X,
+  ArrowUpRight, Check, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
-import { STATUS_LABEL, STATUS_ORDER } from '../../shared/status'
-import type { Card, Pile } from '../lib/types'
-import { PILE_LABEL } from '../lib/types'
+import type { Card, CardPriority, CardStatus } from '../lib/types'
+import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { actions, reload } from '../lib/api'
-import { ago, atHour, wallClock } from '../lib/time'
-import { baselineOf, replyTotal, threadLines, type ThreadLine } from '../lib/thread'
+import { ago, wallClock } from '../lib/time'
+import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } from '../lib/thread'
 import { SOURCE_LABEL, SourceDot } from './sources'
-import { Button, Chip, controlClass } from './primitives'
-import { cardKind, KindGlyph } from './kinds'
+import { Button, DateField, Select } from './primitives'
+import { cardKind, cleanChannel, KindGlyph } from './kinds'
+import { PriorityGlyph, StatusGlyph, isSettled } from './status'
+import { openTarget } from '../lib/appLinks'
+import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
 import { openLaunch } from '../lib/launch'
 import { cardContext, cardTitle, repoHintFor, templatesFor } from '../lib/cardContext'
 import { toast } from '../lib/toast'
-
-/**
- * Deferral, as four arrival times.
- *
- * These say when something should come *back*, so they are offered only to a
- * card that has not already been set aside. A snoozed card gets the time it is
- * due and the two things that can change it instead.
- */
-const SNOOZE = [
-  { id: 'afternoon', label: 'This afternoon', at: () => Date.now() + 4 * 3.6e6 },
-  { id: 'tonight', label: 'Tonight', at: () => atHour(0, 20) },
-  { id: 'tomorrow', label: 'Tomorrow', at: () => atHour(1, 9) },
-  { id: 'week', label: 'Next week', at: () => atHour(7, 9) },
-] as const
-
-const PILES: Array<{ id: Pile; label: string }> =
-  (['now', 'open', 'parked'] as Pile[]).map(id => ({ id, label: PILE_LABEL[id] }))
-
-/** A Slack channel, without the `#` the poller stores it with. */
-const bareChannel = (v: unknown): string | null => {
-  const s = typeof v === 'string' ? v.replace(/^#+/, '') : ''
-  return s || null
-}
 
 export function CardDetail({
   card, onClose, onMakeTask, resting,
@@ -99,9 +74,8 @@ export function CardDetail({
 }) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [changing, setChanging] = useState(false)
 
-  useEffect(() => { setCopied(false); setExpanded(false); setChanging(false) }, [card.group_key])
+  useEffect(() => { setCopied(false); setExpanded(false) }, [card.group_key])
 
   /**
    * The baseline this card was opened at, held still while it is open.
@@ -136,30 +110,62 @@ export function CardDetail({
     return () => { live = false }
   }, [card.group_key, resting, card.activity.count])
 
-  const run = async (fn: () => Promise<unknown>, close = true) => {
-    await fn()
-    await reload()
-    if (close) onClose()
-  }
+  const lines = useMemo(() => threadLines(card), [card])
 
-  const runUndoable = async (
-    fn: () => Promise<unknown>,
-    text: string,
-    undo: 'done' | 'not_mine' | 'snoozed' | 'moved' | 'status',
-    close = true,
-  ) => {
-    await run(fn, close)
-    toast(text, {
+  /**
+   * One message is an excerpt. Two is a conversation.
+   *
+   * The thread list replaces the excerpt where it draws, which is right for a
+   * thread and wrong for everything else — and everything else is most of the
+   * desk. A Datadog row, a Grafana row and the Truto Notifications digest each
+   * carry exactly one message, and each has an `excerpt` its own family built on
+   * purpose: Datadog's drops the `Attachment:` and `Notified:` lines, Grafana's
+   * drops the attachment, the digest's drops its four-line preamble, and a
+   * Sentry row's is the `_Root cause:_ / _Classification:_ / _Fix:_` triple
+   * pulled out of a wall of prose. The thread entry beside it is the raw body,
+   * clipped to 280 — so drawing a one-line "Thread" here quoted the transport
+   * back at him and threw away the curation that made the row readable.
+   *
+   * A Slack thread whose parent stands alone loses nothing either: its excerpt
+   * *is* that parent, at 400 characters with a `Show all` under it rather than
+   * 280 with no way to see the rest.
+   */
+  const conversation = lines.length > 1 ? lines : []
+
+  /**
+   * The thread read failed for this row, so what it holds is what the search
+   * returned rather than the conversation. It is said next to whichever of the
+   * two is drawing — a short thread and a thread that would not load look
+   * identical otherwise, and the shape a degraded row most often takes is one
+   * message, which is the shape the list declines to draw.
+   */
+  const partial = card.sources.some(s => s.meta?.thread_partial)
+
+  const run = async (fn: () => Promise<unknown>) => { await fn(); await reload() }
+
+  const kind = cardKind(card)
+  const claude = card.sources.find(s => s.source === 'claude')
+  const resume = claude?.meta?.resume_cmd as string | undefined
+  const { href, app } = openTarget(card)
+  const external = href.startsWith('http')
+
+  /**
+   * The undo names the field it is putting back.
+   *
+   * `actions.restore(g)` with no second argument clears everything keeping a
+   * card off the list, which is right for "bring this back" and wrong for an
+   * undo: it also drops a due date or a pin that had nothing to do with the
+   * action being reversed.
+   */
+  const setStatus = async (next: CardStatus, undo: 'status' = 'status') => {
+    await actions.setStatus(card.group_key, next)
+    await reload()
+    if (isSettled(next)) onClose()
+    toast(next === 'done' ? 'Done.' : `${STATUS_LABEL[next]}.`, {
       label: 'Undo',
       run: async () => { await actions.restore(card.group_key, undo); await reload() },
     })
   }
-
-  const kind = cardKind(card)
-  const snoozed = card.pile === 'parked'
-  const claude = card.sources.find(s => s.source === 'claude')
-  const resume = claude?.meta?.resume_cmd as string | undefined
-  const lines = useMemo(() => threadLines(card), [card])
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -170,7 +176,10 @@ export function CardDetail({
             400px pane. The glyph moves onto the metadata line, where it is one
             more fact rather than an indent. */}
         <div className="flex items-start gap-2">
-          <h2 className="grow text-md font-medium tracking-[-0.01em] line-clamp-3">{card.title}</h2>
+          <h2 className={`grow ${DETAIL_TITLE} line-clamp-3
+                          ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
+            {card.title}
+          </h2>
           <Button variant="ghost" size="sm" onClick={onClose} title="Close" ariaLabel="Close">
             <X size={14} />
           </Button>
@@ -179,16 +188,54 @@ export function CardDetail({
             again as the last row of the fact table below. */}
         <p className="mt-2 flex items-center gap-2 text-sm text-fg-dim">
           <KindGlyph kind={kind} size={14} />
-          <span className="truncate">
-            {[whyLine(card), card.who, ago(card.ts)].filter(Boolean).join(' · ')}
-          </span>
+          <span className="truncate">{[card.why, card.who, ago(card.ts)].filter(Boolean).join(' · ')}</span>
         </p>
       </div>
 
       <div className="grow min-h-0 overflow-y-auto pad-x pb-4">
+        {/*
+          The three controls, in the order the questions get asked: where does
+          this stand, how much does it matter, when is it wanted. Each is one
+          labelled row on the fact grid the panel already uses, so they read as
+          properties of the card rather than as a toolbar bolted to it.
+        */}
+        <div className="mt-2 border-b border-rule">
+          <Row label="Status" mark={<StatusGlyph status={card.status} />}>
+            <Select
+              value={card.status}
+              options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
+              onChange={s => void setStatus(s)}
+              ariaLabel="Status"
+            />
+          </Row>
+          <Row label="Priority" mark={<PriorityGlyph priority={card.priority} />}>
+            <Select
+              value={String(card.priority)}
+              options={PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))}
+              onChange={v => void run(() =>
+                actions.setPriority(card.group_key, Number(v) as CardPriority))}
+              ariaLabel="Priority"
+            />
+          </Row>
+          <Row label="Due">
+            <DateField
+              value={card.due_at}
+              onChange={at => void run(() => actions.setDue(card.group_key, at))}
+              ariaLabel="Due date"
+            />
+          </Row>
+          <Row label="Pin">
+            <Button size="sm" variant={card.state?.pinned ? 'secondary' : 'ghost'}
+              onClick={() => void run(() => actions.pin(card.group_key, !card.state?.pinned))}>
+              {card.state?.pinned ? <><PinOff size={14} /> Pinned</> : <><Pin size={14} /> Pin</>}
+            </Button>
+          </Row>
+        </div>
+
         <Facts card={card} />
 
-        <Thread card={card} lines={lines} baseline={opened.current.baseline} />
+        <Thread card={card} lines={conversation} baseline={opened.current.baseline}
+          partial={partial} />
 
         {/*
           The excerpt is what a card shows when there is no conversation to show.
@@ -196,9 +243,10 @@ export function CardDetail({
           excerpt is built from the thread it belongs to, and a Gmail card's is
           the newest message's own snippet.
         */}
-        {!lines.length && card.excerpt && (
+        {!conversation.length && card.excerpt && (
           <div className="mt-6">
-            <p className={`text-sm text-fg-dim whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
+            {partial && <p className={`${EYEBROW} mb-1`}>partial</p>}
+            <p className={`${DETAIL_BODY} whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
               {card.excerpt}
             </p>
             {/* Three lines, then a way to see the rest. `line-clamp-6` with no
@@ -206,7 +254,7 @@ export function CardDetail({
             {card.excerpt.length > 160 && (
               <button onClick={() => setExpanded(v => !v)}
                 className="mt-1 text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
-                {expanded ? 'Show less' : 'Show all'}
+                {expanded ? 'Less' : 'Show all'}
               </button>
             )}
           </div>
@@ -227,193 +275,60 @@ export function CardDetail({
         )}
 
         <SeenIn card={card} />
-
-        {/*
-          One block, on the surface, above the action bar. This is where the
-          `⋯` went: the same four decisions, wrapped rather than hidden, so
-          pressing one does not scroll something into existence 1400px away.
-        */}
-        <div className="mt-6 space-y-4">
-          <Block label="Status">
-            <div className="flex items-center gap-1 flex-wrap">
-              {STATUS_ORDER.map(s => (
-                <Chip
-                  key={s}
-                  active={card.status === s}
-                  onClick={() => {
-                    if (card.status === s) return
-                    void runUndoable(
-                      () => actions.setStatus(card.group_key, s),
-                      `${STATUS_LABEL[s]}.`,
-                      'status',
-                      // Only the two that take it off the desk close the pane.
-                      s === 'done' || s === 'wont_do',
-                    )
-                  }}
-                >
-                  {STATUS_LABEL[s]}
-                </Chip>
-              ))}
-            </div>
-          </Block>
-
-          {snoozed ? (
-            <Block label="Snoozed">
-              <p className="text-sm text-fg-dim">
-                {card.state?.snoozed_until ? `Until ${wallClock(card.state.snoozed_until)}` : 'Indefinitely'}
-              </p>
-              <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <Button size="sm" variant="ghost"
-                  onClick={() => void run(() => actions.move(card.group_key, null))}>
-                  <Sunrise size={14} /> Bring it back
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setChanging(o => !o)}>
-                  Change <ChevronDown size={14} />
-                </Button>
-              </div>
-              {changing && <SnoozeChips card={card} run={runUndoable} />}
-            </Block>
-          ) : (
-            <Block label="Snooze">
-              <SnoozeChips card={card} run={runUndoable} />
-            </Block>
-          )}
-
-          {/*
-            All three, with the one it is in pressed and inert. Offering "move to
-            Waiting" on a Waiting card was not a no-op: it silently wrote
-            `pile_override`, nulling the snooze and freezing the card against
-            Wake's own classification forever.
-          */}
-          <Block label="Where">
-            <div className="flex items-center gap-1 flex-wrap">
-              {PILES.map(p => (
-                <Chip
-                  key={p.id}
-                  active={p.id === card.pile}
-                  /* Pressed and inert, not `disabled`: a chip at 40% opacity
-                     reads as unavailable, and this one is not unavailable, it
-                     is where the card already is. */
-                  onClick={p.id === card.pile ? undefined : () => void runUndoable(
-                    () => actions.move(card.group_key, p.id), `Moved to ${p.label}.`, 'moved',
-                  )}
-                >
-                  {p.label}
-                </Chip>
-              ))}
-              {card.state?.pile_override && (
-                <Button size="sm" variant="ghost"
-                  onClick={() => void runUndoable(
-                    () => actions.move(card.group_key, null), 'Back to what Wake decides.', 'moved',
-                  )}>
-                  Let Wake decide
-                </Button>
-              )}
-            </div>
-          </Block>
-        </div>
       </div>
 
       {/*
-        The action bar. Every control is ghost text of the same weight, because
-        they are the same kind of decision — and because `Open`, the least
-        consequential of them, was the one amber slab on the panel. It wraps, so
-        370px of `whitespace-nowrap` cannot overflow a 320px pane.
+        Four buttons, two columns on a narrow pane so four labels cannot overflow
+        320px, one row wherever they fit. `Done` is the only primary: it is the
+        only one of the four that commits anything.
       */}
-      <div className="shrink-0 border-t border-rule pad-x py-2 flex items-center gap-1 flex-wrap">
-        <OpenLink card={card} />
-        <Button size="sm" variant="ghost" onClick={() => {
-          onClose()
-          openLaunch(cardContext(card), {
-            templates: templatesFor(card),
-            repoHint: repoHintFor(card),
-            title: cardTitle(card),
-          })
-        }}>
-          <Terminal size={14} /> Claude
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => onMakeTask(card)}>
-          <ListPlus size={14} /> Task
-        </Button>
-        <Button size="sm" variant="ghost"
-          onClick={() => void runUndoable(() => actions.doneCard(card.group_key), 'Marked done.', 'done')}>
-          <Check size={14} /> Done
-        </Button>
-        <Button size="sm" variant="ghost" className="ml-auto"
-          title={card.state?.pinned ? 'Unpin' : 'Pin'}
-          ariaLabel={card.state?.pinned ? 'Unpin' : 'Pin'}
-          onClick={() => void run(() => actions.pin(card.group_key, !card.state?.pinned), false)}>
-          {card.state?.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-        </Button>
+      <div className="shrink-0 border-t border-rule pad-x py-3">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+          {external && (
+            <a
+              href={app ?? href}
+              target="_blank"
+              rel="noreferrer"
+              className="relative inline-flex items-center justify-center rounded-control
+                         whitespace-nowrap transition-colors duration-100 hit h-8 px-3 text-sm gap-2
+                         bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700"
+            >
+              Open <ArrowUpRight size={14} />
+            </a>
+          )}
+          <Button size="md" variant="secondary" onClick={() => {
+            onClose()
+            openLaunch(cardContext(card), {
+              templates: templatesFor(card),
+              repoHint: repoHintFor(card),
+              title: cardTitle(card),
+            })
+          }}>
+            <SquareTerminal size={14} /> Claude
+          </Button>
+          <Button size="md" variant="secondary" onClick={() => onMakeTask(card)}>
+            <ListPlus size={14} /> Task
+          </Button>
+          <Button size="md" variant="primary" onClick={() => void setStatus('done')}>
+            <Check size={14} /> Done
+          </Button>
+        </div>
+        {/*
+          The escape hatch, and the reason it is a visible link rather than a
+          timer: a custom scheme with no handler does not throw, does not fire an
+          error and does not navigate, so there is no honest way to detect that
+          `slack://` went nowhere. One quiet line costs a person with the app
+          nothing and saves the one without it.
+        */}
+        {app && (
+          <a href={href} target="_blank" rel="noreferrer"
+            className="mt-2 inline-block text-sm text-fg-mute hover:text-fg-dim
+                       transition-colors duration-100">
+            Open in browser
+          </a>
+        )}
       </div>
     </div>
-  )
-}
-
-/**
- * The row's reason, with the count's word folded in.
- *
- * `activity.tagged` changes the word and never the number — the number is the
- * server's, and it is already on the row. This is where the "why did this light
- * up" question gets its sentence.
- */
-function whyLine(card: Card): string {
-  if (card.activity.count > 0 && card.activity.tagged) return 'you were named in a reply'
-  return card.why
-}
-
-function SnoozeChips({
-  card, run,
-}: {
-  card: Card
-  run: (
-    fn: () => Promise<unknown>, text: string,
-    undo: 'done' | 'not_mine' | 'snoozed' | 'moved' | 'status', close?: boolean,
-  ) => Promise<void>
-}) {
-  return (
-    <div className="flex items-center gap-1 flex-wrap">
-      {SNOOZE.map(s => (
-        <Chip key={s.id}
-          onClick={() => void run(
-            () => actions.snooze(card.group_key, s.at()),
-            `Back ${s.label.toLowerCase()}.`,
-            'snoozed',
-          )}>
-          {s.label}
-        </Chip>
-      ))}
-    </div>
-  )
-}
-
-/**
- * The way out to the thing itself.
- *
- * A real anchor, not a scripted `window.open`. Slack gets its own scheme so the
- * app opens on the parent message rather than the browser opening on a
- * permalink; the https permalink is still there, in `SeenIn`, which is the line
- * that says where this was seen. A custom scheme is never given `target=_blank`
- * — that opens an empty tab the handler then abandons.
- */
-function OpenLink({ card }: { card: Card }) {
-  const slack = card.sources.find(s => s.source === 'slack')
-  const channelId = slack?.meta?.channel_id as string | undefined
-  const parentTs = slack?.meta?.thread_ts as string | undefined
-  const deep = channelId && parentTs
-    ? `slack://channel?id=${encodeURIComponent(channelId)}&message=${encodeURIComponent(parentTs)}`
-    : null
-  const href = deep ?? (card.url.startsWith('http') ? card.url : null)
-  if (!href) return null
-
-  return (
-    <a
-      href={href}
-      {...(deep ? {} : { target: '_blank', rel: 'noreferrer' })}
-      className={controlClass('ghost', 'sm')}
-    >
-      Open <ArrowUpRight size={14} />
-    </a>
   )
 }
 
@@ -424,37 +339,32 @@ function OpenLink({ card }: { card: Card }) {
  *
  * One order, and it is the one a conversation is written in: the answer goes
  * under the question, and after a scroll the new material is where the eye
- * already is. Every body clips to three lines — the pane is 320–640px wide and
+ * already is. Every body clips to three lines — the pane is 320–720px wide and
  * one Cursor root-cause post is 1,400 characters, so an unclipped list is a
  * single message and a scrollbar.
  *
  * Two marks, and no more. A reply that names him carries a 2px amber rule and
  * the word `@you`, which is the answer to "why did this row light up". A reply
- * newer than the baseline the server counted against is drawn in the brighter
- * ink, so the `+3` on the row and the three brighter lines in here are the same
- * three messages.
+ * the server counted is drawn in the brighter ink, under `isFreshLine` — the
+ * count's own two clamps, in one expression both halves read — so the `+3` on
+ * the row and the brighter lines in here cannot disagree about a message.
  */
 function Thread({
-  card, lines, baseline,
-}: { card: Card; lines: ThreadLine[]; baseline: number }) {
+  card, lines, baseline, partial,
+}: { card: Card; lines: ThreadLine[]; baseline: number; partial: boolean }) {
   if (!lines.length) return null
   const total = replyTotal(card)
-  const partial = card.sources.some(s => s.meta?.thread_partial)
 
   return (
     <section className="mt-6">
       <div className="flex items-baseline gap-2 mb-1">
-        <h3 className="text-eyebrow uppercase text-fg-mute">Thread</h3>
-        {total > 0 && <span className="text-eyebrow uppercase tnum text-fg-mute">{total}</span>}
-        {/* The thread read failed for this row, so what is below it is the
-            hits the search returned rather than the conversation. Said, not
-            hidden: a short thread and a thread that would not load look
-            identical otherwise. */}
-        {partial && <span className="text-eyebrow uppercase text-fg-mute">partial</span>}
+        <h3 className={EYEBROW}>Thread</h3>
+        {total > 0 && <span className={`${EYEBROW} tnum`}>{total}</span>}
+        {partial && <span className={EYEBROW}>partial</span>}
       </div>
       <ol>
         {lines.map(l => (
-          <ThreadRow key={l.key} line={l} fresh={l.at !== null && l.at > baseline} />
+          <ThreadRow key={l.key} line={l} fresh={isFreshLine(l, baseline)} />
         ))}
       </ol>
     </section>
@@ -472,7 +382,12 @@ function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
         {line.tagged && <span className="text-accent-ink shrink-0">@you</span>}
         <span className="ml-auto tnum shrink-0">{line.at ? ago(line.at) : ''}</span>
       </div>
-      <p className={`text-sm whitespace-pre-wrap line-clamp-3 ${fresh ? 'text-fg-dim' : 'text-fg-mute'}`}>
+      {/* `text-sm`, not the pane's body size, and not `DETAIL_BODY` — which
+          carries a colour of its own that would fight the one below it. A body
+          size is right for one excerpt and wrong for a list of twenty messages
+          in a 400px column. */}
+      <p className={`text-sm whitespace-pre-wrap line-clamp-3
+                     ${fresh ? 'text-fg-dim' : 'text-fg-mute'}`}>
         {line.text}
       </p>
     </li>
@@ -481,10 +396,22 @@ function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
 
 /* --------------------------------- facts ---------------------------------- */
 
-const Block = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div>
-    <div className="text-eyebrow uppercase text-fg-mute mb-2">{label}</div>
-    {children}
+/**
+ * One labelled row, with a fixed slot for its mark.
+ *
+ * The slot is always rendered, even when the mark is null. Normal priority
+ * draws nothing at all — which is right on a table row and wrong here, where an
+ * absent 20px glyph pulled the Priority control 20px left of the Status control
+ * directly above it. Four controls on four verticals in a 360px pane is what
+ * this whole file spent its last rewrite removing.
+ */
+const Row = ({
+  label, mark, children,
+}: { label: string; mark?: React.ReactNode; children: React.ReactNode }) => (
+  <div className="flex items-center gap-3 h-11 border-t border-rule first:border-t-0">
+    <span className="w-24 shrink-0 text-sm text-fg-mute">{label}</span>
+    <span className="w-5 shrink-0 flex items-center">{mark}</span>
+    <span className="min-w-0 grow">{children}</span>
   </div>
 )
 
@@ -493,16 +420,19 @@ const Mono = ({ children }: { children: React.ReactNode }) => (
 )
 
 /**
- * One table, at most four rows, merged across sources.
+ * The facts, merged across sources, in one fixed order.
  *
  * It used to render one `Block` and one `FactTable` per source, so a card seen
  * in GitHub and Claude Code got a five-row table and a three-row table — eight
  * rows and two headings for a glance — and the more successfully the dedup
- * engine merged, the worse the pane got. The facts are a union now, in one
- * order, capped: the four a person acts on.
+ * engine merged, the worse the pane got. So the facts became a union, in one
+ * order, capped at four.
  *
- * `Why` is not among them. It is the second line of the header, and printing it
- * again here was the same sentence twice in 200 pixels.
+ * The cap is gone. This is the only surface that carries `why`, `who`, `when`,
+ * the channel and the repository at all now that the table is four columns
+ * wide, and a cap here would silently drop the one a person opened the card to
+ * read. Order does the work the cap used to: the five that are true of every
+ * card come first, then whatever the sources themselves know.
  */
 function Facts({ card }: { card: Card }) {
   const by = (s: string) => card.sources.find(x => x.source === s)
@@ -512,25 +442,27 @@ function Facts({ card }: { card: Card }) {
   const gmail = by('gmail')
   const slack = by('slack')
 
-  const rows: Array<[string, React.ReactNode, boolean]> = []
-  /** `wrap` is for a value that must be read whole rather than clipped. */
-  const add = (k: string, v: React.ReactNode, wrap = false) => {
-    if (v === null || v === undefined || v === '' || rows.length >= 4) return
-    rows.push([k, v, wrap])
+  const rows: Array<[string, React.ReactNode]> = []
+  const add = (k: string, v: React.ReactNode) => {
+    if (v === null || v === undefined || v === '') return
+    rows.push([k, v])
   }
 
+  add('Why', card.why)
+  add('Who', card.who ?? card.actor)
+  add('When', wallClock(card.ts))
+  if (slack) {
+    const channel = slack.meta?.channel ?? card.meta?.channel
+    add('Channel', channel ? <Mono>{cleanChannel(String(channel))}</Mono> : null)
+    add('From', slack.who ?? slack.actor)
+    if (slack.meta?.paged) add('Paged', 'your group was named')
+    add('Alert', slack.meta?.short_id ? <Mono>{slack.meta.short_id}</Mono> : null)
+    add('Monitor', slack.meta?.monitor ? <Mono>{slack.meta.monitor}</Mono> : null)
+  }
   if (gh) {
     add('Repository', gh.meta?.repo ? <Mono>{gh.meta.repo}</Mono> : null)
     add('Number', gh.meta?.number ? <Mono>#{gh.meta.number}</Mono> : null)
     add('State', gh.meta?.is_pr ? (gh.meta?.draft ? 'draft' : 'ready for review') : 'open')
-  }
-  if (slack) {
-    // No `#`, and not truncated: `15five-truto` cut to `15five-tru…` names a
-    // channel that does not exist, and the `#` is a sigil the pane does not need
-    // — every row in here is already in Slack.
-    const channel = bareChannel(slack.meta?.channel ?? card.meta?.channel)
-    add('Channel', channel ? <Mono>{channel}</Mono> : null, true)
-    add('From', slack.who ?? slack.actor)
   }
   if (sentry) {
     add('Project', sentry.meta?.project ? <Mono>{sentry.meta.project}</Mono> : null)
@@ -546,20 +478,19 @@ function Facts({ card }: { card: Card }) {
     add('Directory', claude.meta?.cwd ? <Mono>{claude.meta.cwd}</Mono> : null)
     add('Exchanges', typeof claude.meta?.turns === 'number' ? String(claude.meta.turns) : null)
   }
-
   if (!rows.length) return null
 
+  // The same `Row` the controls above use, so a fact and a control that mean
+  // the same thing about the same card start on the same x. It was a table with
+  // its own label width, which put the two columns 28px apart.
   return (
-    <table className="w-full table-fixed mt-4">
-      <tbody>
-        {rows.map(([k, v, wrap]) => (
-          <tr key={k} className="h-11 align-middle border-b border-rule">
-            <td className="w-24 text-sm text-fg-mute pr-4">{k}</td>
-            <td className={`text-sm text-fg-dim ${wrap ? 'break-words' : 'truncate'}`}>{v}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="mt-6 border-b border-rule">
+      {rows.map(([k, v]) => (
+        <Row key={k} label={k}>
+          <span className="block text-sm text-fg-dim truncate">{v}</span>
+        </Row>
+      ))}
+    </div>
   )
 }
 
@@ -576,28 +507,32 @@ function SeenIn({ card }: { card: Card }) {
   if (!rows.length) return null
 
   return (
-    <div className="mt-6 flex items-center gap-3 h-11 text-sm text-fg-mute flex-wrap">
-      {rows.map(s => {
-        const where = bareChannel(s.meta?.channel)
-          ?? s.account ?? s.meta?.repo ?? s.meta?.project ?? s.kind
-        const external = s.url.startsWith('http')
-        const body = (
-          <>
-            <SourceDot source={s.source} />
-            <span className="text-fg-dim">{SOURCE_LABEL[s.source]}</span>
-            <span className="font-mono">{where}</span>
-            <span className="tnum">{ago(s.ts)}</span>
-          </>
-        )
-        return external ? (
-          <a key={`${s.source}:${s.url}`} href={s.url} target="_blank" rel="noreferrer"
-            className="inline-flex items-center gap-2 hover:text-fg-dim transition-colors duration-100">
-            {body}
-          </a>
-        ) : (
-          <span key={`${s.source}:${s.url}`} className="inline-flex items-center gap-2">{body}</span>
-        )
-      })}
+    <div className="mt-6">
+      <div className={`${EYEBROW} mb-2`}>Seen in</div>
+      <div className="flex items-center gap-3 text-sm text-fg-mute flex-wrap">
+        {rows.map(s => {
+          const where = s.meta?.channel
+            ? cleanChannel(String(s.meta.channel))
+            : s.account ?? s.meta?.repo ?? s.meta?.project ?? s.kind
+          const external = s.url.startsWith('http')
+          const body = (
+            <>
+              <SourceDot source={s.source} />
+              <span className="text-fg-dim">{SOURCE_LABEL[s.source]}</span>
+              <span className="font-mono truncate max-w-40">{where}</span>
+              <span className="tnum">{ago(s.ts)}</span>
+            </>
+          )
+          return external ? (
+            <a key={`${s.source}:${s.url}`} href={s.url} target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-2 h-11 hover:text-fg-dim transition-colors duration-100">
+              {body}
+            </a>
+          ) : (
+            <span key={`${s.source}:${s.url}`} className="inline-flex items-center gap-2 h-11">{body}</span>
+          )
+        })}
+      </div>
     </div>
   )
 }

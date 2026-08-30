@@ -7,9 +7,11 @@
  *   2. Claude Code's credential file — the bridge, zero extra setup
  *   3. A static token from the environment — the escape hatch
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { claudeCredentialsPath, MCP_SERVERS, STATIC_TOKENS } from '../env'
-import { discover, getStored, putStored, refresh } from './oauth'
+import {
+  discover, getStored, putStored, refresh, RefreshRejected, type StoredToken,
+} from './oauth'
 
 export type CredSource = 'wake-oauth' | 'claude-bridge' | 'env' | 'none'
 
@@ -29,8 +31,11 @@ type ClaudeMcpEntry = {
  */
 export function claudeBridgeToken(server: string): string | null {
   let raw: string
+  let writtenAt: number
   try {
-    raw = readFileSync(claudeCredentialsPath(), 'utf8')
+    const path = claudeCredentialsPath()
+    raw = readFileSync(path, 'utf8')
+    writtenAt = statSync(path).mtimeMs
   } catch {
     return null
   }
@@ -60,12 +65,25 @@ export function claudeBridgeToken(server: string): string | null {
 
     // An expired bridge token is worse than none: it produces a confusing 401
     // instead of an honest "not connected".
-    const exp = entry.expiresAt ?? Number.MAX_SAFE_INTEGER
+    //
+    // An entry with no `expiresAt` used to score `Number.MAX_SAFE_INTEGER` and
+    // be served for the life of the process. Claude's Gmail grant is exactly
+    // that shape and lasts an hour, so the chain kept preferring a token that
+    // died at 60 minutes over asking Wake's own store for a fresh one. With no
+    // stated expiry the only honest bound is when the file was last written.
+    const exp = entry.expiresAt ?? writtenAt + BRIDGE_ASSUMED_TTL_MS
     if (exp < Date.now()) continue
     if (!best || exp > best.expiresAt) best = { token, expiresAt: exp }
   }
   return best?.token ?? null
 }
+
+/**
+ * How long an entry that states no expiry is trusted for, measured from the
+ * file's mtime. Google's access tokens are an hour and Claude rewrites the file
+ * when it renews one, so this expires at roughly the same moment the token does.
+ */
+const BRIDGE_ASSUMED_TTL_MS = 3_600_000
 
 type ClaudeGmailClient = ClaudeMcpEntry & { clientId?: string; clientSecret?: string }
 
@@ -129,50 +147,154 @@ export function seedGmailClientFromClaude() {
   putStored('gmail', { client_id: picked.client_id, client_secret: picked.client_secret })
 }
 
-/** Refresh Wake's own token when it is within a minute of expiring. */
-async function wakeOauthToken(server: string): Promise<string | null> {
-  const row = getStored(server)
-  if (!row?.access_token) return null
+/**
+ * How early a token counts as stale.
+ *
+ * Sixty seconds was a cliff: a poll that started inside the last minute of a
+ * token's life reached the provider after it had already expired, and the whole
+ * run came back 401. Five minutes is long enough to cover a slow poll and short
+ * enough that it costs one extra refresh an hour at most.
+ */
+export const REFRESH_SKEW_MS = 300_000
 
-  const fresh = !row.expires_at || row.expires_at > Date.now() + 60_000
-  if (fresh) return row.access_token
+/**
+ * One refresh per server at a time.
+ *
+ * This is not defensive programming against a hypothetical. `doIngest` runs five
+ * adapters in `Promise.all`, `listThreads` fans out per account, and
+ * `HttpTransport.headers()` resolves a token on *every* JSON-RPC request — so a
+ * single poll can ask for the same credential a dozen times in the same
+ * millisecond. Where the provider rotates the refresh token on use (Slack does;
+ * Google can), everyone but the winner of that race then presents a refresh
+ * token the provider has already invalidated, and the row can be left holding an
+ * older generation than the one last issued. The connection dies, and it looks
+ * like the provider dropped it.
+ */
+const inflight = new Map<string, Promise<string | null>>()
 
-  // An expired grant with no refresh token is not a token. Serving it
-  // turned Gmail's hourly death into a 401 instead of Connect.
-  if (!row.refresh_token || !row.client_id) return null
-  const md = await discover(MCP_SERVERS[server]?.url ?? '')
-  if (!md) return row.access_token
+/**
+ * The MCP server behind a credential key. `gmail:yuvraj@truto.one` is a
+ * credential for the `gmail` server; the suffix names the account, not a
+ * different server. Without this, `MCP_SERVERS[server]?.url` was `undefined`,
+ * `discover('')` threw a TypeError out of `new URL('')` — outside the try, so it
+ * rejected `resolveToken` itself rather than degrading to "not connected".
+ */
+const baseServer = (server: string) => server.split(':')[0]!
 
+async function doRefresh(server: string, row: StoredToken): Promise<string | null> {
   try {
+    const url = MCP_SERVERS[baseServer(server)]?.url
+    if (!url) throw new Error(`no MCP server is configured for ${baseServer(server)}`)
+    const md = await discover(url)
+    if (!md) throw new Error(`${baseServer(server)} published no OAuth metadata to refresh against`)
+
     const t = await refresh(md, {
-      refreshToken: row.refresh_token,
-      clientId: row.client_id,
+      refreshToken: row.refresh_token!,
+      clientId: row.client_id!,
       clientSecret: row.client_secret,
     })
     putStored(server, {
       access_token: t.access_token,
+      // A response that omits `refresh_token` is not a response that revoked
+      // one — most providers only re-issue it when they rotate.
       refresh_token: t.refresh_token ?? row.refresh_token,
       expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : null,
       scope: t.scope ?? row.scope,
+      last_auth_ok_at: Date.now(),
+      last_auth_error: null,
     })
     return t.access_token
-  } catch {
-    // Keep serving the stale token; the 401 path will surface it properly.
-    return row.access_token
+  } catch (e) {
+    if (e instanceof RefreshRejected) {
+      // Terminal. Keeping the tokens would only let the next caller make a real
+      // request with a credential the provider has already disowned, which is
+      // how a dead grant came to read as `sync failed · 401 from …` instead of
+      // as something he can act on.
+      putStored(server, {
+        access_token: null, refresh_token: null, expires_at: null,
+        last_auth_error: e.reason,
+      })
+      return null
+    }
+    // Transient. Nothing was established, so nothing is cleared.
+    putStored(server, { last_auth_error: (e as Error).message })
+    return null
   }
 }
 
-export async function resolveToken(server: string): Promise<{ token: string | null; via: CredSource }> {
-  const own = await wakeOauthToken(server)
-  if (own) return { token: own, via: 'wake-oauth' }
-
-  const bridged = claudeBridgeToken(server)
-  if (bridged) return { token: bridged, via: 'claude-bridge' }
-
-  const stat = STATIC_TOKENS[server]?.trim()
-  if (stat) return { token: stat, via: 'env' }
-
-  return { token: null, via: 'none' }
+function refreshOnce(server: string, row: StoredToken): Promise<string | null> {
+  const running = inflight.get(server)
+  if (running) return running
+  const p = doRefresh(server, row).finally(() => inflight.delete(server))
+  inflight.set(server, p)
+  return p
 }
 
-export const tokenGetter = (server: string) => async () => (await resolveToken(server)).token
+/**
+ * Refresh whatever the freshness check would have accepted.
+ *
+ * This is what a 401 calls: the server has just told us the token we hold is not
+ * good, which is a fact `expires_at` does not have. It joins the same
+ * single-flight, so a burst of 401s across five concurrent requests is still one
+ * round-trip to the token endpoint.
+ */
+export function forceRefresh(server: string): Promise<string | null> {
+  const row = getStored(server)
+  if (!row?.refresh_token || !row.client_id) return Promise.resolve(null)
+  return refreshOnce(server, row)
+}
+
+async function wakeOauthToken(server: string): Promise<string | null> {
+  const row = getStored(server)
+  if (!row?.access_token) return null
+
+  if (!row.expires_at || row.expires_at > Date.now() + REFRESH_SKEW_MS) return row.access_token
+
+  // An expired grant with no refresh token is not a token. Serving it turned
+  // Gmail's hourly death into a 401 instead of Connect.
+  if (!row.refresh_token || !row.client_id) return null
+  return refreshOnce(server, row)
+}
+
+export type ResolvedToken = {
+  token: string | null
+  via: CredSource
+  /** When this credential last completed an auth round-trip. */
+  lastAuthOkAt: number | null
+  /** Non-null means reconnect, and the string is the provider's own reason. */
+  lastAuthError: string | null
+}
+
+export async function resolveToken(server: string): Promise<ResolvedToken> {
+  // Read after the refresh, not before: a refresh that just failed is the whole
+  // reason there is no token, and it is the sentence the Settings row wants.
+  const own = await wakeOauthToken(server)
+  const row = getStored(server)
+  const auth = {
+    lastAuthOkAt: row?.last_auth_ok_at ?? null,
+    lastAuthError: row?.last_auth_error ?? null,
+  }
+  if (own) return { token: own, via: 'wake-oauth', ...auth }
+
+  const bridged = claudeBridgeToken(server)
+  if (bridged) return { token: bridged, via: 'claude-bridge', ...auth }
+
+  const stat = STATIC_TOKENS[server]?.trim()
+  if (stat) return { token: stat, via: 'env', ...auth }
+
+  return { token: null, via: 'none', ...auth }
+}
+
+/**
+ * The token source a transport is built on.
+ *
+ * `refresh` is what makes a 401 recoverable: the transport does not know which
+ * credential it is holding, and this does. Handing the renewal to the token
+ * source rather than to the transport's constructor is what lets a session built
+ * anywhere in the codebase get the retry without naming a server twice.
+ */
+export const tokenGetter = (server: string) => {
+  const get = async () => (await resolveToken(server)).token
+  get.refresh = () => forceRefresh(server)
+  return get
+}

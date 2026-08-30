@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { baselineOf, entryMs, replyTotal, threadLines } from '../src/web/lib/thread'
+import { baselineOf, entryMs, isFreshLine, replyTotal, threadLines } from '../src/web/lib/thread'
 import type { Card, CardSource } from '../src/web/lib/types'
 
 const source = (over: Partial<CardSource>): CardSource => ({
@@ -28,7 +28,8 @@ const card = (over: Partial<Card>): Card => ({
   pile: 'now', title: 'a thread', why: 'you were mentioned in #truto',
   url: 'https://truto.slack.com/archives/C1/p1', kind: 'mention',
   ts: 1_787_812_499_720, first_seen_at: 1_787_000_000_000,
-  status: 'not_started', activity: { count: 0, tagged: false, at: null },
+  status: 'not_started', priority: 2, due_at: null,
+  activity: { count: 0, tagged: false, at: null },
   meta: {}, sources: [], state: null, tasks: [], ...over,
 })
 
@@ -37,7 +38,7 @@ const slackThread = () =>
   card({
     sources: [source({
       meta: {
-        channel: '#truto', channel_id: 'C04D9HKDWAV', is_dm: false,
+        channel: '#truto', channel_id: 'C04D9HKDWAV',
         thread_ts: '1787812499.720579', replies: 10,
         parent: {
           ts: '1787812499.720579', who: 'Nidhi', who_id: 'U0BBZV4HQHH',
@@ -181,7 +182,8 @@ describe('the baseline is the same one the server counted against', () => {
     const c = card({
       state: {
         acked_at: 1_787_500_000_000, snoozed_until: null, notified_at: null,
-        pinned: false, pile_override: null,
+        pinned: false, pile_override: null, done_at: null, not_mine: false,
+        status: 'not_started', priority: 2, due_at: null,
       },
     })
     expect(baselineOf(c)).toBe(1_787_500_000_000)
@@ -191,5 +193,52 @@ describe('the baseline is the same one the server counted against', () => {
     // Otherwise a thread that already had ten replies on it the moment it
     // arrived would draw all ten in the brighter ink as though they were new.
     expect(baselineOf(card({}))).toBe(1_787_000_000_000)
+  })
+})
+
+describe('a bright line is a line the server counted', () => {
+  /*
+   * The `+N` on the row and the brighter ink in the pane are one fact, and the
+   * pane used to answer it with a second, shorter rule: `at > baseline`, with
+   * neither of the two clamps `activityOf` applies. Both halves below are live
+   * shapes, not hypotheticals.
+   */
+  const line = (over: Partial<ReturnType<typeof threadLines>[number]>) => ({
+    key: 'slack:1', parent: false, who: 'Riya', at: 1_787_800_000_000,
+    text: 'a reply', tagged: false, mine: false, since: 0, ...over,
+  })
+
+  const BASE = 1_787_500_000_000
+
+  test('a reply after the baseline is new', () => {
+    expect(isFreshLine(line({}), BASE)).toBe(true)
+  })
+
+  test('but never one of his own', () => {
+    // Ten of the eleven messages on the live `#truto` thread are his. Without
+    // this the row said `+0` while the pane lit his own two replies as unread.
+    expect(isFreshLine(line({ mine: true }), BASE)).toBe(false)
+  })
+
+  test('and never what a source brought with it when it landed', () => {
+    // A Slack thread merging into a week-old pull request's group inherits the
+    // group's `first_seen_at`. The server counts from the *member's* arrival, so
+    // the twelve replies that were already there are not twelve things missed.
+    expect(isFreshLine(line({ since: 1_787_900_000_000 }), BASE)).toBe(false)
+    expect(isFreshLine(line({ at: 1_787_950_000_000, since: 1_787_900_000_000 }), BASE)).toBe(true)
+  })
+
+  test('a timestamp that made no sense marks nothing', () => {
+    expect(isFreshLine(line({ at: null }), BASE)).toBe(false)
+  })
+
+  test('the arrival rides on the line, from the source that carries it', () => {
+    const c = card({
+      sources: [source({
+        first_seen_at: 1_787_900_000_000,
+        meta: { thread: [{ ts: '1787812964.247529', who: 'Uday', text: 'ping', tagged: true, mine: false }] },
+      })],
+    })
+    expect(threadLines(c)[0]!.since).toBe(1_787_900_000_000)
   })
 })

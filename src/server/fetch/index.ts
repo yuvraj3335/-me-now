@@ -38,8 +38,8 @@
 import { db, logEvent, now } from './../db'
 import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
-import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME } from './../env'
-import { isDirectMessage, readsLikeAsk } from './../sources/slack'
+import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID } from './../env'
+import { readsLikeAsk } from './../sources/slack'
 import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
 import { inspect } from './../untrusted'
@@ -50,6 +50,25 @@ import { reachableConnectors } from './reach'
 /** The connectors Fetch will ask, in the order their answers matter. */
 const CONNECTORS = ['slack', 'gmail', 'sentry', 'github'] as const
 type Connector = (typeof CONNECTORS)[number]
+
+/**
+ * One source, or all of them.
+ *
+ * Fetch collects what you are looking at. The desk's source tab already says
+ * which that is, so pressing Fetch while filtered to Slack asks Slack and
+ * nothing else -- there is no second control to find, and the button's own
+ * label names what it is about to do.
+ *
+ * `claude` is deliberately in this union although it is not a `Connector`. The
+ * Claude Code source has no pipe-2 collector at all: its cards come off this
+ * machine's own transcripts, through `ingest`. Scoping to it therefore runs
+ * pipe 1 alone and reports no connector rows, which is the honest answer rather
+ * than a fabricated empty one.
+ */
+export const FETCH_SCOPES = ['slack', 'gmail', 'sentry', 'github', 'claude'] as const
+export type FetchScope = (typeof FETCH_SCOPES)[number]
+export const isFetchScope = (v: unknown): v is FetchScope =>
+  typeof v === 'string' && (FETCH_SCOPES as readonly string[]).includes(v)
 
 export type ConnectorResult = {
   name: Connector
@@ -81,9 +100,9 @@ let last: FetchReport | null = null
  * The same guard `ingest()` has. A second press is never disabled and never
  * scolded — it re-runs, dedups, and answers `0 new`, which is a useful answer.
  */
-export function fetchNow(): Promise<FetchReport> {
+export function fetchNow(only?: FetchScope): Promise<FetchReport> {
   if (running) return running
-  running = doFetch()
+  running = doFetch(only)
     .then(r => { last = r; return r })
     .finally(() => { running = null })
   return running
@@ -99,9 +118,9 @@ export function fetchNow(): Promise<FetchReport> {
  * what happened, which also means a phone that locks its screen mid-run still
  * sees the result.
  */
-export function startFetch(): { running: true } {
+export function startFetch(only?: FetchScope): { running: true } {
   // The report carries the failure; there is nothing for a rejection to reach.
-  void fetchNow().catch(() => {})
+  void fetchNow(only).catch(() => {})
   return { running: true }
 }
 
@@ -109,27 +128,36 @@ export function startFetch(): { running: true } {
 export const fetchStatus = (): { running: boolean; report: FetchReport | null } =>
   ({ running: !!running, report: last })
 
-async function doFetch(): Promise<FetchReport> {
+/** The connectors one scope asks. An unscoped Fetch asks all of them. */
+const askedBy = (only?: FetchScope): readonly Connector[] =>
+  only ? CONNECTORS.filter(c => c === only) : CONNECTORS
+
+async function doFetch(only?: FetchScope): Promise<FetchReport> {
   const t0 = Date.now()
   try {
-    return await collectAll(t0)
+    return await collectAll(t0, only)
   } catch (e) {
     // A failure is a report, not a rejection: the browser reads the report.
+    // Only the connectors this run actually meant to ask carry the error; a
+    // scoped run that blames three sources it never intended to touch is the
+    // same lie as a green sync over a channel nobody read.
     return {
       at: now(), ms: Date.now() - t0, found: 0, fresh: 0,
-      connectors: CONNECTORS.map(name => ({
+      connectors: askedBy(only).map(name => ({
         name, via: 'none' as const, ok: false, count: 0, ms: 0, error: (e as Error).message,
       })),
     }
   }
 }
 
-async function collectAll(t0: number): Promise<FetchReport> {
+async function collectAll(t0: number, only?: FetchScope): Promise<FetchReport> {
   // Pipe 1 first, so Fetch is never a worse refresh than the button it replaced.
-  await ingest().catch(() => {})
+  // Scoped too: pressing Fetch on the Slack tab must not quietly re-poll the
+  // inbox, or "fetch just this source" is only true of the half you can see.
+  await ingest(only).catch(() => {})
 
   const reach = reachableConnectors()
-  const results = await Promise.all(CONNECTORS.map(c => collect(c, reach)))
+  const results = await Promise.all(askedBy(only).map(c => collect(c, reach)))
 
   const cards = results.flatMap(r => r.cards)
   const landed = land(cards)
@@ -201,7 +229,8 @@ async function collect(name: Connector, reach: Set<string>) {
  * questions about review requests, assignment, authorship and mentions;
  * `involves:` also catches the threads he has actually commented on, which is
  * most of what "named on" means in practice. Sentry's poll asks about issues
- * assigned to him; `subscribed:me` is the pile he is watching.
+ * assigned to him; `assigned_or_suggested:me` widens that to the issues Sentry
+ * itself thinks are his.
  */
 async function viaWake(name: Connector): Promise<RawCard[] | null> {
   if (name === 'slack') {
@@ -212,10 +241,10 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
      * fallback it exists to be. It still fires for Gmail today, and it fires
      * for Slack again the moment this token stops being accepted.
      *
-     * The question is not the poller's. The poll asks `<@me>` and the
-     * usergroups he belongs to; this asks for his *name*, which is how people
-     * address someone in a channel without typing a handle — and is the half of
-     * "named on" that a mention search never sees.
+     * The question is not the poller's. The poll asks `to:me` and `<@me>`;
+     * this asks for his *name*, which is how people address someone in a
+     * channel without typing a handle — and is the half of "named on" that
+     * a mention search never sees.
      */
     const hits = await searchSlack(`"${ME.name}" after:${since()}`, FETCH_MAX_ROWS)
     return hits.map(h => slackCard(h)).filter((c): c is RawCard => !!c)
@@ -228,7 +257,9 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
     return hits.map(h => fromHit('github', h, 'open')).filter((c): c is RawCard => !!c)
   }
   if (name === 'sentry') {
-    const hits = await searchSentry('is:unresolved subscribed:me', FETCH_MAX_ROWS)
+    // No `is:unresolved`: Sentry applies its own status default, and stacking
+    // that qualifier on top narrowed a real answer to an empty one.
+    const hits = await searchSentry('assigned_or_suggested:me', FETCH_MAX_ROWS)
     return hits.map(h => fromHit('sentry', h, 'open')).filter((c): c is RawCard => !!c)
   }
   // Gmail has an adapter and no credential Wake can obtain — Google publishes
@@ -242,16 +273,20 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
  * Not through `fromHit`: `searchSlack` puts the channel in `title` and the
  * message in `excerpt`, which is the right shape for a search result and the
  * wrong one for a row. A row's title is what was said.
+ *
+ * Exported for the same reason `buildThreadCard` is: what a Slack row is
+ * allowed to claim about its own identity is decided here, and pinning that
+ * needs no network.
  */
-function slackCard(h: SearchHit): RawCard | null {
+export function slackCard(h: SearchHit): RawCard | null {
   const text = redact(h.excerpt ?? '').replace(/\s+/g, ' ').trim()
   if (!h.ref || !text) return null
-  const channel = (h.title ?? '').replace(/^#/, '').replace(/^DM\s+/, '')
-  // The DM ban is structural, and that means every pipe. Fetch asks a question
-  // the poller does not ask, and a hit it finds in a direct message is the same
-  // thing the poller now refuses — so it is refused here through the same
-  // function, rather than through a second opinion about what a DM looks like.
-  if (isDirectMessage({ channelId: h.ref.split(':')[0], channelName: h.title })) return null
+  // A conversation id beginning `D` is a direct message, and one of those is
+  // thrown away before it becomes a card. `searchSlack` already filters them;
+  // this is the second gate, because the shape of the id is the durable fact
+  // and a title prefix is not.
+  if (h.ref.startsWith('D')) return null
+  const channel = (h.title ?? '').replace(/^#/, '')
   return {
     source: 'slack',
     source_id: h.ref,
@@ -264,13 +299,26 @@ function slackCard(h: SearchHit): RawCard | null {
     url: h.url ?? `wake:fetch/slack/${encodeURIComponent(h.ref)}`,
     ts: h.ts ?? Date.now(),
     pile: 'now',
-    refs: [{ t: 'slackthread', v: h.ref }, ...extractRefs(`${text}\n${h.url ?? ''}`)],
+    /*
+     * One thread identity, and it is `h.ref` — the same refusal `buildThreadCard`
+     * makes, in the other path that mints Slack cards.
+     *
+     * `h.ref` is already the *parent's* `channel:ts`, which is the whole point of
+     * keying a row on its thread. Scanning the body and the permalink for more
+     * gave the row two more: the hit's own permalink resolves to the reply's ts,
+     * and a permalink somebody pasted into the message resolves to a completely
+     * different conversation — so this card unioned with whatever row owned that
+     * conversation, and one desk row spoke for two of them with one Done button
+     * between. Everything else the body mentions still stands: a `TRUTO-38` in a
+     * Slack message is exactly what this scan is for.
+     */
+    refs: [{ t: 'slackthread', v: h.ref }, ...extractRefs(text).filter(r => r.t !== 'slackthread')],
     meta: {
       found_by: 'fetch',
       channel,
-      is_dm: false,
       channel_id: h.ref.split(':')[0],
       thread_ts: h.ref.split(':')[1],
+      team_id: SLACK_TEAM_ID,
     },
   }
 }
@@ -289,8 +337,8 @@ function promptFor(name: Connector): string {
   const who = `${ME.name} (${ME.emails.join(', ')}, GitHub ${ME.githubLogin})`
   const what: Record<Connector, string> = {
     slack:
-      `Search Slack for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
-      `(a) channel messages that address ${who} by name or handle — never a direct message, which is not work somebody assigned; ` +
+      `Search Slack for two things in the last ${FETCH_LOOKBACK_DAYS} days, in channels only — never direct messages: ` +
+      `(a) channel messages that mention ${who} by name or handle; ` +
       `(b) threads in ${ME.org} channels where he is named and someone is waiting on an answer.`,
     gmail:
       `Search Gmail for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
@@ -344,6 +392,9 @@ const KIND: Record<Connector, string> = {
 function toCard(name: Connector, f: Found): RawCard | null {
   const title = redact(f.title).slice(0, 200)
   if (!title) return null
+  // Same rule as the poller and as `slackCard`: a direct message never becomes
+  // a card, whichever pipe found it.
+  if (name === 'slack' && f.id.startsWith('D')) return null
 
   const evidence = f.evidence ? redact(f.evidence).slice(0, 400) : null
   const ts = f.when ? Date.parse(f.when) : NaN
@@ -355,11 +406,6 @@ function toCard(name: Connector, f: Found): RawCard | null {
   if (name === 'gmail') refs.push({ t: 'gmailthread', v: `${ME.emails[0]}:${f.id}` })
   if (name === 'sentry') refs.push({ t: 'sentry', v: f.id })
   if (url) refs.push({ t: 'url', v: url })
-
-  // A direct message cannot become a card by any route, and the collector is a
-  // route. It is asked for mentions, but it is a model reading somebody else's
-  // search results, so the refusal is enforced here rather than requested there.
-  if (name === 'slack' && isDirectMessage({ channelId: f.id.split(':')[0] })) return null
 
   const suspicious = inspect(`${title}\n${evidence ?? ''}`)
 
@@ -379,7 +425,7 @@ function toCard(name: Connector, f: Found): RawCard | null {
     meta: {
       found_by: 'fetch',
       ...(name === 'slack' && f.id.includes(':')
-        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], is_dm: false }
+        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], team_id: SLACK_TEAM_ID }
         : {}),
       ...(suspicious.suspicious ? { untrusted: suspicious.reasons.join('; ') } : {}),
     },

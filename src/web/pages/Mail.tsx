@@ -21,7 +21,7 @@ import {
   displayName, mailApi, splitAddrs, useMailState,
   type Draft, type MailMessage, type MailState, type MailThread,
 } from '../lib/mail'
-import { Button, Chip, Empty, Field, Sheet, inputClass } from '../components/primitives'
+import { Button, Chip, Empty, Field, PageTitle, Sheet, inputClass, useRail } from '../components/primitives'
 import { ago, timeOfDay } from '../lib/time'
 import { openLaunch } from '../lib/launch'
 import { registerPaletteActions } from '../components/palette'
@@ -46,6 +46,7 @@ export function Mail() {
   const [query, setQuery] = useState({ text: '', n: 0 })
   const [selected, setSelected] = useState<MailThread | null>(null)
   const [composing, setComposing] = useState<Partial<Draft> | null>(null)
+  const rail = useRail<HTMLDivElement>()
 
   const list = useThreadList({ box, account, q: query.text, nonce: query.n })
   const listReload = list.reload
@@ -82,7 +83,7 @@ export function Mail() {
 
   if (error) return <div className="pad-x pt-4"><Empty>—</Empty></div>
   // Nothing until the first read lands.
-  if (!state) return <div className="pad-x pt-4"><h1 className="text-lg font-medium">Mail</h1></div>
+  if (!state) return <div className="pad-x pt-4 flex items-center gap-3"><PageTitle>Mail</PageTitle></div>
 
   if (!state.connected) return <NotConnected state={state} onRetry={() => void reload(true)} />
 
@@ -99,8 +100,8 @@ export function Mail() {
       <section className={`sm:w-90 2xl:w-100 sm:shrink-0 sm:border-r sm:border-edge
                            sm:overflow-y-auto ${selected ? 'hidden sm:block' : ''}`}>
         <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule pad-x pt-4 pb-2">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-medium">Mail</h1>
+          <div className="flex items-center gap-3">
+            <PageTitle>Mail</PageTitle>
             {/* A count is a fact, and this one is not known for the first three
                 or four seconds. Rendering `threads.length` unconditionally made
                 the header assert a zero it had not measured. */}
@@ -128,30 +129,40 @@ export function Mail() {
               placeholder="Search"
               className="flex-1 bg-transparent outline-none text-sm text-fg placeholder:text-fg-mute"
             />
+            {/* A bare glyph is a 14px target. `Button` paints the same 14px
+                and carries the 44 underneath it. */}
             {q && (
-              <button onClick={clearSearch} className="text-fg-mute hover:text-fg-dim" title="Clear">
+              <Button size="sm" variant="ghost" onClick={clearSearch} title="Clear" ariaLabel="Clear">
                 <X size={14} />
-              </button>
+              </Button>
             )}
           </div>
 
-          <div className="mt-2 flex gap-2 overflow-x-auto no-scrollbar pb-1">
-            {state.boxes.map(b => (
-              <Chip key={b.id} active={box === b.id} onClick={() => { setBox(b.id); setSelected(null) }}>
-                {b.label}
-              </Chip>
-            ))}
-            {state.accounts.length > 1 && (
-              <>
-                <span className="w-px bg-ink-700 mx-1 shrink-0" />
-                <Chip active={account === 'all'} onClick={() => setAccount('all')}>All</Chip>
-                {state.accounts.map(a => (
-                  <Chip key={a.address} active={account === a.address} onClick={() => setAccount(a.address)}>
-                    {a.address.split('@')[0]}
-                  </Chip>
-                ))}
-              </>
-            )}
+          {/* `py-1.5` is not decoration: a rail clips its children's overflow,
+              so without room for it inside the rail every chip's 44px touch box
+              was cut back to the 32px the chip paints. And the rail fades at
+              its right edge while there is more past it — six filters need
+              384px inside 343, and `All mail` was simply sliced off by the
+              screen edge with nothing to say the strip scrolls. */}
+          <div className="rail mt-2" data-spill={rail.spill || undefined}>
+            <div ref={rail.ref} className="flex gap-2 overflow-x-auto no-scrollbar py-1.5">
+              {state.boxes.map(b => (
+                <Chip key={b.id} active={box === b.id} onClick={() => { setBox(b.id); setSelected(null) }}>
+                  {b.label}
+                </Chip>
+              ))}
+              {state.accounts.length > 1 && (
+                <>
+                  <span className="w-px bg-ink-700 mx-1 shrink-0" />
+                  <Chip active={account === 'all'} onClick={() => setAccount('all')}>All</Chip>
+                  {state.accounts.map(a => (
+                    <Chip key={a.address} active={account === a.address} onClick={() => setAccount(a.address)}>
+                      {a.address.split('@')[0]}
+                    </Chip>
+                  ))}
+                </>
+              )}
+            </div>
           </div>
         </header>
 
@@ -170,14 +181,10 @@ export function Mail() {
 
           {!list.answered && !list.threads.length && <ArrivingRows />}
           {list.answered && !list.threads.length && <Empty />}
-          {/* `Older`, not `More`. The list is newest-first, so this is the one
-              word that says which direction the next page lies in — and `More`
-              is the word this product retired everywhere else, for being a
-              label that names no destination. */}
           {list.hasMore && !list.loading && (
             <button onClick={list.more}
               className="w-full h-11 text-left text-sm text-fg-mute hover:text-fg-dim transition-colors">
-              Older
+              More
             </button>
           )}
         </div>
@@ -722,8 +729,8 @@ function Composer({
 function NotConnected({ state }: { state: MailState; onRetry: () => void }) {
   return (
     <div className="pad-x pt-4 pb-24">
-      <header className="pb-2">
-        <h1 className="text-lg font-medium">Mail</h1>
+      <header className="pb-2 flex items-center gap-3">
+        <PageTitle>Mail</PageTitle>
       </header>
       {state.accounts.map(a => (
         <div key={a.address} className="flex items-center h-11 border-b border-rule min-w-0">

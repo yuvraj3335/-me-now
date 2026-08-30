@@ -9,9 +9,8 @@
  * about could notify me a second time. That inheritance is what makes the
  * brief's hard requirement hold across time rather than only within one poll.
  */
-import { db, logEvent, now } from './db'
+import { db, logEvent, now, sweepOauthPending } from './db'
 import { cardId, groupCards } from './dedup'
-import { CARD_STATUSES, DEFAULT_STATUS, isCardStatus, type CardStatus } from '../shared/status'
 import { NotConnected, PartialPoll, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
 import { claudeSessions } from './sources/claudeSessions'
@@ -60,6 +59,10 @@ export function ingest(only?: SourceName): Promise<IngestReport> {
 
 async function doIngest(only?: SourceName): Promise<IngestReport> {
   const at = now()
+  // Abandoned Connect attempts are only ever deleted by the callback that
+  // consumes them, so the poll is the one thing that runs often enough to
+  // notice the ones nobody came back from.
+  sweepOauthPending()
   const adapters = only ? ADAPTERS.filter(a => a.name === only) : ADAPTERS
   const report: IngestReport = { at, sources: [], groups: 0, newGroups: 0 }
 
@@ -236,9 +239,31 @@ export function ensureGroupState(at: number): { groups: number; fresh: number } 
 }
 
 /**
+ * How far along the two sides of a merge are, so the further one can win.
+ *
+ * `wont_do` sits one step above `not_started` and below everything else: a
+ * group someone has started working on is not a group he disowned, and the
+ * merge is exactly the moment those two claims meet.
+ */
+const STATUS_RANK: Record<string, number> = {
+  not_started: 0, wont_do: 1, in_progress: 2, in_review: 3, done: 4,
+}
+
+const furtherStatus = (a: string | null, b: string | null): string => {
+  const x = a ?? 'not_started', y = b ?? 'not_started'
+  return (STATUS_RANK[y] ?? 0) > (STATUS_RANK[x] ?? 0) ? y : x
+}
+
+/**
  * Merge my state from an old group key into the new one. Every field takes the
  * "already handled" side of the merge: if either group was acknowledged or
  * notified, the merged group counts as acknowledged and notified.
+ *
+ * Status, priority and due date follow the same principle in their own terms —
+ * the further-along status, the more urgent priority, the sooner deadline —
+ * because the alternative is that a status he set by hand is destroyed the
+ * first time a Slack message merges that group into a pull request's group,
+ * silently, by a background poll.
  */
 export function migrateState(from: string, to: string) {
   const src = db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(from)
@@ -251,19 +276,20 @@ export function migrateState(from: string, to: string) {
   if (!dst) {
     db.query(
       `INSERT INTO card_state (group_key, pile_override, snoozed_until, acked_at, notified_at,
-                               not_mine, done_at, status, pinned, first_seen_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+                               not_mine, done_at, pinned, status, priority, due_at,
+                               first_seen_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(to, src.pile_override, src.snoozed_until, src.acked_at, src.notified_at,
-          src.not_mine, src.done_at, src.status ?? DEFAULT_STATUS,
-          src.pinned, src.first_seen_at, now())
+          src.not_mine, src.done_at, src.pinned,
+          src.status ?? 'not_started', src.priority ?? 2, src.due_at,
+          src.first_seen_at, now())
   } else {
-    const notMine = dst.not_mine || src.not_mine ? 1 : 0
-    const doneAt = maxN(dst.done_at, src.done_at)
+    const status = furtherStatus(dst.status, src.status)
     db.query(
       `UPDATE card_state SET
          pile_override = COALESCE(pile_override, ?), snoozed_until = ?, acked_at = ?,
-         notified_at = ?, not_mine = ?, done_at = ?, status = ?, pinned = ?,
-         first_seen_at = ?, updated_at = ?
+         notified_at = ?, not_mine = ?, done_at = ?, pinned = ?,
+         status = ?, priority = ?, due_at = ?, first_seen_at = ?, updated_at = ?
        WHERE group_key = ?`,
     ).run(
       src.pile_override,
@@ -271,10 +297,18 @@ export function migrateState(from: string, to: string) {
       maxN(dst.acked_at, src.acked_at),
       // Earliest notification wins: once notified, always notified.
       minN(dst.notified_at, src.notified_at),
-      notMine,
-      doneAt,
-      mergedStatus(dst.status, src.status, notMine, doneAt),
+      // `not_mine` and `done_at` are derived from the merged status rather than
+      // OR-ed and MAX-ed on their own. Taking the union would leave a group
+      // whose status says in-progress carrying `not_mine = 1` from the side it
+      // beat, and `pile()` still reads that column — so the card would be
+      // hidden while claiming to be worked on.
+      status === 'wont_do' ? 1 : 0,
+      status === 'done' ? (maxN(dst.done_at, src.done_at) ?? now()) : null,
       dst.pinned || src.pinned ? 1 : 0,
+      status,
+      Math.min(dst.priority ?? 2, src.priority ?? 2),
+      // The sooner deadline is the real one.
+      minN(dst.due_at, src.due_at),
       Math.min(dst.first_seen_at, src.first_seen_at),
       now(), to,
     )
@@ -289,29 +323,4 @@ export function migrateState(from: string, to: string) {
   ).run(to, from)
   db.query(`UPDATE events SET group_key = ? WHERE group_key = ?`).run(to, from)
   db.query(`DELETE FROM card_state WHERE group_key = ?`).run(from)
-}
-
-/**
- * The merged group's status, derived rather than picked.
- *
- * `status` and the legacy pair are the same fact told two ways, and a merge that
- * takes the "already handled" side of `done_at` and `not_mine` while copying one
- * of the two `status` values verbatim can produce a row that is `done_at`-stamped
- * and `in_progress` at once — the exact thing having one function for this is
- * meant to prevent. So the pair decides first, and the enum only breaks ties
- * between the three states the pair cannot express.
- */
-function mergedStatus(
-  a: unknown,
-  b: unknown,
-  notMine: number,
-  doneAt: number | null,
-): CardStatus {
-  if (notMine) return 'wont_do'
-  if (doneAt) return 'done'
-  const rank = (v: unknown) => (isCardStatus(v) ? CARD_STATUSES.indexOf(v) : 0)
-  const winner = rank(a) >= rank(b) ? a : b
-  const status = isCardStatus(winner) ? winner : DEFAULT_STATUS
-  // `done` and `wont_do` are ruled out above; a stale one must not survive.
-  return status === 'done' || status === 'wont_do' ? DEFAULT_STATUS : status
 }

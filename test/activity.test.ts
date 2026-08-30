@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { db, now } from '../src/server/db'
 import { api } from '../src/server/api'
 import { buildThreadCard, parseThreadRead } from '../src/server/sources/slack'
-import { ME_ID, THREAD_READ, TRUTO_ENG } from './fixtures/slack'
+import { ME_ID, THREAD_READ } from './fixtures/slack'
 
 type Any = Record<string, any>
 
@@ -126,9 +126,9 @@ describe('his own messages are never activity on him', () => {
     const card = buildThreadCard(
       {
         channelId: 'C04D9HKDWAV', channelName: '#truto', parent: read.parent!.ts,
-        hits: [], alert: false, seed: null, host: null, newest: read.parent!.epochMs,
+        hits: [], seed: null, host: null, newest: read.parent!.epochMs,
       },
-      read, ME_ID, [TRUTO_ENG],
+      read, ME_ID,
     )!
 
     putCard({ ts: card.ts, firstSeen: read.parent!.epochMs, meta: card.meta! })
@@ -156,6 +156,20 @@ describe('a second source landing is activity too', () => {
     putCard({
       id: 'sentry:TRUTO-38', source: 'sentry',
       ts: SEEN + ONE_MINUTE, firstSeen: SEEN + ONE_MINUTE, meta: {},
+    })
+    expect((await state()).activity.count).toBe(1)
+  })
+
+  test('a joining source whose own timestamp is old still counts as a landing', async () => {
+    // A Sentry row's `ts` is the issue's last-seen, which can be days behind the
+    // poll that merged it in. The landing is the event, so it is stamped at the
+    // moment it landed — otherwise `activityOf` drops it for being older than
+    // the baseline and nothing on the row says a second system now points at it.
+    groupSeenAt(SEEN)
+    putCard({ ts: SEEN - ONE_MINUTE, firstSeen: SEEN, meta: { thread: [] } })
+    putCard({
+      id: 'sentry:TRUTO-38', source: 'sentry',
+      ts: SEEN - 2 * 864e5, firstSeen: SEEN + ONE_MINUTE, meta: {},
     })
     expect((await state()).activity.count).toBe(1)
   })

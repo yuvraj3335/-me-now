@@ -1,80 +1,81 @@
 /**
  * The desk, as a table.
  *
- * One `<table>`, one sticky header row, and one `<tbody>` per non-empty pile,
- * all sharing one `<colgroup>`. The shared colgroup is the whole trick: it is
- * what lets grouping and column alignment coexist without either becoming a
- * mode, so the eye reads straight down one column instead of re-parsing every
- * entry.
+ * Four columns and nothing else: **Title · Status · Kind · Due**. One `<table>`,
+ * one sticky header, one `<tbody>`, one `<colgroup>`. The shared colgroup is the
+ * whole trick — it is what makes the eye read straight down a column instead of
+ * re-parsing every row.
  *
- * Four things changed here, and each was measured on the live page.
+ * The seven-column version this replaces put Why, Where, a source-dot slot and
+ * a When column on every row. Every one of those is a fact about a card he has
+ * not opened yet, and the price was paid on all twenty rows to answer a question
+ * asked about one. They live in the detail pane now, which is the surface that
+ * exists to answer them and where there is room to answer them properly.
  *
- * **`SOURCE` is not a column heading any more.** The word is 45px wide and the
- * thing it labelled is a 6px dot, so the column was padded to 68 to fit its own
- * label, `WHEN` ended up 22px away from it, and `columnsFor` then dropped the
- * repo name at every laptop width to pay for it — the laptop showed fewer facts
- * per row than the phone. The dots move to an unlabelled slot immediately left
- * of When, and `Where` survives.
+ * Three of the four columns are also *controls*, which is the second half of the
+ * change. Status is a dropdown and Due is a date picker, both operable from the
+ * row without opening anything — so triage is one pass down a column rather than
+ * twenty opens and twenty closes. They stop their own clicks from propagating,
+ * because changing a status is not asking to read the card.
  *
- * **`<th>` and `<td>` share an x in every column, including the first.** The
- * kind glyph gets a fixed slot rather than pushing the word, so `KIND` at x=224
- * sits over `Session` at x=224 instead of 23px to its left, on the one column
- * the eye lands on first.
+ * There is no `columnsFor` any more. The pane is user-resizable, so no column
+ * arithmetic may assume a pane width — the old rule guessed 400 or 360 and
+ * disagreed with the rendered `xl:w-90`/`2xl:w-100` between 1440 and 1535. The
+ * page clamps the *pane* against this file's floors instead, which is the only
+ * direction that can be correct.
  *
- * **A pile with zero rows is not rendered.** No heading, no count, no sentence.
- * A titled chapter with a zero beside it and an apology under it cost 109px of
- * the fold to report that there was nothing in it, and three of them stacked
- * cost 331px of a filtered phone to say nothing at all.
+ * Two marks ride on top of those four columns, and they are one fact told
+ * twice: a `+N` immediately after the title, and a 2px amber edge down the row's
+ * left side. Both render from `card.activity.count > 0` — one expression, read
+ * in two places — so the badge and the highlight can never disagree about how
+ * much has landed since he last looked. The edge is the 2px of state this file
+ * reserved when it deleted the old row stripe; that stripe painted the identical
+ * colour on all twenty rows and encoded nothing, and this paints two or three.
  *
- * **The 2px row stripe is gone, and a 2px state edge has taken its place.** The
- * stripe was an 855px vertical bracket painting the identical colour on every
- * visible row — brighter than the rules it crossed, encoding nothing. The edge
- * is the same two pixels spent on the two or three rows that have had something
- * land on them since he last looked, and it is drawn from the same expression as
- * the `+N` beside the title, so the two can never disagree.
+ * And every row swipes left. `Done`, `Status` and `Delete` under a finger, a
+ * trackpad or a mouse drag, without opening anything — see `components/swipe.tsx`
+ * for why the drawer is a clip window pinned to the last cell rather than a
+ * translated row.
  *
- * Below 1024px there is no table: the row becomes one 44px line, because six
- * columns in 390px is not a table, it is a diagram of one.
+ * Below 1024px there is no table: four columns in 390px is not a table, it is a
+ * diagram of one. The phone row is one 44px line.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Check } from 'lucide-react'
-import type { CardStatus } from '../../shared/status'
-import { STATUS_LABEL, STATUS_ORDER } from '../../shared/status'
-import type { Card, SourceName } from '../lib/types'
-import { ago } from '../lib/time'
-import { Button } from './primitives'
-import { SourceDot, SOURCE_LABEL } from './sources'
-import { cardKind, headTruncate, KindGlyph, whereOf } from './kinds'
+import type { Card, CardStatus } from '../lib/types'
+import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
+import { fromLocalInput, toLocalInput } from '../lib/time'
+import { ArrowDown, ArrowUp, ArrowUpDown, Check } from 'lucide-react'
+import { Button, Select } from './primitives'
+import { cardKind, KindGlyph } from './kinds'
+import { SOURCE_LABEL } from './sources'
+import { PriorityGlyph, StatusSlot, isSettled } from './status'
 import { SwipeDrawer, useSwipe } from './swipe'
+import { dueWords, ROW_META, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
 
 export type RowAction = {
-  /** Done on every group; Snooze on the two live ones; Bring it back on a snoozed one. */
-  onDone: (c: Card) => void
-  onSnooze: (c: Card) => void
-  onBack: (c: Card) => void
+  /** Open the detail. The row's own click, and the phone row's whole left half. */
   onOpen: (c: Card) => void
-  /** The swipe's Status picker, and its Delete — which on a card is `Won't do`. */
+  /** Where the work stands, changed from the row. */
   onStatus: (c: Card, status: CardStatus) => void
-  onWontDo: (c: Card) => void
+  /** A due date, or null to clear one. */
+  onDue: (c: Card, at: number | null) => void
 }
 
 /** The five, as the drawer's picker wants them. Built once, not per row. */
-const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id, label: STATUS_LABEL[id] }))
+const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id: id as string, label: STATUS_LABEL[id] }))
 
 /**
  * The count, and the edge, from one expression.
  *
  * `+2` renders iff there is something new and the row is marked iff there is
  * something new, so the two can never tell different stories about the same
- * thread. The server computes the number; this decides nothing except where to
- * put it.
+ * thread. The server computes the number in `activityOf`; this decides nothing
+ * except where to put it.
  *
- * The edge is `inset` box-shadow on the row's first cell rather than a border on
- * the `<tr>`, because under `border-collapse` a row's own border does not paint
- * at all. This is the 2px state edge the file's docblock reserved when it
- * deleted the old stripe: that one painted the identical colour on all twenty
- * rows and encoded nothing. This paints two or three.
+ * The edge is an `inset` box-shadow on the row's first cell rather than a border
+ * on the `<tr>`, because under `border-collapse` a row's own border does not
+ * paint at all.
  */
 const EDGE = { boxShadow: 'inset 2px 0 0 var(--color-accent)' } as const
 const edgeIf = (card: Card) => (card.activity.count > 0 ? EDGE : undefined)
@@ -89,102 +90,68 @@ function Count({ card }: { card: Card }) {
 }
 
 /**
- * Which columns exist, decided by how much room the list actually has.
+ * The drawer's three actions, in the vocabulary the desk already has.
  *
- * `Where` is the only optional one now, and it yields to the detail pane rather
- * than to `Why`. The previous rule dropped `Why` — the column the file's own
- * comment said must never be lost — for every width between 1024 and 1087,
- * because eight columns had to fit beside a pane that appeared at 1024. The pane
- * appears at 1280 instead, so between 1024 and 1280 the table has the whole
- * shell and every column fits.
+ * `Delete` on a card is `Won't do` — the way Wake has always dismissed work —
+ * so nothing here invents a fourth verb or a second kind of removal. The row is
+ * still reachable through the Status filter afterwards, which is the whole
+ * reason `Won't do` and not a real delete.
  */
-export type Columns = {
-  why: boolean
-  where: boolean
-}
-
-/** The shell's own fixed columns, which the table never gets to use. */
-const RAIL = 200
-/** One page pad, both sides. `.pad-x` in styles.css is the only source of it. */
-const PAGE_PAD = 48
+const drawerFor = (card: Card, actions: RowAction) => ({
+  onDone: () => actions.onStatus(card, 'done'),
+  onDelete: () => actions.onStatus(card, 'wont_do'),
+  status: {
+    current: card.status as string,
+    options: STATUS_CHOICES,
+    onPick: (id: string) => actions.onStatus(card, id as CardStatus),
+  },
+})
 
 /** The width at which a table stops being a diagram of one. */
 export const TABLE_MIN = 1024
+
 /**
  * The width at which the detail pane earns its column.
  *
- * At 1024 a 352px pane left the table 424px for six columns, which is how `Why`
- * came to be dropped on an iPad in landscape. Below 1280 the detail is the
- * full-screen push view the phone already uses, which is a better read anyway.
+ * At 1024 a 352px pane left the table 424px for its columns. Below 1280 the
+ * detail is the bottom sheet the phone already uses, which is a better read
+ * anyway.
  */
 export const PANE_MIN = 1280
 
-export const paneWidth = (w: number) => (w >= 1440 ? 400 : 360)
-
 /**
- * Column widths, in the order they appear.
+ * The three fixed columns, in the order they appear after Title.
  *
- * Sized to their content, and measured rather than guessed: `Session` behind a
- * 20px glyph slot needs 96, `trutohq/truto` head-truncated in mono needs 112,
- * two source dots need 20, the `WHEN` heading needs 56, and one 32px row action
- * needs 64. `Why` is 160 because that is what its own longest sentence measures:
- * `your open pull request` is 140px with the cell's padding.
+ * Measured on the rendered page, not guessed. `Status` holds a 28px `<select>`
+ * whose longest option is `Not started`: 68px of text, 20px of chevron well,
+ * 8px of lead padding and the cell's own 16px trailing gap. At 116 that came out
+ * `Not start…` on every second row — a truncated status is not a status. `Kind`
+ * holds a 20px glyph slot, `Session` at 13px, and a right-aligned priority mark.
+ * `Due` holds `Overdue 12d`, the longest thing `dueWords` produces.
  *
- * These add up to 396 at 1440, which leaves `Where` its 112 and Title 284 — four
- * pixels above the floor. That margin is the whole reason `SOURCE` stopped being
- * a heading: its label was 45px wide to caption a 6px dot, and `columnsFor` was
- * dropping the repo name at every laptop width to pay for it.
+ * 336 fixed in total. At 1024 with no pane the list has 776 and Title takes
+ * 440; at 1280 with a 360 pane it has 672 and Title takes 336; at 1536 with a
+ * 400 pane Title takes 552. Never below `TITLE_MIN` — see the clamp on the pane.
  */
-const W = { kind: 96, why: 160, where: 112, dots: 20, when: 56, actions: 64 }
+export const W = { status: 140, kind: 100, due: 96 }
 
 /** What Title wants. It is the only elastic column. */
-const TITLE_MIN = 280
+export const TITLE_MIN = 280
+
+/** The shell's own rail, plus one page pad both sides. Neither is the table's. */
+export const SHELL_FIXED = 200 + 48
 
 /**
- * What Title must never be given less than, which is a different question.
+ * The widest the pane may be at this viewport before Title starts collapsing.
  *
- * `TITLE_MIN` is the width at which the column is comfortable, and it is what
- * decides whether `Where` still fits beside it. This is the floor under the
- * whole table: the pane is draggable now, and under `table-fixed` the one
- * unsized column gets whatever the others leave — which at 1280 with the pane
- * dragged to its 640 ceiling is *minus four pixels*. Every row on the desk
- * rendered a blank Title inside a table four pixels wider than its own column,
- * from a width that had been persisted on a bigger monitor and restored with no
- * visible cause. 200px is about twenty-five characters: enough to tell one row
- * from another, which is the least a title can be and still be one.
+ * The page owns the pane's width, so the page is where this has to be answered.
+ * It is a floor of 320 rather than a hard cap, because a viewport too narrow to
+ * satisfy everything should still open a pane you can read.
  */
-const TITLE_FLOOR = 200
+export const maxPaneFor = (width: number) =>
+  Math.max(320, width - SHELL_FIXED - (W.status + W.kind + W.due) - TITLE_MIN)
 
-/** Everything in a row that is not the title, at the width it always takes. */
-const FIXED = W.kind + W.dots + W.when + W.actions + W.why
-
-/**
- * The widest the detail pane may be at this viewport.
- *
- * `clampPane` bounds the pane against itself, 320 to 640, with no reference to
- * how much shell there is to take the room from — so the bound held on a 1920px
- * monitor and took the list apart on the 1280px laptop the same `localStorage`
- * value came back on. The pane may take room from the list; it may not take the
- * list apart. `Where` is not in the sum because `columnsFor` has already given
- * it up by the time this bites.
- */
-export function maxPaneFor(width: number): number {
-  return width - RAIL - PAGE_PAD - FIXED - TITLE_FLOOR
-}
-
-/**
- * `pane` is passed in now rather than derived, because the pane is draggable.
- *
- * It still defaults to what the breakpoint would have chosen, so a caller that
- * does not care about the pane — and the tests that pin the width table — ask
- * the same question they always did.
- */
-export function columnsFor(width: number, pane = width >= PANE_MIN ? paneWidth(width) : 0): Columns {
-  const list = width - RAIL - pane - PAGE_PAD
-  return { why: true, where: list - FIXED - W.where >= TITLE_MIN }
-}
-
-/** The viewport width, as a number the column rules can read. */
+/** The viewport width, as a number the layout rules can read. */
 export function useViewport(): number {
   const [w, setW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
   useEffect(() => {
@@ -204,98 +171,94 @@ export function useViewport(): number {
  * The page pad is applied once, by `.pad-x` on the container. A cell that pads
  * itself again is what put the `<th>`s at 225 while the page title sat at 216.
  */
-const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle py-2 pr-4 truncate'
+const HEAD = TABLE_HEAD
 
-export function TableHead({ cols }: { cols: Columns }) {
+/**
+ * How the desk is ordered, as the address bar spells it.
+ *
+ * `null` is the order the server sent — most recently touched first, which is
+ * the right answer to "what happened" and the wrong one to "what is due
+ * soonest". Those are the only two questions a deadline column is asked, so
+ * there are exactly two sorted states and a way back to neither.
+ */
+export type DueSort = 'due' | '-due' | null
+
+const NEXT_SORT: Record<string, DueSort> = { none: 'due', due: '-due', '-due': null }
+
+/** The state one press of the Due header moves to. */
+export const nextDueSort = (sort: DueSort): DueSort => NEXT_SORT[sort ?? 'none'] ?? null
+
+/**
+ * Four headings, one of which is a control.
+ *
+ * Due is sortable and the other three are not, and that asymmetry is the point
+ * rather than an omission: a deadline is the only column here whose values have
+ * an order that means something. Title, Status and Kind sort into alphabets and
+ * enum positions, which answer nothing anybody asks of this table.
+ *
+ * The glyph is always drawn, including in the unsorted state, because a control
+ * that only looks like one once it has been used cannot be found the first time
+ * — and `group-hover` does not fire on a touch screen at all.
+ */
+export function TableHead({
+  sort = null, onSort,
+}: { sort?: DueSort; onSort?: (next: DueSort) => void }) {
+  const Glyph = sort === 'due' ? ArrowUp : sort === '-due' ? ArrowDown : ArrowUpDown
+  const word = sort === 'due' ? 'earliest first' : sort === '-due' ? 'latest first' : 'unsorted'
+
   return (
-    /*
-     * `z-20`, because the drawer is `z-10` and so was this.
-     *
-     * Two positioned elements at the same z-index in one stacking context are
-     * painted in tree order, and a `<tbody>` comes after a `<thead>` — so an
-     * open drawer on a row scrolling up under the sticky header painted its
-     * solid 264px block straight over KIND / TITLE / WHY. The header is the one
-     * that has to win: it is the fixed thing the rows move under.
-     */
+    /* `z-20`, above the drawer's `z-10`. Two positioned elements at one
+       z-index in one stacking context paint in tree order, and a `<tbody>`
+       comes after a `<thead>` — so an open drawer painted its solid 264px
+       block over Title / Status / Kind / Due as its row scrolled up under
+       the header. */
     <thead className="sticky top-0 z-20 bg-ink-900">
       <tr className="border-b border-edge">
-        <th className={HEAD} scope="col">Kind</th>
         <th className={HEAD} scope="col">Title</th>
-        {cols.why && <th className={HEAD} scope="col">Why</th>}
-        {cols.where && <th className={HEAD} scope="col">Where</th>}
-        {/* The source column has no heading. Its label was seven times wider
-            than the dot it labelled and cost the repo name to fit. */}
-        <th className={HEAD} scope="col" aria-label="Source" />
-        <th className={`${HEAD} text-right`} scope="col">When</th>
-        <th className={`${HEAD} pr-0`} scope="col" aria-label="Actions" />
+        <th className={HEAD} scope="col">Status</th>
+        <th className={HEAD} scope="col">Kind</th>
+        <th
+          className={HEAD}
+          scope="col"
+          aria-sort={sort === 'due' ? 'ascending' : sort === '-due' ? 'descending' : 'none'}
+        >
+          <button
+            onClick={() => onSort?.(nextDueSort(sort))}
+            title={`Sort by due date — ${word}`}
+            aria-label={`Sort by due date — ${word}`}
+            /* `relative`, because `.hit` hangs its target 6px outside the box
+               with `position: absolute` — without a positioned box of its own
+               that target resolves against the nearest positioned ancestor and
+               becomes a page-sized one. `uppercase` is restated because the UA
+               sheet sets `text-transform: none` on a button, so the eyebrow
+               casing the header cell carries does not reach through it. */
+            className={`hit relative inline-flex items-center gap-1 cursor-pointer uppercase
+                        transition-colors duration-100 hover:text-fg-dim
+                        ${sort ? 'text-fg-dim' : ''}`}
+          >Due<Glyph size={12} aria-hidden /></button>
+        </th>
       </tr>
     </thead>
   )
 }
 
 /**
- * The one `<colgroup>` every group shares.
+ * The one `<colgroup>` the table shares.
  *
- * Fixed widths and `table-fixed` on the table, so a long title cannot push the
- * When column left on one row and not on the next — which is the entire content
- * of "columns that hold their x-position down the page".
+ * Fixed widths and `table-fixed`, so a long title cannot push Due left on one
+ * row and not on the next — which is the entire content of "columns that hold
+ * their x-position down the page".
  */
-export function TableCols({ cols }: { cols: Columns }) {
+export function TableCols() {
   return (
     <colgroup>
-      <col style={{ width: W.kind }} />
       {/* No width: under `table-fixed` the one unsized column absorbs whatever
           the others leave, which is what makes Title elastic. */}
       <col />
-      {cols.why && <col style={{ width: W.why }} />}
-      {cols.where && <col style={{ width: W.where }} />}
-      <col style={{ width: W.dots }} />
-      <col style={{ width: W.when }} />
-      <col style={{ width: W.actions }} />
+      <col style={{ width: W.status }} />
+      <col style={{ width: W.kind }} />
+      <col style={{ width: W.due }} />
     </colgroup>
-  )
-}
-
-/** How many cells wide the table currently is, for a full-width group row. */
-export const colSpanOf = (cols: Columns) =>
-  5 + (cols.why ? 1 : 0) + (cols.where ? 1 : 0)
-
-/* ------------------------------ group headers ----------------------------- */
-
-/**
- * `ON YOU 3`, `WAITING 19`.
- *
- * An eyebrow and a tabular count, not a heading. It used to be `text-md
- * font-medium` — the same weight and colour as the page title, four points
- * smaller, repeated four times per screen, so the eye could not tell which "Now"
- * was the page. One `lg` per screen; a group label is 11px uppercase. The words
- * changed with the rest of the vocabulary; what the three groups compute did
- * not, and the field names in the JSON did not either.
- *
- * The count carries no accent. The same number was amber in three places at
- * once, which is three more than "at most three marks on a screen" allows.
- */
-export function GroupHead({
-  title, shown, total, cols, right, first,
-}: {
-  title: string; shown: number; total: number; cols: Columns
-  right?: React.ReactNode
-  /** The first group sits under the header row, so it needs no air above it. */
-  first?: boolean
-}) {
-  const filtered = shown !== total
-  return (
-    <tr>
-      <td colSpan={colSpanOf(cols)} className={`pb-2 ${first ? 'pt-2' : 'pt-6'}`}>
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-eyebrow uppercase text-fg-mute">{title}</h2>
-          <span className="text-eyebrow uppercase tnum text-fg-mute">
-            {filtered ? `${shown} of ${total}` : shown}
-          </span>
-          {right && <span className="ml-auto">{right}</span>}
-        </div>
-      </td>
-    </tr>
   )
 }
 
@@ -304,19 +267,15 @@ export function GroupHead({
 const CELL = 'py-3 pr-4 align-middle truncate'
 
 export function CardRow({
-  card, cols, selected, focused, actions,
+  card, selected, focused, actions,
 }: {
   card: Card
-  cols: Columns
   selected: boolean
   focused: boolean
   actions: RowAction
 }) {
   const ref = useRef<HTMLTableRowElement>(null)
   const kind = cardKind(card)
-  const lead = card.sources[0]
-  const where = whereOf(lead, card)
-  const sources = [...new Set(card.sources.map(s => s.source))] as SourceName[]
   const swipe = useSwipe(card.group_key, 3)
 
   // Keyboard focus scrolls the row into view; without this, `j` past the fold
@@ -338,70 +297,133 @@ export function CardRow({
       className={`group cursor-pointer border-b border-rule transition-colors duration-100
         ${focused ? 'bg-ink-700' : selected ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
     >
-      <td className={CELL} style={edgeIf(card)}>
-        {/* A fixed slot, not a gap: the glyph varies in width by two pixels
-            between kinds, and letting it push the word is what put four row
-            titles on four different x. */}
-        <span className="flex items-center">
-          <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
-          <span className="text-sm text-fg-dim truncate">{kind.word}</span>
-        </span>
-      </td>
+      {/* A settled card keeps its title legible and struck through rather than
+          dimmed away: it is still the thing he is looking at, it is just no
+          longer waiting on him.
 
-      {/* The count sits immediately after the title, inside its cell, so it
-          costs the elastic column ~26px on the rows that have one and nothing
-          on the rows that do not. */}
-      <td className={`${CELL} text-base font-medium text-fg`} title={card.title}>
+          The count sits immediately after the title, inside its cell, so it
+          costs the elastic column about 26px on the rows that have one and
+          nothing at all on the rows that do not. */}
+      <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
+        style={edgeIf(card)} title={card.title}>
         <span className="flex items-baseline gap-2 min-w-0">
           <span className="truncate">{card.title}</span>
           <Count card={card} />
         </span>
       </td>
 
-      {cols.why && <td className={`${CELL} text-sm text-fg-dim`} title={card.why}>{card.why}</td>}
-      {/* Head-truncated to what the column actually holds, and NOT also
-          `truncate`d: doing both gave `…utohq/tru…`, cut at each end, which is
-          the one form that identifies nothing. */}
-      {cols.where && (
-        <td className={`${CELL} text-sm text-fg-dim font-mono overflow-hidden`} title={where ?? undefined}>
-          {where ? headTruncate(where, 12) : ''}
-        </td>
-      )}
-
-      <td className={CELL}>
-        <span className="flex items-center gap-1">
-          {sources.length > 2
-            ? <SourceDot source={sources[0]!} size={6} />
-            : sources.map(s => <SourceDot key={s} source={s} size={6} />)}
-        </span>
-      </td>
-
-      <td className={`${CELL} text-sm text-fg-mute tnum text-right`}>{ago(card.ts)}</td>
-
-      {/* The drawer is anchored here and paints leftward over the row. A `<tr>`
-          cannot be a containing block for a panel that spans it — and it cannot
-          clip one either — so the last cell, which is the one at the row's right
-          edge, holds it. */}
-      <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
-        <span className="flex items-center justify-end">
-          <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
-            <Check size={14} />
-          </Button>
-        </span>
-        <SwipeDrawer
-          dx={swipe.dx}
-          width={swipe.width}
-          onClose={swipe.close}
-          onDone={() => actions.onDone(card)}
-          onDelete={() => actions.onWontDo(card)}
-          status={{
-            current: card.status,
-            options: STATUS_CHOICES,
-            onPick: id => actions.onStatus(card, id as CardStatus),
-          }}
+      {/* Less vertical padding than a text cell, because the control inside it
+          is 28px and the row is meant to be 44 either way. */}
+      <td className="py-2 pr-4 align-middle">
+        <Select
+          value={card.status}
+          options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
+          onChange={s => actions.onStatus(card, s)}
+          ariaLabel="Status"
+          className="w-full"
         />
       </td>
+
+      <td className={CELL}>
+        {/* A fixed slot, not a gap: the glyph varies in width by two pixels
+            between kinds, and letting it push the word is what put four row
+            titles on four different x.
+
+            Priority rides in this cell rather than taking one of its own. A
+            52px `Priority` heading over a 14px mark that is absent on most rows
+            is the mistake that already cost the source column its label. */}
+        <span className="flex items-center">
+          <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
+          <span className="text-sm text-fg-dim truncate grow">{kind.word}</span>
+          <span className="shrink-0 pl-1"><PriorityGlyph priority={card.priority} /></span>
+        </span>
+      </td>
+
+      {/* The drawer is anchored in the last cell and paints leftward over the
+          row. A `<tr>` cannot be a containing block for a panel that spans it —
+          and it cannot clip one either — so the cell at the row's right edge
+          holds it. */}
+      <DueCell card={card} onDue={actions.onDue}>
+        <SwipeDrawer
+          dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+          {...drawerFor(card, actions)}
+        />
+      </DueCell>
     </tr>
+  )
+}
+
+/**
+ * The date, and the calendar behind it.
+ *
+ * A real picker, opened in place rather than in a popover. A popover inside a
+ * table with a sticky header and a clipped page column has to solve its own
+ * positioning, its own dismissal and its own scroll containment to show one
+ * control that the platform already draws better; swapping the cell's contents
+ * has none of those problems and lands the caret in the calendar directly.
+ *
+ * `date` rather than `datetime-local` here, and only here. The column is 96px;
+ * a `datetime-local` field renders about 190. The detail pane is where a time
+ * of day is set, and this preserves whatever time is already on the card so
+ * moving a deadline by a day in the table does not silently reset the hour it
+ * was set for. A date with no time yet lands at 18:00 — the end of a working
+ * day is what "due Thursday" means.
+ *
+ * Overdue is the one place `bad` is spent on this page. A date that has passed
+ * is the single fact on a row that is worse than it was yesterday.
+ */
+function DueCell({ card, onDue, children }: {
+  card: Card
+  onDue: (c: Card, at: number | null) => void
+  /** The row's swipe drawer, which needs the row's right-hand cell to live in. */
+  children?: React.ReactNode
+}) {
+  const [editing, setEditing] = useState(false)
+  const words = dueWords(card.due_at)
+  const overdue = card.due_at !== null && card.due_at < Date.now()
+
+  // A different card in the same row position is a different question.
+  useEffect(() => setEditing(false), [card.group_key])
+
+  if (editing) {
+    // Built from local parts. `toISOString().slice(0,10)` is the UTC day, which
+    // is yesterday's date for any evening in IST.
+    const day = card.due_at ? toLocalInput(card.due_at).slice(0, 10) : ''
+    const clock = card.due_at ? toLocalInput(card.due_at).slice(11) : '18:00'
+    return (
+      <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
+        {children}
+        <input
+          type="date"
+          autoFocus
+          aria-label="Due date"
+          value={day}
+          onChange={e => onDue(card, fromLocalInput(e.target.value ? `${e.target.value}T${clock}` : ''))}
+          onBlur={() => setEditing(false)}
+          onKeyDown={e => { if (e.key === 'Escape' || e.key === 'Enter') setEditing(false) }}
+          className="w-full h-7 px-1 rounded-control border border-edge bg-transparent
+                     text-sm text-fg outline-none"
+        />
+      </td>
+    )
+  }
+
+  return (
+    <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
+      {children}
+      <button
+        onClick={() => setEditing(true)}
+        title={words ? 'Change the due date' : 'Set a due date'}
+        aria-label={words ? `Due ${words}` : 'Set a due date'}
+        /* `relative`, or the touch box lands on `<main>` — a `<td>` is not a
+           positioned ancestor, so a 30px control would claim the whole page. */
+        className={`hit relative w-full h-7 px-1 text-left rounded-control truncate
+                    transition-colors duration-100 hover:bg-ink-700
+                    ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}
+      >
+        {words ?? '—'}
+      </button>
+    </td>
   )
 }
 
@@ -410,18 +432,27 @@ export function CardRow({
 /**
  * One line, 44px.
  *
- * It was two lines and 60px: a title, then kind, who, where and why as one
- * muted run beginning 13px to the LEFT of the title it belonged to, and two 32px
- * icon buttons taking 24% of the row's width for actions that are also one tap
- * away in the detail. At 44px nineteen of the twenty Open rows fit a 390×844
- * phone, against thirteen before, and the pile stops needing two screens.
+ * Status glyph, source glyph, title, due, and one control. Still no kind
+ * *word*, no channel and no priority: 358px of usable width already carries two
+ * things that want to truncate, and a third string makes all of them useless.
  *
- * Kind and repo move to the detail. `Why` stays, because it is the answer to the
- * question the screen exists to answer.
+ * The second glyph is not a third string. It is 20px of fixed slot, and without
+ * it a Slack message, a Gmail thread and a Sentry alert are the same row — the
+ * laptop answers that in a whole Kind column and the phone was answering it
+ * nowhere, so the only way to tell one from another was to switch the source
+ * tab and see which rows disappeared. Where a thing came from is the fastest
+ * signal on the row and the reason a row gets skipped or opened at 7am.
+ *
+ * It is the kind mark rather than a source dot, and that is deliberate: the
+ * shape already differs per source and the hue is the source's own, so one mark
+ * carries both. Five identical dots in five hues would carry neither on a screen
+ * that cannot hover.
  */
 export function CardLine({
   card, selected, actions,
 }: { card: Card; selected: boolean; actions: RowAction }) {
+  const words = dueWords(card.due_at)
+  const overdue = card.due_at !== null && card.due_at < Date.now()
   const kind = cardKind(card)
   const swipe = useSwipe(card.group_key, 3)
 
@@ -434,61 +465,54 @@ export function CardLine({
       onPointerCancel={swipe.bind.onPointerCancel}
       onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
-      style={{ ...swipe.bind.style, ...(card.activity.count > 0 ? EDGE : null) }}
-      /* `overflow-hidden` is the drawer's clip. The table cannot have one — a
-         `<tr>` does not clip — but this row can, so a status picker on the
-         narrowest phone is bounded by the row rather than by the page. */
-      className={`relative overflow-hidden flex items-center border-b border-rule h-11
-        ${selected ? 'bg-ink-800' : ''}`}
+      // The same 2px edge the table draws, through the same function, on the
+      // element that is the row here. An `<li>` takes a box-shadow directly, so
+      // there is no first-cell trick — but a second copy of the predicate is
+      // still a second copy, and the phone's edge and the desk's disagreeing
+      // about one thread is precisely the failure this shares a helper to avoid.
+      style={{ ...swipe.bind.style, ...edgeIf(card) }}
+      className={`relative flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}
     >
       <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
         <div className="flex items-center h-full">
-          {/* The same fixed slot the table uses, so every title on the page
-              starts on one x whatever glyph precedes it. */}
-          <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
-          <span className="text-base font-medium text-fg truncate min-w-0 grow">{card.title}</span>
-          {card.activity.count > 0 && <span className="pl-2 flex items-center"><Count card={card} /></span>}
-          {/*
-            `Why` from 640px up, and not below it.
-
-            The brief's phone row is glyph, title, why, age. Measured at 390 with
-            real rows, that is 358px holding a 20px slot, a 40px action, a 38px
-            age and two competing truncations — both land at about twelve
-            characters, and "waiting for r…" over "TypeError: Cannot re…" answers
-            neither question. The glyph and its colour already say which source a
-            row came from, and `why` is very nearly constant per source: every
-            session says the same eight words, every one of his pull requests says
-            the same four. So the phone spends the width on the one fact that is
-            different on every row, and `why` — which leads the detail — is one
-            tap away.
-          */}
-          <span className="hidden sm:block text-sm text-fg-mute truncate min-w-0 max-w-[38%] pl-3 text-right">
-            {card.why}
+          {/* The same fixed slots the table uses, so every title on the page
+              starts on one x whatever glyphs precede it — and in the table's own
+              order, Status before Kind, so the two layouts read the same way. */}
+          <StatusSlot status={card.status} />
+          {/* Named for the source rather than the kind: the shape is what a
+              sighted reader tells them apart by, and the hue that carries the
+              source is exactly the half a screen reader cannot see. */}
+          <span role="img" aria-label={SOURCE_LABEL[kind.source]} title={SOURCE_LABEL[kind.source]}
+            className="w-5 shrink-0 flex items-center">
+            <KindGlyph kind={kind} size={14} />
           </span>
-          <span className="text-sm text-fg-mute tnum shrink-0 pl-3">{ago(card.ts)}</span>
+          <span className={`${ROW_TITLE} truncate min-w-0 grow
+                            ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
+            {card.title}
+          </span>
+          {card.activity.count > 0 && (
+            <span className="pl-2 flex items-center"><Count card={card} /></span>
+          )}
+          {words && (
+            <span className={`shrink-0 pl-3 ${overdue ? 'text-sm text-bad tnum' : ROW_META}`}>
+              {words}
+            </span>
+          )}
         </div>
       </button>
+      {/* A neutral tick, not the Done glyph. The glyph is painted in `ok`, and
+          nineteen green ticks down the right edge of a list reads as nineteen
+          finished rows rather than as nineteen ways to finish one. */}
       <span className="pl-2 shrink-0">
-        <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
+        <Button size="sm" variant="ghost" title="Done" ariaLabel="Done"
+          onClick={() => actions.onStatus(card, 'done')}>
           <Check size={14} />
         </Button>
       </span>
       <SwipeDrawer
-        dx={swipe.dx}
-        width={swipe.width}
-        onClose={swipe.close}
-        onDone={() => actions.onDone(card)}
-        onDelete={() => actions.onWontDo(card)}
-        status={{
-          current: card.status,
-          options: STATUS_CHOICES,
-          onPick: id => actions.onStatus(card, id as CardStatus),
-        }}
+        dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+        {...drawerFor(card, actions)}
       />
     </li>
   )
 }
-
-/** The sources a group was seen in, spelled out. Used by the Done group. */
-export const sourceWords = (card: Card) =>
-  [...new Set(card.sources.map(s => SOURCE_LABEL[s.source]))].join(' + ')

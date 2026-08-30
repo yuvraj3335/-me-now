@@ -31,6 +31,13 @@ export type ThreadLine = {
   tagged: boolean
   /** He wrote it. */
   mine: boolean
+  /**
+   * When the source that carries this message landed on the group.
+   *
+   * Not decoration: it is the second of the two clamps the server's count
+   * applies, and it is per-*member* rather than per-card. See `isFreshLine`.
+   */
+  since: number
 }
 
 /**
@@ -65,6 +72,8 @@ export function threadLines(card: Card): ThreadLine[] {
   const out: ThreadLine[] = []
 
   for (const s of card.sources) {
+    const since = typeof s.first_seen_at === 'number' ? s.first_seen_at : 0
+
     if (s.source === 'slack') {
       const meta = s.meta ?? {}
       const parent = meta.parent as ThreadEntry | null | undefined
@@ -77,6 +86,7 @@ export function threadLines(card: Card): ThreadLine[] {
           text: parent.text,
           tagged: !!parent.tagged,
           mine: !!parent.mine,
+          since,
         })
       }
       for (const raw of entries(meta.thread)) {
@@ -90,6 +100,7 @@ export function threadLines(card: Card): ThreadLine[] {
           text: e.text,
           tagged: !!e.tagged,
           mine: !!e.mine,
+          since,
         })
       }
     }
@@ -108,6 +119,7 @@ export function threadLines(card: Card): ThreadLine[] {
           // whole card's `why`, not one message's mark.
           tagged: false,
           mine: !!m.mine,
+          since,
         })
       }
     }
@@ -144,3 +156,25 @@ export function replyTotal(card: Card): number {
  */
 export const baselineOf = (card: Card): number =>
   card.state?.acked_at ?? card.first_seen_at
+
+/**
+ * Whether this line is one of the messages the row's `+N` counted.
+ *
+ * `activityOf` in `api.ts` applies two clamps and the pane used to apply
+ * neither, which is exactly how one fact becomes two that disagree:
+ *
+ *   * **A message of his own is never activity on him.** On the live `#truto`
+ *     thread ten of eleven messages are his; he acked the row, replied twice,
+ *     and the next poll left the row with no `+N` and no amber edge while the
+ *     pane drew his own two replies in the brighter "new" ink.
+ *   * **Nothing a source brought with it when it landed is something he has
+ *     missed.** The floor is that source's own arrival, not the group's: a Slack
+ *     thread merging into a week-old pull request's group counts zero on the
+ *     server, and the pane — comparing against the group's `first_seen_at` —
+ *     lit all twelve pre-existing replies.
+ *
+ * Written here, once, rather than inline at the one place that draws it, so the
+ * next thing that wants to know "is this new" cannot answer it a third way.
+ */
+export const isFreshLine = (l: ThreadLine, baseline: number): boolean =>
+  !l.mine && l.at !== null && l.at > Math.max(baseline, l.since)

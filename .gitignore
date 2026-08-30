@@ -29,3 +29,10 @@ dist/
 # removed from tracking here rather than left in.
 detailed.md
 *.PROMPT.md
+# The same documents under the other name they arrive with. `*.PROMPT.md` was
+# written against one session's filename and misses `CLAUDE_PROMPT_OVERHAUL.md`
+# and `CLAUDE_PROMPT_THREADS.md` by a single underscore -- both sat untracked
+# and one `git add -A` away from carrying real Slack titles and mail subjects
+# into a public repository. The rule is about what the file contains, so the
+# pattern matches on that rather than on how a given session happened to name it.
+CLAUDE_PROMPT*.md

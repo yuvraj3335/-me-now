@@ -2,12 +2,13 @@ import { MotionConfig, motion } from 'motion/react'
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
   BarChart3, Inbox, Mail as MailIcon, PenLine, RefreshCw, RotateCcw, Settings2,
-  SquareCheck, Terminal,
+  SquareCheck, SquareTerminal,
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
 import { registerSW } from './lib/push'
 import { Home } from './pages/Home'
 import { Work } from './pages/Work'
+import Sessions from './pages/Sessions'
 import { Pulse } from './pages/Pulse'
 import { Settings } from './pages/Settings'
 import { Mail } from './pages/Mail'
@@ -15,21 +16,22 @@ import { STATIC_MODE, useStill } from './lib/motion'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
 import { ToastBar } from './components/toast'
+import { WakeMark } from './components/WakeMark'
 import { openLaunch } from './lib/launch'
 import { useMailBadge } from './lib/mailBadge'
 import { navigate, setParam, useRoute } from './lib/route'
 
 /**
- * Five destinations, on the laptop and on the phone alike.
+ * Six destinations, on the laptop and on the phone alike.
  *
- * The More sheet is gone. At 390px five tabs are 78px each, comfortably above
- * the 44pt target, and a modal to reach Settings cost two taps and a dismissal
- * at exactly the moment something was broken and he was already annoyed.
- * "Refresh sources" left with it: it is not a destination, and it is already a
- * control in the desk's own header and a command in the palette.
+ * The More sheet is gone. At 390px six tabs are 65px each, still above the 44pt
+ * target, and a modal to reach Settings cost two taps and a dismissal at exactly
+ * the moment something was broken and he was already annoyed. "Refresh sources"
+ * left with it: it is not a destination, and it is already a control in the
+ * desk's header and a command in the palette.
  *
- * `flush` marks a page that lays out the whole shell column itself — the desk,
- * which is a table beside a detail pane, Mail, which is a list beside a thread, and
+ * `flush` marks a page that lays out the whole shell column itself — Desk, which
+ * is a table beside a detail pane, Mail, which is a list beside a thread, and
  * Work, which is a list beside its notes. All three pad each of their own
  * columns with the same `.pad-x`, which is what puts the second column's left
  * edge on one vertical across the product instead of on a 360px inset that only
@@ -39,6 +41,7 @@ const TABS = [
   { path: '/', label: 'Desk', Icon: Inbox, Page: Home, flush: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, flush: true },
   { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: true },
+  { path: '/sessions', label: 'Sessions', Icon: SquareTerminal, Page: Sessions, flush: false },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, flush: false },
   { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, flush: false },
 ] as const
@@ -72,10 +75,17 @@ export default function App() {
   }, [])
 
   const active = TABS.find(t => t.path === path) ?? TABS[0]
-  const nowCount = store.state?.now.length ?? 0
+  /**
+   * What is actually waiting, not what is on the desk.
+   *
+   * The desk holds every open card — around a hundred — and a badge that reads
+   * `99+` every morning says nothing. The server still computes the urgent
+   * split, and that is the number worth carrying on a phone's home screen.
+   */
+  const waiting = store.state?.now.length ?? 0
   const mailBadge = useMailBadge()
 
-  const badgeFor = (p: string) => (p === '/' ? nowCount : p === '/mail' ? mailBadge : 0)
+  const badgeFor = (p: string) => (p === '/' ? waiting : p === '/mail' ? mailBadge : 0)
 
   const commands = useCommands()
 
@@ -106,7 +116,13 @@ export default function App() {
           flat surface, never a blur and never a shadow. */}
       <nav className="hidden sm:flex sm:flex-col sm:sticky sm:top-0 sm:h-dvh sm:w-50 sm:shrink-0
                       sm:px-3 sm:py-6 sm:border-r sm:border-edge z-30 bg-ink-900">
-        <span className="text-base font-medium tracking-[-0.02em] px-3 mb-6 select-none">Wake</span>
+        {/* A mark and a word, not a word in the body font. The rail used to set
+            `Wake` in the same family and weight as the nav item beneath it, so
+            the product had no mark at all on either device. */}
+        <span className="flex items-center gap-2 px-3 mb-6 select-none">
+          <WakeMark size={18} className="text-accent shrink-0" />
+          <span className="text-base font-medium tracking-[-0.02em]">Wake</span>
+        </span>
         <div className="flex flex-col gap-1">
           {TABS.map(t => (
             <NavItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}
@@ -167,9 +183,9 @@ export default function App() {
         </motion.div>
       </main>
 
-      {/* Mobile nav: all five destinations. 78px each at 390px, which clears
-          the 44pt target with room, and nothing worth reaching is behind a
-          sheet you have to know about. */}
+      {/* Mobile nav: all six destinations. 65px each at 390px, which clears the
+          44pt target, and nothing worth reaching is behind a sheet you have to
+          know about. */}
       <nav className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom bg-ink-900 border-t border-edge">
         <div className="flex">
           {TABS.map(t => (
@@ -191,7 +207,7 @@ export default function App() {
  * Navigation, global actions, and whatever the current page contributed.
  *
  * The mail commands live here rather than inside the Mail page's own effect.
- * They used to register when Mail mounted, which meant that from Now — the one
+ * They used to register when Mail mounted, which meant that from the desk — the
  * moment a palette is worth having — there was no mail command at all. Both
  * carry their destination in the URL, so the shell does not have to reach into
  * a page it does not own.
@@ -235,23 +251,23 @@ function useCommands(): Command[] {
         label: 'Open in Claude',
         hint: 'a blank brief',
         group: 'Wake',
-        icon: <Terminal size={14} />,
+        icon: <SquareTerminal size={14} />,
         run: () => openLaunch([], { template: 'blank' }),
       },
       {
         /**
-         * The restore list. It is a collapsed group at the foot of the desk
-         * rather than a modal — a group of his cards belongs on the page that
-         * holds his groups — so the command opens the desk with that group
-         * expanded. Reachable with no card to start from, which is the point:
-         * the card is gone.
+         * What he finished, in the same table it left. Not a modal and not a
+         * fourth chapter at the foot of the page: it is the desk with its Status
+         * filter set, so every other filter still applies and the control that
+         * put a card away is the control that takes it back out. Reachable with
+         * no card to start from, which is the point — the card is off the list.
          */
-        id: 'cards:done',
-        label: "Done and won't do",
-        hint: 'bring something back',
+        id: 'cards:status-done',
+        label: 'Done',
+        hint: 'see what you finished',
         group: 'Wake',
         icon: <RotateCcw size={14} />,
-        run: () => { navigate('/'); setParam('done', '1') },
+        run: () => { navigate('/'); setParam('status', 'done') },
       },
     ]
     // `version` is the dependency that makes a page's contributions appear.
@@ -268,8 +284,8 @@ function NavItem({
   // around the active nav item is the one shape this design does not use.
   //
   // The count is muted here. It was `text-accent-ink` in the rail while the tab
-  // bar painted the same number on an amber pill and the group heading painted
-  // it a third time: one number, three amber marks, on a screen whose budget is
+  // bar painted the same number on an amber pill and a group heading painted it
+  // a third time: one number, three amber marks, on a screen whose budget is
   // three marks in total. The phone's badge keeps the accent, because that one
   // is seen without the page.
   return (
@@ -293,7 +309,7 @@ function TabItem({
         transition-colors duration-100 ${active ? 'text-fg' : 'text-fg-mute'}`}>
       <span className="relative">
         <Icon size={16} strokeWidth={active ? 2.1 : 1.7} />
-        {/* The desk badge is one of the three amber marks in the product. It says
+        {/* This badge is one of the three amber marks in the product. It says
             "something is waiting", which is the only thing amber ever means. */}
         {badge > 0 && (
           <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full

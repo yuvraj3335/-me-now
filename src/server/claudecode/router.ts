@@ -11,10 +11,15 @@
 import { Hono } from 'hono'
 import { unlinkSync } from 'node:fs'
 import { audit, db } from '../db'
-import { listSessions } from '../sources/claudeSessions'
+import {
+  deleteSession, getSession, listAllSessions, liveSessions, sessionExcerpt, sessionFilePaths,
+} from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
-import { buildPack, getPack, listPacks, openPack, resolveCwd } from './launch'
+import {
+  DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode, resolveCwd,
+} from './launch'
 import { handoffConfig } from './handoff'
+import { issueConfirmation, useConfirmation } from '../security'
 import { listSkills } from '../skills/catalog'
 import { TEMPLATES } from './templates'
 
@@ -42,25 +47,122 @@ claudecode.get('/state', c =>
     repos: listRepos().map(r => ({ name: r.name, path: r.path, role: r.role, branch: r.branch, dirty: r.dirty })),
     // Metadata only, and small: the composer offers these as chips so a brief
     // can name a skill its template did not think of.
+    // `title` and `description` ride along because the picker had nothing
+    // human to render: a catalog letter and a hyphenated slug is a filename,
+    // and 28 filenames is not a list anybody reads.
     skills: listSkills().map(s => ({
       id: s.id,
       name: s.name,
       catalog: s.catalog,
+      title: s.title,
+      description: s.description?.slice(0, 240) ?? null,
       whenToUse: s.when_to_use?.slice(0, 200) ?? null,
       mutating: !!s.mutating,
     })),
-    sessions: listSessions(30, 30),
+    sessions: sessionRows({ windowDays: 30, limit: 30 }),
+    defaultPermissionMode: DEFAULT_PERMISSION_MODE,
     packs: listPacks(20),
   }),
 )
 
-claudecode.get('/sessions', c => c.json({ sessions: listSessions(Number(c.req.query('limit')) || 30, 60) }))
+/**
+ * Sessions, with the one fact a transcript cannot carry.
+ *
+ * A transcript's mtime says it was written to recently, which a *finished*
+ * session satisfies just as well as a running one. `liveSessions()` reads the
+ * per-process files Claude Code keeps, and that is the only place "right now"
+ * is actually recorded.
+ */
+function sessionRows(opts: { windowDays?: number; repo?: string; limit?: number }) {
+  const live = liveSessions()
+  return listAllSessions(opts).map(s => ({ ...s, live: live.has(s.id) }))
+}
+
+claudecode.get('/sessions', c => {
+  const all = c.req.query('all') === '1'
+  return c.json({
+    sessions: sessionRows({
+      // `all` widens the window rather than removing it: "every session on this
+      // machine" is 130 transcript tails, and the page that asks for it is a
+      // list, not an archive.
+      windowDays: Number(c.req.query('window')) || (all ? 365 : 30),
+      repo: c.req.query('repo') || undefined,
+      limit: Number(c.req.query('limit')) || (all ? 500 : 30),
+    }),
+  })
+})
+
+claudecode.get('/sessions/:id', c => {
+  const id = c.req.param('id')
+  const s = getSession(id)
+  if (!s) return c.json(bad('no such session on this machine'), 404)
+  const excerpt = sessionExcerpt(id, 4_000)
+  return c.json({
+    session: { ...s, live: liveSessions().has(id) },
+    excerpt: excerpt.found ? excerpt.text ?? '' : '',
+    paths: sessionFilePaths(id),
+  })
+})
+
+/**
+ * Step one of a delete: name the files, and mint a token bound to this id.
+ *
+ * The dialog shows these paths back verbatim. All four are under `~/.claude`,
+ * outside Wake's own data directory, and `file-history/<uuid>` is Claude Code's
+ * edit-undo history for real source files — so this is the one delete in the
+ * product where "are you sure" has to mean "here is what goes".
+ */
+claudecode.post('/sessions/:id/delete/confirm', c => {
+  const id = c.req.param('id')
+  const s = getSession(id)
+  if (!s) return c.json(bad('no such session on this machine'), 404)
+  const live = liveSessions().get(id)
+  if (live) return c.json(bad(`that session is running right now (pid ${live.pid}) — close it first`), 409)
+
+  const { token, expiresAt } = issueConfirmation('launch', { sessionId: id }, `delete session ${id}`)
+  return c.json({ token, expiresAt, paths: sessionFilePaths(id), title: s.title })
+})
+
+/**
+ * Delete a session's files. Irreversible, and gated.
+ *
+ * Deliberately unlike `DELETE /packs/:id` below it, which is unguarded: that one
+ * removes two files Wake itself wrote inside its own `PACK_DIR`. This one
+ * removes a transcript, its sidecar directory, its environment and its
+ * file-history from under `~/.claude`. Copying the pack route here would have
+ * put an irreversible delete of somebody else's data behind a single click.
+ */
+claudecode.delete('/sessions/:id', async c => {
+  const id = c.req.param('id')
+  const body = await c.req.json<{ token?: string }>().catch(() => ({}) as { token?: string })
+  const token = c.req.query('token') ?? body.token ?? ''
+
+  const check = useConfirmation(token, 'launch', { sessionId: id })
+  if (!check.ok) {
+    audit('claude.session.delete', { target: id, ok: false, error: check.reason })
+    return c.json(bad(check.reason), 409)
+  }
+
+  const removed = deleteSession(id)
+  if (removed.error) {
+    audit('claude.session.delete', { target: id, ok: false, error: removed.error })
+    return c.json(bad(removed.error), 409)
+  }
+  audit('claude.session.delete', { target: id, detail: { removed: removed.removed, kept: removed.kept } })
+  return c.json({ ok: true, ...removed })
+})
 
 claudecode.post('/packs', async c => {
   const b = await c.req.json<any>().catch(() => ({}))
   const templates = Array.isArray(b.templates) && b.templates.length
     ? b.templates.map(String)
     : [String(b.template ?? 'blank')]
+  // Refused by name rather than quietly defaulted: this string is rendered into
+  // a command line the reader is invited to paste, so an unrecognised one is a
+  // mistake to report, not a value to substitute.
+  const mode = parsePermissionMode(b.permissionMode)
+  if ('error' in mode) return c.json(bad(mode.error), 400)
+
   const built = buildPack({
     template: templates[0]!,
     templates,
@@ -69,11 +171,16 @@ claudecode.post('/packs', async c => {
     instruction: b.instruction,
     items: Array.isArray(b.items) ? b.items : [],
     skills: Array.isArray(b.skills) ? b.skills.map(String) : undefined,
+    sessionId: typeof b.sessionId === 'string' ? b.sessionId : null,
+    permissionMode: mode.mode,
   })
   if ('error' in built) return c.json(bad(built.error), 400)
   audit('claude.pack', {
     target: built.title,
-    detail: { templates: built.templates, cwd: built.cwd, items: built.items.length },
+    detail: {
+      templates: built.templates, cwd: built.cwd, items: built.items.length,
+      sessionId: built.sessionId, permissionMode: built.permissionMode,
+    },
   })
   return c.json(getPack(built.id))
 })

@@ -5,7 +5,7 @@
  */
 import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
-import { MCP_SERVERS, LOOKBACK_DAYS } from '../env'
+import { MCP_SERVERS, LOOKBACK_DAYS, SENTRY_ORG } from '../env'
 import { extractRefs } from '../dedup'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
@@ -21,7 +21,9 @@ export async function findIssuesTool(): Promise<string | undefined> {
   const find =
     all.find(t => /^(find|search|list)_issues$/i.test(t.name))?.name ??
     all.find(t => /issue/i.test(t.name) && /(find|search|list)/i.test(t.name))?.name
-  toolCache = { at: Date.now(), find }
+  // Only a hit is worth remembering. Caching the miss meant a token that gained
+  // the scope five minutes ago still looked toolless for the next half hour.
+  if (find) toolCache = { at: Date.now(), find }
   return find
 }
 
@@ -39,11 +41,15 @@ export async function findIssuesTool(): Promise<string | undefined> {
 let orgCache: { at: number; slug?: string } | null = null
 
 export async function orgSlug(): Promise<string | undefined> {
-  if (orgCache && Date.now() - orgCache.at < 30 * 60_000) return orgCache.slug
+  // Configured beats discovered: the answer is one word that has not changed in
+  // the product's lifetime, and asking for it costs a round trip that can fail
+  // on its own and take the whole poll down with it.
+  if (SENTRY_ORG) return SENTRY_ORG
+  if (orgCache?.slug && Date.now() - orgCache.at < 30 * 60_000) return orgCache.slug
   const r = await getSession().callJson<any>('find_organizations', {})
   const first = Array.isArray(r?.organizations) ? r.organizations[0] : null
   const slug = typeof first?.slug === 'string' ? first.slug : undefined
-  orgCache = { at: Date.now(), slug }
+  if (slug) orgCache = { at: Date.now(), slug }
   return slug
 }
 
@@ -58,6 +64,9 @@ export async function orgSlug(): Promise<string | undefined> {
 export function parseSentryIssues(md: string): SentryIssue[] {
   const out: SentryIssue[] = []
   for (const block of md.split(/^##\s+\d+\.\s+/m).slice(1)) {
+    // `[TRUTO-APP-1BY](url)`. Short ids are base36 — `TRUTO-38`, `TRUTO-2D`,
+    // `TRUTO-W` — so the capture stays permissive rather than spelling out a
+    // shape; narrowing it can only ever drop an issue Sentry did return.
     const head = /^\[([^\]]+)\]\(([^)]+)\)/.exec(block)
     if (!head) continue
     const shortId = head[1]!
@@ -162,18 +171,19 @@ export const sentry: SourceAdapter = {
     if (!org) throw new Error('Sentry named no organisation for this token')
 
     /*
-     * Three questions, every one of them about him.
+     * Three questions, none of them `is:unresolved`.
      *
-     * `is:unresolved` never appears on its own: an organisation-wide unresolved
-     * search is a firehose of everybody's errors, and a desk that shows all of
-     * them is a desk nobody reads. `assigned_or_suggested:me` is the one that
-     * earns its place — Sentry's own suggestion is based on who touched the
-     * code, which is how an error lands on him before anybody assigns it.
+     * That qualifier was the reason this source returned nothing. Sentry's
+     * search applies its own default status filter, and stacking `is:unresolved`
+     * on top of `assigned:me` narrowed a real answer to an empty one — the
+     * issues firing in #sentry-alerts right now were never in it. What is left
+     * is three claims about ownership: assigned to me, suggested as mine, and
+     * queued for review. Errors nobody owns are still not "on me".
      */
     const queries = [
-      { q: 'is:unresolved assigned:me', why: 'assigned to you in Sentry', pile: 'now' as const },
-      { q: 'is:unresolved assigned_or_suggested:me', why: 'assigned or suggested to you in Sentry', pile: 'now' as const },
-      { q: 'is:unresolved is:for_review', why: 'waiting for review in Sentry', pile: 'open' as const },
+      { q: 'assigned:me', why: 'assigned to you in Sentry', pile: 'now' as const },
+      { q: 'assigned_or_suggested:me', why: 'Sentry suggests you own this', pile: 'now' as const },
+      { q: 'is:for_review', why: 'waiting for review in Sentry', pile: 'open' as const },
     ]
 
     const cards: RawCard[] = []

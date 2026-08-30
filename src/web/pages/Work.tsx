@@ -1,7 +1,7 @@
 /**
  * Work — his own list, beside his own notes.
  *
- * On the same grid as Now and Mail: a padded list column and a pane of the same
+ * On the same grid as the desk and Mail: a padded list column and a pane of the same
  * width token with the same left hairline, so the second column's left edge sits
  * on the one vertical the product uses. It used to be a `[1fr_360px]` grid
  * inside the shell's own pad, which put its right column at x=1056 — a vertical
@@ -25,36 +25,92 @@
 import { Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, Terminal, X } from 'lucide-react'
-import { TASK_STATUS_LABEL } from '../../shared/status'
+import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, X } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
+import { STATUS_LABEL } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
-import { Button, Empty, Field, Sheet, inputClass, spring } from '../components/primitives'
 import { SwipeDrawer, useSwipe } from '../components/swipe'
+import { toast } from '../lib/toast'
+import {
+  Button, Empty, Field, PageTitle, Pager, Sheet, inputClass, pageCount, pageSlice, spring,
+} from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
 import { openLaunch, taskContext, taskRepoHint } from '../lib/launch'
-import { toast } from '../lib/toast'
 import { setParam, useParam } from '../lib/route'
 
 type Tab = 'tasks' | 'goals'
 
 /**
- * The three a task can be in, under the shared labels.
+ * The three a task can be in, under the desk's own words.
  *
  * Tasks were not migrated to the card's five, and this is the seam. A task is
- * his own work with a lifecycle the page already draws; a card is somebody
+ * his own work with a lifecycle this page already draws; a card is somebody
  * else's system, and its status is a note he keeps about it. `In review` and
  * `Won't do` have no home here — the first because a task of his own does not
  * wait on a reviewer inside Wake, and the second because a task decided against
- * is one that leaves, which is what `Delete` is for.
+ * is one that leaves, which is what `Delete` is for. The three that do map take
+ * the labels the desk prints, so the product has one vocabulary rather than two
+ * that happen to agree today.
  */
-const TASK_CHOICES = (['todo', 'doing', 'done'] as const).map(id => ({
-  id, label: TASK_STATUS_LABEL[id],
-}))
+const TASK_CHOICES = [
+  { id: 'todo',  label: STATUS_LABEL.not_started },
+  { id: 'doing', label: STATUS_LABEL.in_progress },
+  { id: 'done',  label: STATUS_LABEL.done },
+]
+
+/** A goal is finished or it is not; there is no middle for it to be in. */
+const GOAL_CHOICES = [
+  { id: 'todo', label: STATUS_LABEL.not_started },
+  { id: 'done', label: STATUS_LABEL.done },
+]
+
+/**
+ * Put back a deleted task, field for field.
+ *
+ * The server has no soft delete for a task, so the undo is a re-creation: a new
+ * id carrying every field the old one had, including the frozen provenance that
+ * says where it came from. Its stickies are copied across too, because a note
+ * points at the id that was just removed and would otherwise be stranded on a
+ * row nothing renders. What genuinely does not survive is a reminder pointed at
+ * the old id, which the server deletes with the task — that is worth knowing and
+ * not worth a second table.
+ *
+ * `origin_meta` is stored as a JSON *string* and the create route stringifies
+ * whatever it is handed, so passing the string straight through would write a
+ * quoted blob and the provenance would come back as gibberish. It is parsed here
+ * and dropped if it will not parse, because a task with no origin line is a
+ * great deal better than one whose origin line is `"{\"repo\":…"`.
+ */
+async function recreateTask(t: Task) {
+  let originMeta: unknown = null
+  try {
+    originMeta = t.origin_meta ? JSON.parse(t.origin_meta) : null
+  } catch {
+    originMeta = null
+  }
+
+  const made = await actions.createTask({
+    title: t.title, detail: t.detail, status: t.status, goal_id: t.goal_id,
+    source_card_group: t.source_card_group, due_at: t.due_at, color: t.color, sort: t.sort,
+    // `started_at` and `completed_at` are normally derived from a status
+    // *transition*, and a restore is not one — so a finished task came back with
+    // no finish time and sorted to the bottom of a Done list ordered by exactly
+    // that column. `restore` also keeps the undo out of the throughput counts:
+    // an undo is not work that happened.
+    started_at: t.started_at, completed_at: t.completed_at, restore: true,
+    origin_source: t.origin_source, origin_title: t.origin_title, origin_why: t.origin_why,
+    origin_url: t.origin_url, origin_excerpt: t.origin_excerpt, origin_meta: originMeta,
+  }) as Task
+
+  for (const n of t.notes ?? []) {
+    await actions.createNote({ task_id: made.id, body: n.body, color: n.color, sort: n.sort })
+  }
+  await reload()
+}
 
 export function Work() {
   const { state } = useStore()
@@ -63,6 +119,7 @@ export function Work() {
   const [creating, setCreating] = useState(false)
   const [goalEditing, setGoalEditing] = useState<Goal | null | 'new'>(null)
   const [showDone, setShowDone] = useState(false)
+  const donePage = Math.max(1, Number(useParam('page')) || 1)
 
   /** Any of the three sheets this page owns. While one is up it holds the
    *  surface, and with it the single primary. */
@@ -95,10 +152,10 @@ export function Work() {
    * name of the source it came from. Cards churn; the task does not, so a task
    * whose card is gone simply loses the line rather than breaking.
    */
-  const cardByGroup = useMemo(() => {
-    const all = [...(state?.now ?? []), ...(state?.open ?? []), ...(state?.parked ?? [])]
-    return new Map(all.map(c => [c.group_key, c]))
-  }, [state?.now, state?.open, state?.parked])
+  const cardByGroup = useMemo(
+    () => new Map((state?.cards ?? []).map(c => [c.group_key, c])),
+    [state?.cards],
+  )
 
   const doing = useMemo(() => tasks.filter(t => t.status === 'doing'), [tasks])
   const todo = useMemo(() => tasks.filter(t => t.status === 'todo'), [tasks])
@@ -122,9 +179,9 @@ export function Work() {
    * The swipe's Status, on a task.
    *
    * Undone by putting back the status it replaced rather than by a general
-   * "restore", because a task has no undo record on the server and does not
-   * need one: there is exactly one field in play and its previous value is in
-   * hand at the moment it changes.
+   * "restore", because a task has no undo record on the server and does not need
+   * one: there is exactly one field in play and its previous value is in hand at
+   * the moment it changes.
    */
   const setTaskStatus = async (t: Task, status: Task['status']) => {
     if (status === t.status) return
@@ -135,54 +192,20 @@ export function Work() {
       return s
     })
     await actions.updateTask(t.id, { status })
-    toast(`${TASK_STATUS_LABEL[status]}.`, {
+    toast(`${TASK_CHOICES.find(c => c.id === status)?.label ?? 'Changed'}.`, {
       label: 'Undo',
       run: async () => { await actions.updateTask(t.id, { status: was }); await reload() },
     })
     void reload()
   }
 
-  /**
-   * Delete, and the fact that a re-created task is not the same row.
-   *
-   * The server has no soft delete for tasks, so the undo is a re-creation: a new
-   * id, carrying every field the old one had, including the frozen provenance
-   * that says where it came from. Its stickies are copied across too, because a
-   * note points at the id that was just removed and would otherwise be stranded
-   * on a row nothing renders. What genuinely does not survive is a reminder
-   * pointed at the old id, which the server deletes with the task — that is
-   * worth knowing and not worth a second table.
-   */
+  /** Delete, and a way back — see `recreateTask` for what a way back costs. */
   const removeTask = async (t: Task) => {
     optimistic(s => { s.tasks = s.tasks.filter(x => x.id !== t.id); return s })
     await actions.deleteTask(t.id)
     toast('Deleted.', { label: 'Undo', run: () => recreateTask(t) })
     void reload()
   }
-
-  /** Persist the new order as sort keys after a drag. */
-  const commitOrder = async (list: Task[]) => {
-    optimistic(s => {
-      const order = new Map(list.map((t, i) => [t.id, i]))
-      s.tasks = s.tasks.map(t => (order.has(t.id) ? { ...t, sort: order.get(t.id)! } : t))
-      return s
-    })
-    await Promise.all(list.map((t, i) => actions.updateTask(t.id, { sort: i })))
-  }
-
-  // Nothing at all until the first read lands. A sentence saying a page is
-  // loading is chrome that teaches, and it paints for one frame.
-  if (!state) return <div className="pad-x pt-4"><h1 className="text-lg font-medium">Work</h1></div>
-
-  const rowProps = (t: Task) => ({
-    task: t, reminders, goals,
-    // The live card when there still is one, so the link is current; the frozen
-    // copy when the poller has swept it, so the line does not vanish with the
-    // pull request it was about.
-    origin: cardByGroup.get(t.source_card_group ?? ''),
-    onCycle: cycle, onEdit: setEditing,
-    onStatus: setTaskStatus, onDelete: removeTask,
-  })
 
   /**
    * Deleting a goal orphans the tasks that named it, so undoing has to adopt
@@ -203,7 +226,7 @@ export function Work() {
         // Field for field, the same way `recreateTask` puts a task back. A goal
         // restored without its `sort` jumps to the head of the list, and one
         // restored without `completed_at` comes back unfinished — so undoing the
-        // delete of a goal he had marked Done quietly un-did that too.
+        // delete of a goal he had marked Done would quietly un-do that too.
         const made = await actions.createGoal({
           title: g.title, detail: g.detail, color: g.color, target_date: g.target_date,
           sort: g.sort, completed_at: g.completed_at, restore: true,
@@ -217,15 +240,39 @@ export function Work() {
   const setGoalDone = async (g: Goal, done: boolean) => {
     await actions.updateGoal(g.id, { completed: done })
     await reload()
-    toast(done ? 'Done.' : 'Not started.', {
+    toast(done ? `${STATUS_LABEL.done}.` : `${STATUS_LABEL.not_started}.`, {
       label: 'Undo',
       run: async () => { await actions.updateGoal(g.id, { completed: !done }); await reload() },
     })
   }
 
+  /** Persist the new order as sort keys after a drag. */
+  const commitOrder = async (list: Task[]) => {
+    optimistic(s => {
+      const order = new Map(list.map((t, i) => [t.id, i]))
+      s.tasks = s.tasks.map(t => (order.has(t.id) ? { ...t, sort: order.get(t.id)! } : t))
+      return s
+    })
+    await Promise.all(list.map((t, i) => actions.updateTask(t.id, { sort: i })))
+  }
+
+  // Nothing at all until the first read lands. A sentence saying a page is
+  // loading is chrome that teaches, and it paints for one frame.
+  if (!state) return <div className="pad-x pt-4 flex items-center gap-3"><PageTitle>Work</PageTitle></div>
+
+  const rowProps = (t: Task) => ({
+    task: t, reminders, goals,
+    // The live card when there still is one, so the link is current; the frozen
+    // copy when the poller has swept it, so the line does not vanish with the
+    // pull request it was about.
+    origin: cardByGroup.get(t.source_card_group ?? ''),
+    onCycle: cycle, onEdit: setEditing,
+    onStatus: setTaskStatus, onDelete: removeTask,
+  })
+
   const header = (
     <header className="flex items-center gap-3 pt-4 pb-2">
-      <h1 className="text-lg font-medium">Work</h1>
+      <PageTitle>Work</PageTitle>
       <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
       <span className="ml-auto flex items-center gap-4">
         {/* Two words, not a bordered segmented box. It is a choice between two
@@ -236,7 +283,10 @@ export function Work() {
               key={id}
               onClick={() => setParam('tab', id === 'tasks' ? null : id)}
               aria-pressed={tab === id}
-              className={`hit h-8 text-sm font-medium transition-colors duration-100
+              /* `relative`, or `.hit` hangs its touch box off `<main>` instead
+                 of off the word — a page-sized invisible target that answers
+                 every tap on the route with `Goals`. */
+              className={`hit relative h-8 text-sm font-medium transition-colors duration-100
                 ${tab === id ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}
             >
               {id === 'tasks' ? 'Tasks' : 'Goals'}
@@ -271,15 +321,16 @@ export function Work() {
   /**
    * Nothing on the list, nothing that went off, nothing recorded.
    *
-   * One column, one dash, and the mic — because a second structural column
+   * One column, one line, and the mic — because a second structural column
    * holding a second em dash is a layout describing an absence, and 760px of it
-   * is the loudest way this product has ever said nothing.
+   * is the loudest way this product has ever said nothing. The line says which
+   * list is empty; a bare dash in that slot is what a failed render looks like.
    */
   if (!tasks.length && !goals.length && !fired.length && !notes?.length) {
     return (
       <div className="pad-x pb-24 xl:pb-8">
         {header}
-        <Empty />
+        <Empty>{tab === 'tasks' ? 'No tasks' : 'No goals'}</Empty>
         <VoiceNotes notes={notes} onNotes={setNotes} />
         {sheets}
       </div>
@@ -288,7 +339,7 @@ export function Work() {
 
   return (
     /* The shell's own grid: a padded list column, then a pane on the same width
-       token with the same left hairline Now's detail and Mail's list use. Below
+       token with the same left hairline the desk's detail and Mail's list use. Below
        the pane width the two simply stack, which is what they did anyway. */
     <div className="xl:flex xl:items-stretch xl:min-h-dvh">
       <div className="min-w-0 grow pad-x pb-8">
@@ -296,7 +347,7 @@ export function Work() {
         {tab === 'tasks' ? (
           <>
             {doing.length > 0 && (
-              <Group label="In flight">
+              <Group label="In progress">
                 <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
                   {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                 </Reorder.Group>
@@ -304,21 +355,41 @@ export function Work() {
             )}
 
             {todo.length > 0 && (
-              <Group label="Up next">
+              <Group label="Not started">
                 <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
                   {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                 </Reorder.Group>
               </Group>
             )}
-            {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
-            {!todo.length && !doing.length && !done.length && <Empty />}
+            {/* An empty list is one word, not a paragraph and not a tutorial — and a
+                word rather than the default dash, because a dash alone in a
+                44px slot with 90px of nothing under it reads as a render that
+                failed rather than as a list with nothing on it. */}
+            {!todo.length && !doing.length && !done.length && <Empty>No tasks</Empty>}
 
+            {/*
+              Done is the only list here that pages.
+
+              It is also the only one that grows without limit — it used to be
+              cut at a hard `slice(0, 40)`, which is not a page, it is a silent
+              floor under everything finished more than a few weeks ago. The two
+              live lists above are drag-ordered and `commitOrder` writes their
+              sort keys from the array index it is handed, so slicing them into
+              pages would rewrite page two's order as if it were page one's.
+              They are bounded by what he is actually working on anyway.
+            */}
             {done.length > 0 && (
               <Group label={`Done — ${done.length}`}>
                 <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
                   {showDone ? 'Hide' : 'Show'}
                 </Button>
-                {showDone && done.slice(0, 40).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+                {showDone && (
+                  <>
+                    {pageSlice(done, donePage).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+                    <Pager page={donePage} pages={pageCount(done.length)} total={done.length}
+                      onPage={n => setParam('page', n === 1 ? null : String(n))} />
+                  </>
+                )}
               </Group>
             )}
           </>
@@ -336,43 +407,6 @@ export function Work() {
       {sheets}
     </div>
   )
-}
-
-/**
- * Put back a deleted task, field for field.
- *
- * `origin_meta` is stored as a JSON *string* and the create route stringifies
- * whatever it is handed, so passing the string straight through would write a
- * quoted blob and the provenance would come back as gibberish. It is parsed
- * here and dropped if it will not parse, because a task with no origin line is
- * a great deal better than one whose origin line is `"{\"repo\":…"`.
- */
-async function recreateTask(t: Task) {
-  let originMeta: unknown = null
-  try {
-    originMeta = t.origin_meta ? JSON.parse(t.origin_meta) : null
-  } catch {
-    originMeta = null
-  }
-
-  const made = await actions.createTask({
-    title: t.title, detail: t.detail, status: t.status, goal_id: t.goal_id,
-    source_card_group: t.source_card_group, due_at: t.due_at, color: t.color, sort: t.sort,
-    // `started_at` and `completed_at` are normally derived from a status
-    // *transition*, and a restore is not one — so a finished task came back with
-    // no finish time and sorted to the bottom of a Done list ordered by it.
-    // `restore` also keeps the undo out of Pulse's created series.
-    started_at: t.started_at, completed_at: t.completed_at, restore: true,
-    origin_source: t.origin_source, origin_title: t.origin_title, origin_why: t.origin_why,
-    origin_url: t.origin_url, origin_excerpt: t.origin_excerpt, origin_meta: originMeta,
-  }) as Task
-
-  // A note points at the id that was just deleted, so the stickies have to
-  // follow the task to its new one or they are stranded on nothing.
-  for (const n of t.notes ?? []) {
-    await actions.createNote({ task_id: made.id, body: n.body, color: n.color, sort: n.sort })
-  }
-  await reload()
 }
 
 /** An eyebrow and rows. It is never amber: a heading colour is not a state. */
@@ -396,21 +430,25 @@ function TaskRow({
   static?: boolean
 }) {
   /*
-   * `none` on this row, and it is the only row in the product that takes it.
+   * `'none'` on a draggable row, `'pan-y'` on a static one, and the difference
+   * is who owns the vertical axis.
    *
-   * `Reorder.Item` sets `touch-action: pan-x` inline, which is how a vertical
-   * drag reaches framer's reorder handler instead of scrolling the page —
-   * writing `pan-y` over it would hand the vertical axis back to the browser and
-   * silently kill drag-to-reorder, with the row still moving under the finger so
-   * that nothing looked wrong until the order failed to save. But `pan-x` is not
-   * neutral either: it hands the browser the *horizontal* axis, the one this
-   * gesture is made of, so a thumb swipe here could be taken over as a pan and
-   * cancelled mid-drawer. `none` gives the whole gesture to the app, which is
-   * what framer's own drag wants, and costs nothing that `pan-x` was providing.
-   * The declaration is in `styles.css`, because an inline style cannot outrank
-   * the inline style framer writes.
+   * `Reorder.Item` writes `touch-action: pan-x` inline, which is how a vertical
+   * drag reaches its reorder handler instead of scrolling the page. `pan-x` also
+   * hands the browser the horizontal axis — the one this gesture is made of — so
+   * a thumb swipe on a draggable task row could be taken over as a pan and
+   * cancelled halfway through. `none` gives the row's whole gesture to the app,
+   * which is what framer's own drag wants anyway, and costs nothing there:
+   * vertical scrolling on those rows already belonged to framer.
+   *
+   * A static row is not a `Reorder.Item`. Nothing writes `pan-x` on it and
+   * nothing catches a vertical drag, so `none` would take the page's scroll away
+   * and hand it to no one — a thumb dragging up the Done list would move
+   * nothing, which is the "frozen app" failure `lib/swipe.ts` puts above this
+   * whole gesture. `pan-y` is the same split every other row in the product uses:
+   * vertical is the page's, horizontal is the drawer's.
    */
-  const swipe = useSwipe(`task:${task.id}`, 3, 'none')
+  const swipe = useSwipe(`task:${task.id}`, 3, isStatic ? 'pan-y' : 'none')
   const drawer = (
     <SwipeDrawer
       dx={swipe.dx}
@@ -502,7 +540,7 @@ function TaskRow({
             title: task.title,
             repoHint: taskRepoHint(task.origin_meta),
           })}>
-          <Terminal size={14} />
+          <SquareTerminal size={14} />
         </Button>
       </span>
 
@@ -522,6 +560,7 @@ function TaskRow({
         onPointerCancel={swipe.bind.onPointerCancel}
         onClickCapture={swipe.bind.onClickCapture}
         data-swipe={swipe.bind['data-swipe']}
+        style={swipe.bind.style}
         className="relative border-b border-rule last:border-0"
       >
         {body}
@@ -543,6 +582,13 @@ function TaskRow({
       onPointerCancel={swipe.bind.onPointerCancel}
       onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
+      // Reorder.Item spreads whatever style it is given before adding its own
+      // `x`/`y`/`zIndex`, so the gesture's `user-select: none` survives here —
+      // and without it a mouse drag across a draggable task highlighted the
+      // title and detail blue under the open drawer, and left them highlighted
+      // after the button came up. The `removeAllRanges()` at engage only clears
+      // what the first twelve pixels selected.
+      style={swipe.bind.style}
       className="relative border-b border-rule last:border-0"
     >
       {body}
@@ -550,20 +596,6 @@ function TaskRow({
     </Reorder.Item>
   )
 }
-
-/**
- * A goal has two states, so its picker offers two.
- *
- * Not three with one of them a lie. `In progress` on a goal would be
- * indistinguishable from `Not started` in both the data and the drawing of it —
- * the progress bar under the title already says how far along it is, out of the
- * tasks that name it — and a control offering a state the row cannot actually
- * be in is worse than a control with two options in it.
- */
-const GOAL_CHOICES = [
-  { id: 'todo', label: TASK_STATUS_LABEL.todo },
-  { id: 'done', label: TASK_STATUS_LABEL.done },
-]
 
 function GoalList({
   goals, tasks, onEdit, onStatus, onDelete,
@@ -573,7 +605,7 @@ function GoalList({
   onStatus: (g: Goal, done: boolean) => void
   onDelete: (g: Goal) => void
 }) {
-  if (!goals.length) return <Empty />
+  if (!goals.length) return <Empty>No goals</Empty>
   return (
     <div>
       {goals.map(g => (
@@ -587,6 +619,14 @@ function GoalList({
   )
 }
 
+/**
+ * A goal is its own row so it can hold a gesture.
+ *
+ * The list was a `.map` returning a `<button>`, which is the one element the
+ * drawer cannot live inside: its three actions are buttons themselves, and a
+ * button inside a button is not a thing the platform renders. The press target
+ * stays a button; the swipe and its drawer are the block around it.
+ */
 function GoalRow({
   goal: g, linked, onEdit, onStatus, onDelete,
 }: {

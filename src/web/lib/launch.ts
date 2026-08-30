@@ -62,11 +62,44 @@ export type Handoff = {
 export type Session = {
   id: string
   title: string
+  /** Where it actually ran, out of the transcript. Never reconstructed. */
   cwd: string
   project: string
+  lastPrompt: string | null
+  /**
+   * User turns in the tail the server read, not in the session. Every surface
+   * that renders it says `turns in view`, because a transcript is megabytes and
+   * only its tail is opened.
+   */
   turns: number
   lastTs: number
+  path: string
+  pr: { url: string; repo: string; number: number } | null
+  branch?: string | null
+  version?: string | null
+  entrypoint?: string | null
+  permissionMode?: string | null
+  /** Running on the box right now, from Claude Code's own per-process files. */
+  live?: boolean
 }
+
+/**
+ * The two real `--permission-mode` values a brief may name.
+ *
+ * `bypassPermissions` is the default position. A brief is written, read and
+ * approved before it is sent; asking again at the terminal is asking the same
+ * question twice.
+ */
+export type PermissionMode = 'bypassPermissions' | 'acceptEdits'
+export const PERMISSION_MODES: ReadonlyArray<{ id: PermissionMode; label: string }> = [
+  { id: 'bypassPermissions', label: 'Bypass permissions' },
+  { id: 'acceptEdits', label: 'Accept edits' },
+]
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'bypassPermissions'
+
+/** The command that rejoins a session on the machine it is actually on. */
+export const resumeCommand = (id: string, mode: PermissionMode) =>
+  `claude --resume ${id} --permission-mode ${mode}`
 
 export type Pack = {
   id: string
@@ -84,7 +117,48 @@ export type Pack = {
   skills?: string[]
 }
 
-export type Skill = { id: string; name: string; catalog: string; whenToUse: string | null; mutating: boolean }
+export type Skill = {
+  id: string
+  name: string
+  catalog: string
+  title: string | null
+  description: string | null
+  whenToUse: string | null
+  mutating: boolean
+}
+
+/**
+ * One skill, whichever way it was named.
+ *
+ * The catalog keys a skill `B/truto-cli-toolbelt`; every template names the
+ * bare `truto-cli-toolbelt`. So a template's preselection matched no row, the
+ * check never appeared, clicking the row *added* it a second time, and the
+ * count read `SKILLS — 4` for three skills. The server's `getSkill` has had the
+ * bare-name fallback all along — this is the same rule, on this side of the
+ * wire, so both agree on what a skill is.
+ */
+export function resolveSkillId(all: ReadonlyArray<Skill>, value: string): string {
+  const v = value.trim()
+  if (!v) return v
+  if (all.some(s => s.id === v)) return v
+  const byName = all.filter(s => s.name === v)
+  return byName.length === 1 && byName[0] ? byName[0].id : v
+}
+
+/** Resolve a list, then drop anything that would render as a duplicate line. */
+export function resolveSkillIds(all: ReadonlyArray<Skill>, values: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const id = resolveSkillId(all, raw)
+    if (!id) continue
+    const bare = id.split('/').pop()!
+    if (seen.has(bare)) continue
+    seen.add(bare)
+    out.push(id)
+  }
+  return out
+}
 
 export type LaunchState = {
   handoff: HandoffTarget
@@ -93,6 +167,7 @@ export type LaunchState = {
   repos: Array<{ name: string; path: string; role: string; branch: string | null; dirty: number }>
   sessions: Session[]
   packs: Pack[]
+  defaultPermissionMode: PermissionMode
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -114,7 +189,30 @@ export const launchApi = {
     instruction?: string
     items: PackItem[]
     skills?: string[]
+    sessionId?: string | null
+    permissionMode?: PermissionMode
   }) => req<Pack>('/packs', { method: 'POST', body: JSON.stringify(b) }),
+  sessions: (opts: { all?: boolean; repo?: string; window?: number; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.all) q.set('all', '1')
+    if (opts.repo) q.set('repo', opts.repo)
+    if (opts.window) q.set('window', String(opts.window))
+    if (opts.limit) q.set('limit', String(opts.limit))
+    const s = q.toString()
+    return req<{ sessions: Session[] }>(`/sessions${s ? `?${s}` : ''}`)
+  },
+  /**
+   * Step one of a delete: what would go, and a token bound to this id.
+   * Two calls, because the dialog has to be able to name the four paths.
+   */
+  confirmDeleteSession: (id: string) =>
+    req<{ token: string; expiresAt: number; paths: string[]; title: string }>(
+      `/sessions/${id}/delete/confirm`, { method: 'POST', body: '{}' },
+    ),
+  deleteSession: (id: string, token: string) =>
+    req<{ ok: true; removed: string[]; kept: string[] }>(
+      `/sessions/${id}?token=${encodeURIComponent(token)}`, { method: 'DELETE' },
+    ),
   /**
    * Record what was actually handed over. `brief` is the edited text, which
    * becomes the stored copy and the file on disk — a record of the draft Wake
@@ -137,9 +235,40 @@ type Basket = {
   /** The repository the card knew about, so the brief does not default to ~/work. */
   repoHint: string | null
   title: string | null
+  /**
+   * The Claude Code session this brief is about, or null for a fresh start.
+   *
+   * Context, not continuity — a link can only open a *new* conversation. What
+   * choosing one buys is the session's directory, its branch and the resume
+   * command, written into the brief. See DECISIONS.md #35.
+   */
+  session: string | null
+  permissionMode: PermissionMode
 }
 
-let basket: Basket = { open: false, items: [], templates: [], repoHint: null, title: null }
+/**
+ * The mode is remembered across sheets; nothing else in the basket is.
+ *
+ * It is a preference about how he works rather than a fact about this brief,
+ * and re-picking it on every hand-off is the kind of small tax that makes a
+ * control feel like paperwork.
+ */
+const MODE_KEY = 'wake.launch.permissionMode'
+const storedMode = (): PermissionMode => {
+  try {
+    const v = localStorage.getItem(MODE_KEY)
+    return PERMISSION_MODES.some(m => m.id === v) ? (v as PermissionMode) : DEFAULT_PERMISSION_MODE
+  } catch {
+    // Private mode, a blocked origin, a browser with storage off. The default
+    // is the right answer in all three, and none of them is an error.
+    return DEFAULT_PERMISSION_MODE
+  }
+}
+
+let basket: Basket = {
+  open: false, items: [], templates: [], repoHint: null, title: null,
+  session: null, permissionMode: storedMode(),
+}
 const listeners = new Set<() => void>()
 const set = (p: Partial<Basket>) => {
   basket = { ...basket, ...p }
@@ -157,7 +286,10 @@ export function useLaunchBasket() {
 /** Add objects and open the sheet. Duplicate refs collapse rather than stack. */
 export function openLaunch(
   items: PackItem[],
-  opts: { template?: string; templates?: string[]; repoHint?: string | null; title?: string | null } = {},
+  opts: {
+    template?: string; templates?: string[]; repoHint?: string | null
+    title?: string | null; session?: string | null
+  } = {},
 ) {
   const seen = new Set(basket.items.map(i => `${i.kind}:${i.ref}`))
   const merged = [...basket.items, ...items.filter(i => !seen.has(`${i.kind}:${i.ref}`))]
@@ -168,7 +300,16 @@ export function openLaunch(
     templates,
     repoHint: opts.repoHint ?? basket.repoHint,
     title: opts.title ?? basket.title,
+    session: opts.session ?? basket.session,
   })
+}
+
+/** Which session the brief is about. `null` is `A new conversation`. */
+export const setLaunchSession = (id: string | null) => set({ session: id })
+
+export function setLaunchPermissionMode(mode: PermissionMode) {
+  set({ permissionMode: mode })
+  try { localStorage.setItem(MODE_KEY, mode) } catch { /* see storedMode */ }
 }
 export const removeFromLaunch = (ref: string) => set({ items: basket.items.filter(i => i.ref !== ref) })
 
@@ -187,7 +328,9 @@ export const closeLaunch = () => resetLaunch()
 
 /** Empty it. A brief handed over should not leave its objects in the basket. */
 export const resetLaunch = () =>
-  set({ open: false, items: [], templates: [], repoHint: null, title: null })
+  // `permissionMode` deliberately survives — it is a standing preference, not
+  // something this brief chose. Everything that belongs to one hand-off goes.
+  set({ open: false, items: [], templates: [], repoHint: null, title: null, session: null })
 
 /**
  * A task, as objects a brief can carry.

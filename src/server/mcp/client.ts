@@ -44,9 +44,28 @@ export class McpUnauthorized extends McpError {
 }
 
 export interface McpTransport {
-  request(method: string, params?: unknown): Promise<any>
+  /**
+   * `retryable` is false for the audited write path. A replayed read costs a
+   * duplicate GET; a replayed `send_message` can deliver an email twice, because
+   * a 401 on the response says nothing about whether the request reached Gmail.
+   */
+  request(method: string, params?: unknown, retryable?: boolean): Promise<any>
   notify(method: string, params?: unknown): Promise<void>
   close(): Promise<void>
+}
+
+/**
+ * Where a transport gets its bearer token, and how it asks for a new one.
+ *
+ * A bare function is still a valid source and simply never retries. `refresh` is
+ * what makes a 401 recoverable: the transport does not know which credential it
+ * is holding and has no business knowing, while the thing that produced the
+ * token does. Wiring the renewal through the token source rather than through a
+ * fourth constructor argument is what lets a session built anywhere in the
+ * codebase get the retry without naming its server twice.
+ */
+export type TokenSource = (() => Promise<string | null> | string | null) & {
+  refresh?: () => Promise<string | null>
 }
 
 /* -------------------------------------------------------------------------- */
@@ -59,7 +78,7 @@ export class HttpTransport implements McpTransport {
 
   constructor(
     private url: string,
-    private getToken: () => Promise<string | null> | string | null,
+    private getToken: TokenSource,
     private timeoutMs = 30_000,
   ) {}
 
@@ -92,29 +111,44 @@ export class HttpTransport implements McpTransport {
     }
   }
 
-  async request(method: string, params?: unknown): Promise<any> {
-    const id = this.nextId++
-    const res = await this.send({ jsonrpc: '2.0', id, method, params })
+  async request(method: string, params?: unknown, retryable = true): Promise<any> {
+    let retried = false
 
-    // The session id is only issued once, on initialize; every later call must
-    // echo it back or the server treats us as a new, unauthenticated client.
-    const sid = res.headers.get('mcp-session-id')
-    if (sid) this.sessionId = sid
+    for (;;) {
+      const id = this.nextId++
+      const res = await this.send({ jsonrpc: '2.0', id, method, params })
 
-    if (res.status === 401) {
-      throw new McpUnauthorized(`401 from ${this.url}`, res.headers.get('www-authenticate') ?? undefined)
+      // The session id is only issued once, on initialize; every later call must
+      // echo it back or the server treats us as a new, unauthenticated client.
+      const sid = res.headers.get('mcp-session-id')
+      if (sid) this.sessionId = sid
+
+      if (res.status === 401) {
+        // Exactly once, and only for a read. The token in hand may simply have
+        // been rotated out from under a long-running poll, which is a state the
+        // expiry check cannot see and one round-trip can fix.
+        if (retryable && !retried && this.getToken.refresh) {
+          retried = true
+          // Mandatory: the session was issued against the credential the server
+          // has just refused. Replaying with a fresh bearer but the old
+          // `Mcp-Session-Id` re-enters that dead session and earns a second 401.
+          this.sessionId = null
+          if (await this.getToken.refresh()) continue
+        }
+        throw new McpUnauthorized(`401 from ${this.url}`, res.headers.get('www-authenticate') ?? undefined)
+      }
+      if (!res.ok) {
+        throw new McpError(`${res.status} from ${this.url}: ${friendlyBody(await res.text())}`, undefined, res.status)
+      }
+
+      const ctype = res.headers.get('content-type') ?? ''
+      const payload = ctype.includes('text/event-stream')
+        ? await readSseResult(res, id)
+        : ((await res.json()) as JsonRpcResponse)
+
+      if (payload.error) throw new McpError(payload.error.message, payload.error.code)
+      return payload.result
     }
-    if (!res.ok) {
-      throw new McpError(`${res.status} from ${this.url}: ${friendlyBody(await res.text())}`, undefined, res.status)
-    }
-
-    const ctype = res.headers.get('content-type') ?? ''
-    const payload = ctype.includes('text/event-stream')
-      ? await readSseResult(res, id)
-      : ((await res.json()) as JsonRpcResponse)
-
-    if (payload.error) throw new McpError(payload.error.message, payload.error.code)
-    return payload.result
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
@@ -272,25 +306,44 @@ export class McpSession {
     return this.ready
   }
 
+  /**
+   * Forget the handshake and the tool list.
+   *
+   * Both were established under one credential. After a 401 that survived the
+   * transport's retry, keeping them is how a reconnect went on serving the
+   * previous token's tool surface for the rest of the process — the shape that
+   * made "disconnect Slack, reconnect Slack" need a server restart.
+   */
+  async reset() {
+    this.ready = null
+    this.tools = null
+    await this.transport.close().catch(() => {})
+  }
+
   async listTools(force = false): Promise<McpTool[]> {
-    await this.init()
-    if (this.tools && !force) return this.tools
-    const out: McpTool[] = []
-    let cursor: string | undefined
-    do {
-      const r = await this.transport.request('tools/list', cursor ? { cursor } : {})
-      out.push(...(r?.tools ?? []))
-      cursor = r?.nextCursor
-    } while (cursor)
-    this.tools = out
-    return out
+    try {
+      await this.init()
+      if (this.tools && !force) return this.tools
+      const out: McpTool[] = []
+      let cursor: string | undefined
+      do {
+        const r = await this.transport.request('tools/list', cursor ? { cursor } : {})
+        out.push(...(r?.tools ?? []))
+        cursor = r?.nextCursor
+      } while (cursor)
+      this.tools = out
+      return out
+    } catch (e) {
+      if (e instanceof McpUnauthorized) await this.reset()
+      throw e
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     if (WRITE_TOOL.test(name)) {
       throw new McpError(`refusing to call "${name}": Wake is read-only against external systems`)
     }
-    return this.invoke(name, args)
+    return this.invoke(name, args, true)
   }
 
   /**
@@ -305,17 +358,24 @@ export class McpSession {
    * arguments has been spent (`security.ts`), and every call is audited.
    */
   async callWriteTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
-    return this.invoke(name, args)
+    // Never replayed. A 401 arriving on the response is silent about whether the
+    // send happened, and a duplicate email is worse than a failed one.
+    return this.invoke(name, args, false)
   }
 
-  private async invoke(name: string, args: Record<string, unknown>): Promise<unknown> {
-    await this.init()
-    const r = await this.transport.request('tools/call', { name, arguments: args })
-    if (r?.isError) {
-      const text = extractText(r)
-      throw new McpError(`tool ${name} failed: ${text.slice(0, 400)}`)
+  private async invoke(name: string, args: Record<string, unknown>, retryable: boolean): Promise<unknown> {
+    try {
+      await this.init()
+      const r = await this.transport.request('tools/call', { name, arguments: args }, retryable)
+      if (r?.isError) {
+        const text = extractText(r)
+        throw new McpError(`tool ${name} failed: ${text.slice(0, 400)}`)
+      }
+      return r
+    } catch (e) {
+      if (e instanceof McpUnauthorized) await this.reset()
+      throw e
     }
-    return r
   }
 
   /** Tool results carry text and/or structured content; prefer the structured form. */

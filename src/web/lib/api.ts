@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import type { CardStatus } from '../../shared/status'
-import type { Analytics, SourceStatus, State } from './types'
+import type { Analytics, CardPriority, CardStatus, SourceStatus, State, SourceName } from './types'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
 export type ConnectStart = {
@@ -78,9 +77,9 @@ export function reload(): Promise<void> {
  */
 type FetchStatus = { running: boolean; report: import('./types').FetchReport | null }
 
-export async function fetchNow(): Promise<import('./types').FetchReport> {
+export async function fetchNow(only?: SourceName): Promise<import('./types').FetchReport> {
   const before = (await req<FetchStatus>('/fetch').catch(() => null))?.report?.at ?? 0
-  await post('/fetch')
+  await post('/fetch', only ? { only } : undefined)
   // Two minutes is past the server's own per-connector wall clock, so a run
   // that is still going at the end of it is a run that has stopped answering.
   for (let i = 0; i < 60; i++) {
@@ -116,19 +115,25 @@ export const actions = {
   ack: (g: string) => post(`/cards/${encodeURIComponent(g)}/ack`),
   snooze: (g: string, until: number) => post(`/cards/${encodeURIComponent(g)}/snooze`, { until }),
   move: (g: string, pile: string | null) => post(`/cards/${encodeURIComponent(g)}/pile`, { pile }),
+  /**
+   * Where the work stands. Undoable, under the label `status`.
+   *
+   * The three below it are the same act with older names and older undo
+   * labels: `notMine` sets `wont_do`, `doneCard` sets `done`, and `ack`
+   * promotes a card nobody had started. They keep their URLs so the toast and
+   * undo wiring around them keeps working unchanged.
+   */
+  setStatus: (g: string, status: CardStatus) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/status`, { status }),
+  /** 0 urgent · 1 high · 2 normal · 3 low. Not undoable. */
+  setPriority: (g: string, priority: CardPriority) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/priority`, { priority }),
+  /** A timestamp, or null to clear it. A date in the past is accepted. */
+  setDue: (g: string, at: number | null) =>
+    post<void>(`/cards/${encodeURIComponent(g)}/due`, { at }),
   notMine: (g: string) => post(`/cards/${encodeURIComponent(g)}/not-mine`),
   doneCard: (g: string) => post(`/cards/${encodeURIComponent(g)}/done`),
   pin: (g: string, pinned: boolean) => post(`/cards/${encodeURIComponent(g)}/pin`, { pinned }),
-  /**
-   * How far along this card is.
-   *
-   * The server keeps `status`, `done_at` and `not_mine` in step in one function,
-   * so this is the only call the picker needs — setting `done` here and pressing
-   * `Done` in the action bar land on the same three columns. Its undo label is
-   * `status`, which is why the restore union below has one.
-   */
-  setStatus: (g: string, status: CardStatus) =>
-    post<{ ok: true; status: CardStatus }>(`/cards/${encodeURIComponent(g)}/status`, { status }),
   /**
    * With no `undo`, everything keeping this card off a list is cleared. With
    * one, only that — so undoing a Done leaves a snooze or a manual pile alone.

@@ -58,7 +58,20 @@ settings.get('/', async c => {
 
 /** Truto identity, resolved live. Never the token — only who it says you are. */
 settings.get('/truto', async c => {
-  const profiles = await listProfiles().catch(() => [])
+  let profiles: string[]
+  try {
+    profiles = await listProfiles()
+  } catch (e) {
+    // `catch(() => [])` here turned a CLI that did not answer into an empty
+    // list, and the empty list into "no Truto CLI profiles on this machine" —
+    // a claim about the machine derived from a failure to ask it anything. The
+    // row spent a release saying that about a machine with thirty-five of them.
+    return c.json({
+      profiles: [],
+      active: null,
+      error: `the Truto CLI did not answer: ${(e as Error).message}`,
+    })
+  }
   const requested = c.req.query('profile') ?? profiles[0] ?? null
   if (!requested) {
     return c.json({ profiles, active: null, error: 'no Truto CLI profiles on this machine' })

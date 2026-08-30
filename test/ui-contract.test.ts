@@ -141,12 +141,12 @@ describe('a card that leaves the list can come back', () => {
   })
 
   test('the undo names what it is undoing', () => {
-    // `actions.restore(g)` with no argument clears EVERYTHING keeping a card off
-    // a pile. That is right for "bring this back" out of the restore list, and
-    // wrong for an undo: it also drops a park or a manual pile that had nothing
-    // to do with the action being undone, which is how one Undo click destroyed
-    // a park the product could not re-create. Every toast that offers an Undo
-    // has to restore a named target.
+    // `actions.restore(g)` with no second argument clears EVERYTHING keeping a
+    // card off the desk. That is right for "bring this back", and wrong for an
+    // undo: it also drops a due date and a manual placement that had nothing to
+    // do with the action being reversed, which is how one Undo click destroyed
+    // a deferral the product could not re-create. Every toast that offers an
+    // Undo has to restore a named target.
     for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardDetail.tsx']) {
       const src = read(f)
       const offers = [...src.matchAll(/label:\s*'Undo'([\s\S]{0,240})/g)]
@@ -158,41 +158,42 @@ describe('a card that leaves the list can come back', () => {
     }
   })
 
-  test('the restore list is reachable without a card to open', () => {
-    // The detail is unreachable once a card is off every pile, so the route back
-    // cannot start from the card. It is a collapsed group at the foot of Now
-    // rather than a modal — a pile of his cards belongs on the page that holds
-    // his piles — and a palette command opens Now with that group expanded.
+  test('what he finished is reachable without a card to open', () => {
+    // The detail is unreachable once a card is off the desk, so the route back
+    // cannot start from the card. It used to be a collapsed fourth chapter at
+    // the foot of the page with its own row shape and its own restore button;
+    // it is the same table with its Status filter set now, so every other
+    // filter still applies and the control that put a card away is the control
+    // that takes it back out.
     const app = read('src/web/App.tsx')
-    expect(app, 'no palette command opens the restore list').toMatch(/cards:done/)
-    expect(app, 'the restore command does not open the group it names')
-      .toMatch(/cards:done[\s\S]{0,400}setParam\('done'/)
+    expect(app, 'no palette command reaches what he finished').toMatch(/cards:status-done/)
+    expect(app, 'the command does not set the filter it names')
+      .toMatch(/cards:status-done[\s\S]{0,400}setParam\('status'/)
+    expect(app, 'the filter it sets is not Done').toMatch(/setParam\('status', ?'done'\)/)
 
     const home = read('src/web/pages/Home.tsx')
-    // The group's name moved with the rest of the vocabulary: `Not mine` became
-    // `Won't do` when it became a status, and a restore list is the one place
-    // the two names would have sat side by side.
-    expect(home, 'the desk no longer renders the restore group').toMatch(/Done and won't do/)
-    expect(home, 'the restore group cannot fetch what it lists').toContain('actions.doneCards')
-    expect(home, 'nothing in the group brings a card back').toContain('actions.restore')
+    expect(home, 'the fourth chapter came back').not.toMatch(/Done and not mine/)
+    expect(home, 'the settled list cannot fetch what it shows').toContain('actions.doneCards')
+    expect(home, 'nothing brings a card back').toContain('actions.restore')
   })
 })
 
 describe('the console does not become a feed again', () => {
   const tsx = web.filter(f => f.endsWith('.tsx'))
 
-  test('Now is a table with a shared colgroup', () => {
-    // Three `<tbody>` groups sharing one `<colgroup>` is the whole trick: it is
-    // what lets grouping and column alignment coexist without either becoming a
-    // mode. A list of divs cannot hold an x-position down the page.
+  test('the desk is one table with a shared colgroup', () => {
+    // One `<colgroup>` is what holds an x-position down the page; a list of divs
+    // cannot. And there is exactly ONE `<tbody>` now — the three chaptered
+    // groups are gone, because where a card stands is a value he sets rather
+    // than a heading the machine writes above it.
     const table = read('src/web/components/CardTable.tsx')
     expect(table).toContain('<colgroup>')
     expect(table).toMatch(/<thead/)
     const home = read('src/web/pages/Home.tsx')
     expect(home).toContain('<table')
     expect(home).toContain('TableCols')
-    expect((home.match(/<tbody>/g) ?? []).length, 'the piles stopped being separate tbody groups')
-      .toBeGreaterThanOrEqual(1)
+    expect((home.match(/<tbody>/g) ?? []).length, 'the desk went back to chaptered groups')
+      .toBe(1)
   })
 
   test('no row action is invisible', () => {
@@ -285,11 +286,10 @@ describe('the console does not become a feed again', () => {
     const field = primitives.slice(primitives.indexOf('export function Field('))
     expect(field.slice(0, 300), 'Field grew a hint again').not.toMatch(/\bhint\b/)
 
-    // The Now page's own section header had the same prop. It is `GroupHead`
-    // now, and it takes a count, not a sentence.
-    const table = read('src/web/components/CardTable.tsx')
-    const head = table.slice(table.indexOf('export function GroupHead('))
-    expect(head.slice(0, 400), 'the group header grew a hint').not.toMatch(/\bhint\b/)
+    // The desk's own group header carried the same prop. Both the prop and the
+    // component are gone: there are no groups to head.
+    expect(read('src/web/components/CardTable.tsx'), 'the chaptered group header came back')
+      .not.toMatch(/export function GroupHead\(/)
 
     // And Pulse's chart panel, which carried six of them: `tasks finished each
     // day` under `Throughput`, `what is piling up, and how stale it is` under
@@ -312,7 +312,9 @@ describe('the shell reaches everywhere from both places', () => {
     // dismissal at exactly the moment something is broken.
     expect(app, 'the phone bar filters the destination list again')
       .not.toMatch(/TABS\.filter\([^)]*mobile/)
-    expect(app, 'the More sheet came back').not.toMatch(/\bsetMore\b/)
+    for (const f of web) {
+      expect(read(f), `${f}: a hidden overflow menu came back`).not.toMatch(/\bsetMore\b/)
+    }
   })
 
   test('navigating keeps the harness flag and drops the page-local filter', () => {
@@ -321,9 +323,29 @@ describe('the shell reaches everywhere from both places', () => {
     expect(route).toMatch(/'static'/)
   })
 
+  test('an open card does not cover the phone bar', () => {
+    // The detail sheet is `fixed bottom-0 z-50` at 55dvh, and the bar is 53px
+    // at `bottom-0` under it: `elementFromPoint` returned something other than
+    // the button at all six destinations, and the screenshots show no bar at
+    // all. Desk → Mail cost a dismissal first. This is a push sheet — the list
+    // stays live underneath it — so the shell has to stay live under that.
+    const css = read('src/web/styles.css')
+    expect(css, 'the strip the bar owns is no longer measured anywhere')
+      .toMatch(/--nav-h:/)
+    const home = read('src/web/pages/Home.tsx')
+    const sheet = home.slice(home.indexOf('function PushDetail('))
+    expect(sheet, 'the sheet went back to sitting on the bottom edge')
+      .toMatch(/bottom: 'var\(--nav-h\)'/)
+    expect(sheet, 'the sheet can grow over the bar again')
+      .toMatch(/maxHeight: '[^']*--nav-h/)
+  })
+
   test('the filter and the open row both live in the URL', () => {
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'the source filter went back into useState').toMatch(/useParam\('src'\)/)
+    // Either subscription shape. The desk reads six params at once now, so it
+    // takes the plural — what is being pinned is that `src` comes out of the
+    // address bar and not out of component state.
+    expect(home, 'the source filter went back into useState').toMatch(/useParams?\(\[?[^)]*'src'/)
     expect(home, 'the open row went back into useState').toContain('useDetailKey')
     const route = read('src/web/lib/route.ts')
     // Opening a row is a push so Back closes it; a filter is a replace so twenty
@@ -465,14 +487,39 @@ describe('the hand-off has to be a real link', () => {
 
   test('Fetch takes no text from anywhere', () => {
     // The property that keeps it a collector rather than a chat box: the
-    // question is a constant. Nothing a person can type reaches the prompt, and
-    // the route takes no body at all.
+    // question is a constant. Nothing a person can type reaches the prompt.
+    //
+    // This used to be pinned as "the route reads no body at all", which was the
+    // right invariant wearing the wrong clothes. Fetch can now be scoped to one
+    // source, so the route does read a body — and the guarantee has to be
+    // stated as what it always meant: whatever comes off the wire is checked
+    // against a closed set before it reaches anything, and the prompt itself is
+    // still a constant chosen by connector. A free string would fail the second
+    // assertion below even though it passes the first.
     const orchestrator = read('src/server/fetch/index.ts')
     expect(orchestrator, 'promptFor started taking an argument other than the connector')
       .toMatch(/function promptFor\(name: Connector\)/)
+
     const api = read('src/server/api.ts')
-    const route = /api\.post\('\/fetch'[\s\S]{0,200}/.exec(api)?.[0] ?? ''
-    expect(route, 'the fetch route started reading a request body').not.toMatch(/req\.json|req\.query|req\.param/)
+    const route = /api\.post\('\/fetch'[\s\S]{0,400}?\n\}\)/.exec(api)?.[0] ?? ''
+    expect(route, 'the fetch route vanished or changed shape').toContain('startFetch')
+    expect(route, 'fetch started reading the query string, which nothing validates')
+      .not.toMatch(/req\.query|req\.param/)
+
+    // The one value it accepts is checked against the closed scope list, and
+    // checked FIRST. Asserting only that the guard is present would pass a
+    // route that ran it after the collection had already started, so this is an
+    // ordering claim rather than a presence one.
+    const guard = route.indexOf('isFetchScope(only)')
+    const start = route.indexOf('startFetch')
+    expect(guard, 'the fetch route stopped validating its body against the scope list')
+      .toBeGreaterThan(-1)
+    expect(guard, 'the scope guard runs after the collection it was meant to gate')
+      .toBeLessThan(start)
+
+    const scopes = /export const FETCH_SCOPES = \[([^\]]*)\]/.exec(orchestrator)?.[1] ?? ''
+    expect(scopes.split(',').filter(Boolean), 'the scope list is no longer a closed set of sources')
+      .toHaveLength(5)
   })
 })
 
@@ -640,13 +687,13 @@ describe('a page has no panels on it', () => {
     }
   })
 
-  test('a pile with no rows is not rendered', () => {
-    // `Now 0` plus the sentence under it cost 109px of the fold to report a
-    // zero, and three of them stacked cost 331px of an 844px phone to say
-    // nothing at all. The groups are filtered before they are mapped.
+  test('a filter that matches nothing is one line', () => {
+    // Three headings with zeroes beside them and an apology under each cost
+    // 331px of an 844px phone to say nothing at all. There is one list now, so
+    // there is one empty state, and it is one word on the row grid.
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'Now went back to rendering every pile whatever is in it')
-      .toMatch(/groups\.filter\(g => g\.shown\.length > 0\)/)
+    expect(home, 'the desk went back to rendering a chapter per pile')
+      .toMatch(/rows\.length === 0/)
     expect(home, 'the per-group empty phrase came back').not.toMatch(/emptyWord/)
     const table = read('src/web/components/CardTable.tsx')
     expect(table, 'EmptyRow came back').not.toMatch(/export function EmptyRow/)
@@ -689,6 +736,8 @@ describe('a page never scrolls sideways', () => {
    * out clean from being edited away by a plausible-looking change.
    */
 
+  const tsx = web.filter(f => f.endsWith('.tsx'))
+
   test('the page column clips its own horizontal overflow', () => {
     // `.hit` hangs a touch target 6px past a control's box on a coarse pointer,
     // and an absolutely positioned box is scrollable overflow whatever it is
@@ -713,15 +762,45 @@ describe('a page never scrolls sideways', () => {
     expect(css, '`.hit` left its coarse-pointer scope').toMatch(hit)
   })
 
-  test('the phone bar keeps five destinations and its target', () => {
+  test('every touch target hangs off the control it belongs to', () => {
+    // The outset is `position: absolute; inset: -6px`, and that only means "6px
+    // around this control" if the control is itself a containing block. Without
+    // `relative` the box resolves against the nearest positioned ancestor —
+    // `<main>` — so what the control gets is not a collar but a transparent,
+    // tap-eating sheet the size of the whole page column. Later content paints
+    // over most of it, which is why it does not look like anything; it shows up
+    // as a phone that ignores taps in the empty parts of a page. The Due cell
+    // and the Work tabs both shipped that way.
+    const positioned = /(^|\s)relative(\s|$)/
+    const primitives = read('src/web/components/primitives.tsx')
+    const sizes = /const SIZE: Record<ButtonSize, string> = \{([^}]*)\}/.exec(primitives)?.[1] ?? ''
+    expect(sizes, 'the button size table moved').toContain('hit')
+
+    for (const f of tsx) {
+      for (const lit of read(f).match(/`[^`]*`|'[^'\n]*'|"[^"]*"/g) ?? []) {
+        const cls = lit.slice(1, -1)
+        if (!/(^|\s)hit(\s|$)/.test(cls)) continue
+        // `Button` is the one indirection: the size table hands `hit` to a base
+        // class list that carries the `relative`, which is checked below.
+        if (f.endsWith('primitives.tsx') && sizes.includes(lit)) continue
+        expect(cls, `${f}: \`hit\` on a control with no containing block\n  ${cls.split('\n')[0]}`)
+          .toMatch(positioned)
+      }
+    }
+
+    expect(primitives, '`Button` stopped positioning the box its sizes ask for')
+      .toMatch(/className=\{`relative[^`]*\$\{SIZE\[size\]\}/)
+  })
+
+  test('the phone bar keeps six destinations and its target', () => {
     // The offender scan named this bar, because it is what visibly widened.
     // It was the symptom. It must not be "fixed" by dropping a destination or
     // shrinking the target, which is what a scroll report usually buys.
     const app = read('src/web/App.tsx')
     const tabs = app.match(/^\s*\{ path: '/gm) ?? []
-    expect(tabs.length, 'a destination left the tab bar').toBe(5)
+    expect(tabs.length, 'a destination left the tab bar').toBe(6)
     expect(app, 'the tab target dropped below 44px').toMatch(/min-h-12/)
-    expect(app, 'the Now badge lost its accent').toMatch(/bg-accent text-on-accent/)
+    expect(app, 'the waiting badge lost its accent').toMatch(/bg-accent text-on-accent/)
   })
 })
 
@@ -733,7 +812,8 @@ describe('a chart is drawn only when there is a chart to draw', () => {
     // it beside, so it takes the same one-line row an empty series takes.
     const pulse = read('src/web/pages/Pulse.tsx')
     expect(pulse, 'the sparse test is gone').toMatch(/marked\.length < 2/)
-    for (const series of ['done', 'appeared', 'clearedShape']) {
+    // `appeared` is not in this list any more: Arrived folded into Flow.
+    for (const series of ['done', 'clearedShape']) {
       expect(pulse, `${series} stopped asking whether it has a shape`)
         .toMatch(new RegExp(`empty: ${series}\\.thin`))
     }
@@ -771,117 +851,232 @@ describe('one surface spends the accent once', () => {
   })
 })
 
-/* ========================================================================== */
 
-describe('the desk speaks one vocabulary', () => {
-  /*
-   * Eight words were retired at once, and every one of them was retired for the
-   * same reason: it meant more than one thing on the same screen. `Now` was the
-   * page title, the nav tab, a group heading and a field name, so the one word
-   * answered four questions and none of them clearly. `Open` was a group of
-   * cards and the verb on the button beside them. `Later` was a deferral and a
-   * time. `Not mine` was a button that has since become a status, which is
-   * exactly the kind of promotion that leaves two names for one state behind.
-   *
-   * What did NOT change is what the three groups compute or what the JSON calls
-   * them: `pile` is still `now | open | parked` on the wire, because renaming a
-   * field to fix a label is a migration bought with nothing.
-   *
-   * `Open` survives as a verb pointed at another product — `Open in Claude`,
-   * and the detail pane's own `Open`, which hands a URL to whatever owns it.
-   * DESIGN §4.3 keeps that one by name. So this reads labels, not prose: a word
-   * inside a sentence is not a control.
-   */
-  const RETIRED = ['Now', 'Park', 'Parked', 'Later', 'Later today', 'Not mine', 'Wake now']
+/**
+ * The vocabulary, made irreversible.
+ *
+ * Seven words left this product in one wave — `Now` as a place, `Open` as a
+ * pile, `Parked`, `Later`, `Not mine`, `Wake now`, `DM` — and a rename that is
+ * only in the diff comes back one plausible edit at a time. These are the
+ * assertions that make it stick. Where the work stands is exactly five words:
+ * Not started, In progress, In review, Done, Won't do. The first destination is
+ * Desk. `Open` survives only as the verb on a button.
+ */
+describe('the dead words stay dead', () => {
+  const tsx = web.filter(f => f.endsWith('.tsx'))
 
-  const asLabel = (word: string) =>
-    new RegExp(
-      String.raw`label\s*[:=]\s*['"\`]${word}['"\`]` + '|' +
-      String.raw`title\s*[:=]\s*['"\`]${word}['"\`]` + '|' +
-      String.raw`ariaLabel\s*=\s*['"\`{]\s*['"\`]?${word}` + '|' +
-      String.raw`>\s*${word}\s*<`,
-    )
+  /** Source with every comment removed, so a note about history is not a label. */
+  const speech = (f: string) =>
+    read(f)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter(l => !l.trim().startsWith('//'))
+      .join('\n')
 
-  test('no retired word is used as a label anywhere in the client', () => {
-    for (const f of web) {
-      const src = read(f)
-      for (const word of RETIRED) {
-        expect(src, `${f}: \`${word}\` is still a label — see DESIGN §1`)
-          .not.toMatch(asLabel(word))
+  test('no component says a word the product no longer has', () => {
+    const BANNED = [
+      'Parked', 'Not mine', 'Wake now', 'Later today', 'Move to',
+      'Bring it back', 'Done and not mine', 'Let Wake decide',
+    ]
+    for (const f of tsx) {
+      const src = speech(f)
+      for (const word of BANNED) {
+        expect(src, `${f}: the product says "${word}" again`).not.toContain(word)
       }
     }
   })
 
-  test('`Open` is retired as a name and kept as a verb', () => {
-    // The two halves of the brief have to be read together. §1 retires the
-    // group heading `Open`; §4.3 keeps the detail pane's `Open` control by name
-    // and gives it a `slack://` URL to hand over. So the word may not be
-    // something a card IS, and may still be something you DO to one — which is
-    // also why `Open in Claude` is untouched.
-    for (const f of web) {
-      const src = read(f)
-      expect(src, `${f}: \`Open\` is being used as a name for a group of cards`)
-        .not.toMatch(/(?:label|title)\s*[:=]\s*['"`]Open['"`]/)
+  test('a pile is never a label', () => {
+    // The machine's own classification is still on the wire and still sorts the
+    // list. It is not a heading, a chip or a sentence: reading it as one made a
+    // guess about urgency look like a decision he had made.
+    for (const f of tsx) {
+      const src = speech(f)
+      for (const m of src.matchAll(/'[^'\n]*\bpiles?\b[^'\n]*'|>[^<>{}\n]*\bpiles?\b[^<>{}\n]*</gi)) {
+        throw new Error(`${f}: a pile is being shown to a person\n  ${m[0].trim()}`)
+      }
     }
-    const detail = read('src/web/components/CardDetail.tsx')
-    expect(detail, 'the way out to the thing itself is gone').toMatch(/Open <ArrowUpRight/)
+    expect(true).toBe(true)
   })
 
-  test('the three groups have exactly one set of names', () => {
-    // Read from the module rather than the rendered heading: the point of the
-    // lookup table is that there is one place the field name and the word meet.
-    const { PILE_LABEL } = require('../src/web/lib/types') as typeof import('../src/web/lib/types')
-    expect(PILE_LABEL).toEqual({ now: 'On you', open: 'Waiting', parked: 'Snoozed' })
+  test('there is no direct-message concept left anywhere', () => {
+    // DMs are not collected at all now. The field name and the literal both go,
+    // because a dead branch that still parses is a branch somebody re-enables.
+    for (const f of [...walk('src/server'), ...web]) {
+      const src = read(f)
+      expect(src, `${f}: is_dm came back`).not.toContain('is_dm')
+      expect(src, `${f}: a 'dm' kind came back`).not.toContain("'dm'")
+    }
+  })
 
+  test('nothing in the product is an emoji', () => {
+    // Push notification bodies are the one exception, and they are the one
+    // surface the operating system renders rather than this design does.
+    for (const f of web) {
+      const m = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.exec(read(f))
+      if (m) throw new Error(`${f}: an emoji reached the DOM — ${m[0]}`)
+    }
+    expect(true).toBe(true)
+  })
+})
+
+/**
+ * Everything is in one visible view.
+ *
+ * A menu behind a glyph is where controls go to be forgotten: the overflow menu
+ * this replaces held every deferral control in the product, opened them 1400px
+ * below the viewport, and was the reason nobody could find them. A control
+ * worth hiding was worth a button; one not worth a button was not worth
+ * shipping.
+ */
+describe('nothing hides behind a glyph', () => {
+  test('there is no overflow menu, anywhere, for any reason', () => {
+    for (const f of web) {
+      const src = read(f)
+      expect(src, `${f}: an overflow menu came back`)
+        .not.toMatch(/MoreHorizontal|MoreVertical|EllipsisVertical/)
+      expect(src, `${f}: an overflow trigger came back`).not.toContain('More actions')
+      expect(src, `${f}: an ellipsis trigger came back`).not.toContain('⋯')
+    }
+  })
+
+  test('the detail pane shows status, priority and due without being asked', () => {
+    // All three used to be behind the menu. They are the three facts a person
+    // opens a card to change, so they are the three that are never hidden.
+    const detail = read('src/web/components/CardDetail.tsx')
+    for (const label of ['Status', 'Priority', 'Due']) {
+      expect(detail, `the ${label} control went back behind a menu`)
+        .toMatch(new RegExp(`<Row label="${label}"`))
+    }
+  })
+})
+
+/**
+ * Every repeating list pages, and pages the same way.
+ *
+ * `slice(0, 40)` is not pagination — it is a silent floor under everything past
+ * the fortieth row, and the reader is never told. One `Pager`, one `PAGE_SIZE`,
+ * and the page in the URL so a reload and the Back button both work.
+ */
+describe('a long list is paged, not truncated', () => {
+  const PAGED = [
+    'src/web/pages/Home.tsx',
+    'src/web/pages/Settings.tsx',
+    'src/web/components/sessions.tsx',
+  ]
+
+  test('every repeating row list reaches for the one pager', () => {
+    for (const f of PAGED) {
+      // A file that has not landed yet cannot be asserted about; App.tsx
+      // imports each of these, so a missing one fails the build rather than
+      // slipping through here.
+      let src: string
+      try { src = read(f) } catch { continue }
+      expect(src, `${f}: a repeating list that does not page`).toContain('Pager')
+    }
+  })
+
+  test('the page lives in the URL', () => {
+    // A page held in `useState` cannot be bookmarked and does not survive the
+    // reload that happens mid-triage — the same reason the filter is a param.
+    expect(read('src/web/pages/Home.tsx'), 'the desk page went back into useState')
+      .toMatch(/setParam\('page'/)
+  })
+
+  test('the page in the URL is not clamped before the list has arrived', () => {
+    // Measured: `/?page=3` became `/` about 40ms after load, while the table
+    // still held zero rows. The clamp effect runs on the first commit, when
+    // `state` is null — so `rows.length` is 0, `pageCount` answers 1, and every
+    // reloaded or bookmarked page-N link landed on page 1 and rewrote itself on
+    // the way. An unread list and an empty one have to be distinguishable
+    // before anything is allowed to move the reader off a page.
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'the desk went back to spelling its own group names')
-      .toMatch(/title: PILE_LABEL\.now[\s\S]{0,200}title: PILE_LABEL\.parked/)
+    expect(home, 'the desk cannot tell an unread list from an empty one')
+      .toMatch(/const loaded = /)
+    expect(home, 'the page clamp fires again before any card exists to count')
+      .toMatch(/if \(!loaded\) return\s*\n\s*if \(page > pages\)/)
   })
 
-  test('the destination is called the desk', () => {
-    const app = read('src/web/App.tsx')
-    expect(app, 'the first tab is not the desk').toMatch(/\{ path: '\/', label: 'Desk'/)
+  test('how the desk is ordered lives in the URL beside what it shows', () => {
+    // There was no ordering at all: the Due header was inert, so an overdue
+    // card sat below one due in three weeks and the only way to find what was
+    // due soonest was to read all 112 rows. It is a URL parameter rather than
+    // header state for the same reason the filter and the page are — it has to
+    // survive a reload and go in a bookmark.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the desk lost its ordering control').toMatch(/setParam\('sort'/)
+    expect(home, 'the order stopped being read from the address bar')
+      .toMatch(/p\.sort === 'due'/)
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'the Due header stopped announcing which way it sorts')
+      .toMatch(/aria-sort=/)
   })
 
-  test('the piles keep their field names on the wire', () => {
-    // The rename was a vocabulary change, not a schema change. If this ever
-    // fails, something renamed a column to fix a word.
-    const types = read('src/web/lib/types.ts')
-    expect(types).toMatch(/export type Pile = 'now' \| 'open' \| 'parked'/)
+  test('one page size, shared by the pager and everything it counts', () => {
+    // A caller that sliced by 25 under a pager counting by 50 prints a range
+    // that does not describe the rows beneath it.
+    const primitives = read('src/web/components/primitives.tsx')
+    expect(primitives).toMatch(/export const PAGE_SIZE = \d+/)
+    expect((primitives.match(/PAGE_SIZE/g) ?? []).length, 'the pager stopped using its own constant')
+      .toBeGreaterThan(1)
   })
 })
 
-describe('nothing in the product is behind a kebab', () => {
-  test('no component imports a three-dot glyph', () => {
-    // `CardDetail` had one, and everything behind it — every deferral control in
-    // the product — appeared at the bottom of a scrolling body while its trigger
-    // sat in a pinned bar, so on a long card the reader pressed it and nothing
-    // appeared to happen. The contents have real homes now; the way to stop the
-    // menu returning is to ban the glyph.
-    for (const f of web) {
-      expect(read(f), `${f}: a kebab came back`)
-        .not.toMatch(/\b(MoreHorizontal|MoreVertical|EllipsisVertical|Ellipsis)\b/)
+/**
+ * The desk's own four columns, and the ingestion rules the alert channels need.
+ *
+ * The column count is a design decision one plausible line undoes; the Slack
+ * rules are the difference between reading a bot channel and reading nothing.
+ */
+describe('the desk shows four columns and the alert channels are really read', () => {
+  test('four headings, four cols', () => {
+    const table = read('src/web/components/CardTable.tsx')
+    const head = table.slice(table.indexOf('export function TableHead('), table.indexOf('export function TableCols('))
+    expect((head.match(/<th\b/g) ?? []).length, 'the desk grew or lost a column').toBe(4)
+    const cols = table.slice(table.indexOf('export function TableCols('))
+    expect((cols.slice(0, 600).match(/<col\b/g) ?? []).length).toBe(4)
+  })
+
+  test('a missing Slack tool is an error, not an empty desk', () => {
+    // The whole failure this wave exists to fix: a source that cannot answer
+    // reporting `ok: 1, count: 0`, which is indistinguishable from a healthy
+    // sync of a quiet morning.
+    const slack = read('src/server/sources/slack.ts')
+    const fetchFn = slack.slice(slack.indexOf('async fetch()'))
+    expect(fetchFn, 'the Slack poll swallows a failure as an empty list')
+      .not.toMatch(/\breturn \[\]/)
+  })
+
+  test('bots are included on a channel read and never on a search', () => {
+    // `include_bots` belongs to the search API. Passing it beside a
+    // `channel_id` is the shape that reads as "we asked for bot messages" while
+    // asking a call that does not take the parameter.
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack, 'the alert channels stopped asking for bot messages').toContain('include_bots: true')
+    for (const m of slack.matchAll(/include_bots/g)) {
+      const around = slack.slice(Math.max(0, m.index! - 200), m.index! + 200)
+      expect(around, 'include_bots is being passed to a channel read')
+        .not.toContain('channel_id:')
     }
   })
 
-  test('nothing is labelled with a shrug', () => {
-    for (const f of web) {
-      const src = read(f)
-      expect(src, `${f}: a control is labelled "More"`).not.toMatch(/>\s*More\s*</)
-      expect(src, `${f}: a control is labelled with an ellipsis`)
-        .not.toMatch(/label\s*[:=]\s*['"`](\.\.\.|…|⋯)['"`]/)
+  test('a drawn path animates only when frames are being produced', () => {
+    // The generic gate above covers every `initial=` in `src/web`; this names
+    // the one component whose marks are drawn rather than laid out, because a
+    // path stuck at `pathLength: 0` is an invisible chart rather than a chart
+    // that has not finished moving.
+    const charts = read('src/web/components/charts.tsx')
+    for (const m of charts.matchAll(/<motion\.path\b([\s\S]{0,400}?)\/>/g)) {
+      const el = m[1]!
+      if (!/initial=/.test(el)) continue
+      expect(el, 'a drawn path animates in a document that is not being painted')
+        .toMatch(/\b(still|reduce|STATIC_MODE)\b/)
     }
-  })
-
-  test('the detail keeps its controls on the surface', () => {
-    const detail = read('src/web/components/CardDetail.tsx')
-    for (const block of ['Status', 'Snooze', 'Where']) {
-      expect(detail, `the ${block} control left the surface`)
-        .toMatch(new RegExp(String.raw`<Block label="${block}"`))
-    }
-    expect(detail, 'the pin left the action bar').toMatch(/actions\.pin\(/)
+    expect(true).toBe(true)
   })
 })
+
+/* ------------------------ one row per thread, and the swipe ---------------- */
 
 describe('the count and the highlight are one fact', () => {
   const table = read('src/web/components/CardTable.tsx')
@@ -910,19 +1105,16 @@ describe('the count and the highlight are one fact', () => {
   })
 
   test('being named changes the word and not the number', () => {
-    const detail = read('src/web/components/CardDetail.tsx')
-    expect(detail, 'the tagged flag stopped being a word').toMatch(/activity\.tagged/)
     expect(table, 'the tagged flag started deciding whether the edge is drawn')
       .not.toMatch(/activity\.tagged[^\n]*inset 2px/)
   })
 
-  test('the reply total is the source\'s, not the array\'s length', () => {
+  test("the reply total is the source's, not the array's length", () => {
     // Only the newest twenty replies are stored and Slack's own header carries
     // the real total, so counting the array would report a long thread as short.
     const thread = read('src/web/lib/thread.ts')
-    const total = thread.slice(thread.indexOf('export function replyTotal'))
-    expect(total, 'the reply total went back to counting what was kept')
-      .not.toMatch(/\.length/)
+    expect(thread.slice(thread.indexOf('export function replyTotal')),
+      'the reply total went back to counting what was kept').not.toMatch(/\.length/)
   })
 })
 
@@ -939,12 +1131,31 @@ describe('reading a row is what clears it', () => {
     // row before anything is clicked, every morning — if that counts as reading
     // it, the `+N` and the edge are cleared by the desk loading, and the feature
     // silently destroys itself at 7am with nothing to see.
-    const effect = detail.slice(detail.indexOf('if (resting) return'), detail.indexOf('const run ='))
-    expect(effect, 'the resting guard is gone from the acknowledgement').toContain('actions.ack(')
+    const effect = detail.slice(detail.indexOf('if (resting) return'))
+    expect(effect.slice(0, 400), 'the resting guard is gone from the acknowledgement')
+      .toContain('actions.ack(')
     expect(detail, 'the pane no longer knows whether it was asked for')
       .toMatch(/resting\?: boolean/)
+    // `!selected`, not `!selectedKey`: `shown` also falls back to the top row
+    // when the key in the URL names a card that is no longer on the desk — one
+    // he finished, or one a poll swept out from under the open pane — and the
+    // key alone cannot tell that apart from a card he is actually reading.
     expect(home, 'the desk stopped telling the pane it is resting')
       .toMatch(/resting=\{!selected\}/)
+    expect(home, 'the resting flag went back to reading the URL rather than the row')
+      .not.toMatch(/resting=\{!selectedKey\}/)
+  })
+
+  test('and the phone sheet says it too', () => {
+    // The sheet is gated on `selectedKey`, which is still set in every case
+    // `shown` falls back to the top row — so a `CardDetail` rendered here
+    // without `resting` acknowledges a card nobody opened, at the width he
+    // actually reads on. Every viewport below the pane width takes this path.
+    const sheet = home.slice(home.indexOf('function PushDetail('))
+    expect(sheet, 'the sheet stopped passing the flag through to the detail')
+      .toMatch(/<CardDetail[^>]*resting=\{resting\}/)
+    expect(home, 'the desk stopped telling the sheet it is resting')
+      .toMatch(/<PushDetail card=\{shown\} resting=\{!selected\}/)
   })
 
   test('nothing else on the desk acknowledges anything', () => {
@@ -954,72 +1165,20 @@ describe('reading a row is what clears it', () => {
     expect(read('src/web/components/CardTable.tsx'), 'a row acknowledges itself')
       .not.toContain('actions.ack(')
   })
-})
 
-describe('the cross closes the pane, and the hairline resizes it', () => {
-  const home = read('src/web/pages/Home.tsx')
-
-  test('the dismissal is a fact the page holds', () => {
-    // `closeDetail()` only clears the fragment, and the pane falls back to the
-    // top row — so X cleared a selection nobody could see and changed nothing
-    // visible. It was a dead control on the product's main screen.
-    expect(home, 'the pane went back to having nothing to dismiss')
-      .toMatch(/const \[dismissed, setDismissed\] = useState\(false\)/)
-    expect(home, 'a dismissed pane still shows the top row')
-      .toMatch(/dismissed \? null :/)
-    expect(home, 'the cross no longer dismisses').toMatch(/onClose=\{dismiss\}/)
-  })
-
-  test('opening any row brings it back', () => {
-    // Dismissed has to mean "until asked for again", not "until reload".
-    expect(home, 'the dismissal is permanent')
-      .toMatch(/if \(selectedKey\) setDismissed\(false\)/)
-  })
-
-  test('the pane is actually resizable, and remembers', () => {
-    expect(home, 'the pane went back to a breakpoint width').toMatch(/width: pane\.width/)
-    expect(home, 'the left hairline is no longer a grab handle').toContain('cursor-col-resize')
-    expect(home, 'the width is no longer remembered').toContain('writePane')
-    expect(home, 'a double-click no longer resets it').toMatch(/onDoubleClick/)
-    // And the column budget follows the real pane rather than the old constant,
-    // or `Where` survives at a width where the list no longer has room for it.
-    expect(home, 'the columns stopped following the pane')
-      .toMatch(/columnsFor\(width, hasPane \? pane\.width : 0\)/)
-  })
-
-  test('the drag is bounded by the room there is, not only by itself', () => {
-    // `clampPane` knows the pane's own 320–640; it does not know how wide the
-    // window is, and the width is persisted — so a pane dragged wide on a 1920
-    // monitor came back on a 1280 laptop and drove the elastic Title column to
-    // zero on every row. `maxPaneFor` is what the arithmetic is bounded against.
-    expect(home, 'the pane went back to a bound that ignores the viewport')
-      .toMatch(/usePaneWidth\(maxPaneFor\(width\)\)/)
-    expect(home, 'a window that narrows no longer takes the room back')
-      .toMatch(/setWidth\(w => clampPane\(w, max\)\)/)
-  })
-
-  test('the resize handle cannot be left holding a drag nobody is making', () => {
-    /*
-     * The same latch the swipe layer documents and guards against. A
-     * right-click on the hairline started a drag whose `pointerup` was consumed
-     * by the context menu that opened over it, and the pane then tracked the
-     * bare cursor every time it crossed the strip the mouse travels through on
-     * its way between the list and the pane.
-     */
-    const handle = home.slice(home.indexOf('function usePaneWidth'))
-    expect(handle, 'a secondary button starts a pane drag again')
-      .toMatch(/if \(e\.button > 0\) return/)
-    expect(handle, 'the pane resizes under a cursor nobody is pressing')
-      .toMatch(/if \(e\.buttons === 0\)/)
-    expect(handle, 'a cancelled pointer leaves the handle latched')
-      .toMatch(/onPointerCancel: release/)
-    expect(home, 'the handle gave its drag back to the page scroll on touch')
-      .toContain('touch-none')
+  test('an ack is not a card cleared', () => {
+    // The pane acknowledges automatically now, so counting one as throughput
+    // reports a thread still sitting on the desk as work that left it.
+    const analytics = read('src/server/analytics.ts')
+    const cleared = analytics.slice(analytics.indexOf('const cleared ='))
+    expect(cleared.slice(0, 200), 'reading a row went back to counting as clearing it')
+      .not.toContain('card_acked')
   })
 })
 
 describe('a row can be acted on without being opened', () => {
   const swipe = read('src/web/components/swipe.tsx')
+  const css = read('src/web/styles.css')
 
   test('every row with a status has the same three actions', () => {
     for (const f of ['src/web/components/CardTable.tsx', 'src/web/pages/Work.tsx']) {
@@ -1052,6 +1211,20 @@ describe('a row can be acted on without being opened', () => {
       .toMatch(/addEventListener\('wheel',[^)]*\{ passive: false \}/)
     expect(swipe, 'the pointer binding stopped being pointer-type agnostic')
       .toMatch(/onPointerDown/)
+
+    /*
+     * And its settle timer does not get to overrule a row that opened after it.
+     *
+     * A wheel has no `pointerup`, so the end of one is a 120ms gap — extended by
+     * every frame of macOS momentum. The wheel path publishes on its *first*
+     * engaged frame, so by the time the timer lands another row may legitimately
+     * own the store: flick one row half-open, flick the next, and the first
+     * row's timer would shut the drawer under the thumb, or steal back the key
+     * the desk hands the keyboard to.
+     */
+    const settle = swipe.slice(swipe.indexOf('const end = () => {'))
+    expect(settle.slice(0, 1200), 'the wheel settle timer publishes over whatever is open now')
+      .toMatch(/if \(openSwipeKey\(\) !== key\)/)
   })
 
   test('a swipe is not a tap, and the page still scrolls', () => {
@@ -1065,15 +1238,14 @@ describe('a row can be acted on without being opened', () => {
      *
      * `touch-action` does not apply to a table row — rows, row groups, columns
      * and column groups are excluded by the property itself — so an inline
-     * `touchAction` on the desk's `<tr>` was dropped by every browser while this
-     * test happily pinned the string. It lives in the stylesheet now, on the
-     * cells, and the rows carry the attribute that selects it.
+     * `touchAction` on the desk's `<tr>` is dropped by every browser while a
+     * test happily pins the string. It lives in the stylesheet, on the cells,
+     * and the rows carry the attribute that selects it.
      */
     expect(
       swipe.slice(swipe.indexOf('const bind: SwipeBind')),
       'the touch policy went back to an inline style on a <tr>',
     ).not.toMatch(/touchAction/)
-    const css = read('src/web/styles.css')
     expect(css, 'the swipe rows lost their touch-action rule')
       .toMatch(/\[data-swipe='pan-y'\],\s*\n\s*\[data-swipe='pan-y'\] > td \{ touch-action: pan-y; \}/)
     // Every element that takes the gesture, not one per file: the attribute is
@@ -1084,19 +1256,42 @@ describe('a row can be acted on without being opened', () => {
       const bound = src.split("data-swipe={swipe.bind['data-swipe']}").length - 1
       const rows = src.split('swipe.bind.onPointerDown').length - 1
       expect(bound, `${f}: ${rows - bound} swipeable element(s) declare no touch policy`).toBe(rows)
+      /*
+       * And the same totality for the gesture's own style, which is where
+       * `user-select: none` lives while the drawer is moving. The single
+       * `removeAllRanges()` at engage clears only what the first twelve pixels
+       * selected; without the style the rest of a mouse drag highlights the
+       * row's title and detail blue under the open drawer, and leaves them
+       * highlighted after the button comes up. `Reorder.Item` spreads a given
+       * style before adding its own `x`/`y`/`zIndex`, so it takes this too.
+       */
+      // Counted on the reference rather than on one spelling: the desk's phone
+      // row spreads it beside the amber edge, which is still the gesture's style
+      // reaching the element.
+      const styled = src.split('swipe.bind.style').length - 1
+      expect(styled, `${f}: ${rows - styled} swipeable element(s) can be text-selected mid-drag`)
+        .toBe(rows)
     }
 
     /*
-     * The Work page's rows are the exception, and it has to stay deliberate.
+     * The Work page's draggable rows are the exception, and it has to stay
+     * deliberate — as does the fact that it applies to those rows only.
      *
-     * framer owns their vertical axis for drag-to-reorder and writes `pan-x`
-     * inline to get it, so writing `pan-y` over that would kill reordering while
-     * still looking like it works. But `pan-x` also hands the browser the
-     * horizontal axis — the one the swipe is made of — so the row asks for
-     * `none`, and the rule needs `!important` to outrank an inline style.
+     * framer owns a `Reorder.Item`'s vertical axis for drag-to-reorder and
+     * writes `pan-x` inline to get it, so writing `pan-y` over that would kill
+     * reordering while still looking like it works. But `pan-x` also hands the
+     * browser the horizontal axis — the one the swipe is made of — so the row
+     * asks for `none`, and the rule needs `!important` to outrank an inline
+     * style.
+     *
+     * A static row — the Done list — is not a `Reorder.Item`. Nothing writes
+     * `pan-x` on it and nothing catches a vertical drag, so `none` there takes
+     * the page's scroll away and hands it to nobody: a thumb dragging up the
+     * Done list moves nothing at all. `none` is conditional on being draggable
+     * for exactly that reason.
      */
     expect(read('src/web/pages/Work.tsx'), 'the task row gave an axis back to the browser')
-      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3, 'none'\)/)
+      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3, isStatic \? 'pan-y' : 'none'\)/)
     expect(css, "the task row's touch policy stopped outranking framer's inline one")
       .toMatch(/\[data-swipe='none'\] \{ touch-action: none !important; \}/)
   })
@@ -1113,13 +1308,15 @@ describe('a row can be acted on without being opened', () => {
      * so opening a drawer on Work with a trackpad (no `pointerdown` anywhere)
      * and then navigating away left `openKey` set for the rest of the session,
      * which is what the desk checks before every keyboard shortcut: j, k, Enter,
-     * e, s and Escape dead, with no drawer on screen to explain it.
+     * e and Escape dead, with no drawer on screen to explain it.
      */
     const wheel = swipe.slice(swipe.indexOf('const onWheel'), swipe.indexOf('const bind'))
     expect(wheel, 'the wheel path went back to publishing only when the fingers stop')
       .toMatch(/setOpenSwipe\(key\)\s*\n\s*put\(next\)/)
     expect(swipe, 'a row that unmounts no longer releases the drawer it was holding')
       .toMatch(/if \(openSwipeKey\(\) === key\) setOpenSwipe\(null\)/)
+    expect(read('src/web/pages/Home.tsx'), 'the desk keyboard stopped yielding to an open drawer')
+      .toContain('if (openSwipeKey()) return')
 
     // And the wheel engages on the same 12px the finger does. A trackpad's
     // vertical scroll decelerates through frames where `deltaY` has decayed to
@@ -1133,59 +1330,54 @@ describe('a row can be acted on without being opened', () => {
     // Sized by its label alone, `Done` is four characters — a 36px box, the
     // narrowest interactive thing in the product, sitting immediately left of
     // `Won't do`, which takes the card off the desk.
-    const picker = swipe.slice(swipe.indexOf('if (picking && status)'), swipe.indexOf('return (\n    <div\n      data-swipe-action'))
-    expect(picker, 'the picker went back to label-width targets on a phone')
-      .toContain('min-w-11')
+    expect(swipe.slice(swipe.indexOf('if (picking && status)')).slice(0, 1400),
+      'the picker went back to label-width targets on a phone').toContain('min-w-11')
   })
 
   test('the drawer paints under the header it scrolls past', () => {
     // Two positioned elements at one z-index in one stacking context paint in
     // tree order, and a `<tbody>` comes after a `<thead>` — so an open drawer
-    // painted its solid 264px block over KIND / TITLE / WHY as its row scrolled
-    // up under the sticky header.
-    const table = read('src/web/components/CardTable.tsx')
-    expect(table, 'the sticky header dropped back to the drawer\'s own layer')
-      .toMatch(/sticky top-0 z-20/)
+    // painted its solid 264px block over Title / Status / Kind / Due as its row
+    // scrolled up under the sticky header.
+    expect(read('src/web/components/CardTable.tsx'),
+      "the sticky header dropped back to the drawer's own layer").toMatch(/sticky top-0 z-20/)
     expect(swipe, 'the drawer climbed above the header').toMatch(/right-0 z-10/)
   })
 
   test('the picker offers what the row can actually be', () => {
     // Five for a card, three for a task, two for a goal — and all of them from
-    // the shared table, so a picker cannot offer a value the route refuses.
+    // the one label table, so the product cannot grow a second vocabulary and a
+    // picker cannot offer a value the route refuses.
     expect(read('src/web/components/CardTable.tsx'), 'the card picker stopped using the shared five')
       .toMatch(/STATUS_ORDER\.map/)
     const work = read('src/web/pages/Work.tsx')
-    expect(work, 'the task picker invented its own labels').toContain('TASK_STATUS_LABEL')
+    expect(work, 'the task picker invented its own labels').toContain('STATUS_LABEL.not_started')
     expect(work, 'the task picker offered a state a task cannot be in')
-      .toMatch(/\(\['todo', 'doing', 'done'\] as const\)/)
+      .toMatch(/const TASK_CHOICES = \[\s*\n\s*\{ id: 'todo'/)
   })
 
-  test('delete on a card is the dismissal Wake already had', () => {
+  test("delete on a card is the dismissal Wake already had", () => {
     // A red button that irreversibly destroyed a card would be the only
     // irreversible action in the product. On a card `Delete` sets `Won't do`,
-    // which takes it off the desk, keeps it in the restore list, and undoes.
-    const home = read('src/web/pages/Home.tsx')
-    expect(home, 'the swipe grew a destructive delete for cards')
-      .toMatch(/onWontDo: wontDo/)
-    expect(home, "the card delete stopped going through Wake's own dismissal")
-      .toMatch(/const wontDo[\s\S]{0,400}actions\.notMine\(/)
-    expect(home, 'the card delete lost its undo')
-      .toMatch(/const wontDo[\s\S]{0,500}undoable\(/)
+    // which takes it off the desk, keeps it reachable through the Status filter,
+    // and undoes through the same record every other status write uses.
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'the swipe grew a destructive delete for cards')
+      .toMatch(/onDelete: \(\) => actions\.onStatus\(card, 'wont_do'\)/)
   })
 })
 
 describe('the thread is legible in a 320px pane', () => {
   const detail = read('src/web/components/CardDetail.tsx')
+  const row = detail.slice(detail.indexOf('function ThreadRow('))
 
   test('every body clips to three lines', () => {
     // One Cursor root-cause post is 1,400 characters. Unclipped, the pane is one
     // message and a scrollbar.
-    const row = detail.slice(detail.indexOf('function ThreadRow('))
     expect(row, 'a reply body can own the whole pane again').toContain('line-clamp-3')
   })
 
   test('a reply that names him says so', () => {
-    const row = detail.slice(detail.indexOf('function ThreadRow('))
     expect(row, 'the mark that explains why a row lit up is gone').toContain('@you')
     expect(row, 'the amber rule on a naming reply is gone').toContain('border-l-2 border-l-accent')
   })
@@ -1202,37 +1394,79 @@ describe('the thread is legible in a 320px pane', () => {
     expect(detail, 'the thread baseline moved with the ack again')
       .toMatch(/const opened = useRef\(\{ key: card\.group_key, baseline: baselineOf\(card\) \}\)/)
     expect(detail, 'the thread went back to reading the live baseline')
-      .toMatch(/<Thread card=\{card\} lines=\{lines\} baseline=\{opened\.current\.baseline\} \/>/)
+      .toMatch(/<Thread card=\{card\} lines=\{conversation\} baseline=\{opened\.current\.baseline\}/)
     const thread = detail.slice(detail.indexOf('function Thread('), detail.indexOf('function ThreadRow('))
     expect(thread, 'the thread recomputed a baseline of its own').not.toMatch(/baselineOf\(/)
   })
 
-  test('a channel in the detail loses its sigil and keeps its name', () => {
-    // `15five-truto` cut to `15five-tru…` names a channel that does not exist,
-    // and every row in this pane is already in Slack, so the `#` says nothing.
-    expect(detail, 'the channel name is truncated again')
-      .toMatch(/const bareChannel/)
-    const facts = detail.slice(detail.indexOf('function Facts('), detail.indexOf('function SeenIn('))
-    expect(facts, 'the channel row went back to truncating').toMatch(/add\('Channel'[^\n]*true\)/)
+  test('a degraded row says so wherever it draws', () => {
+    /*
+     * The mark used to live only inside the thread list, and the list only draws
+     * at two messages or more — while the shape a degraded row most often takes
+     * is exactly one: he is named in a reply, the read failed, and the search
+     * returned that one hit. So the one case the mark was written for was the
+     * one case it could not render in, and a thread that would not load looked
+     * identical to a short one.
+     */
+    expect(detail, 'the partial mark went back inside the thread list')
+      .toMatch(/const partial = card\.sources\.some/)
+    const excerpt = detail.slice(detail.indexOf('{!conversation.length && card.excerpt'))
+    expect(excerpt.slice(0, 400), 'an excerpt-only row stopped saying its thread would not load')
+      .toContain('{partial && ')
   })
 
-  test('Slack opens in Slack, and the permalink stays a link', () => {
-    expect(detail, 'the Slack deep link is gone').toMatch(/slack:\/\/channel\?id=/)
-    expect(detail, 'the hand-off became a scripted open again').not.toMatch(/window\.open\s*\(/)
-    const seen = detail.slice(detail.indexOf('function SeenIn('))
-    expect(seen, 'the https permalink left the seen-in line').toMatch(/href=\{s\.url\}/)
+  test('the conversation is not printed twice', () => {
+    // A Slack card's excerpt is built from the thread it belongs to and a Gmail
+    // card's is its newest message's snippet, so drawing both is the same text
+    // above itself.
+    expect(detail, 'the excerpt came back on a card that already shows its thread')
+      .toMatch(/\{!conversation\.length && card\.excerpt && \(/)
+  })
+
+  test('but one message is an excerpt, not a thread of one', () => {
+    // Every single-message alert row — Datadog, Grafana, the digest — carries an
+    // `excerpt` its own family curated: the transport lines dropped, or the
+    // triage triple lifted out of the prose. The thread entry beside it is the
+    // raw body at 280 characters. Drawing the list for one line threw the
+    // curation away and quoted `Attachment:` back at him.
+    expect(detail, 'a one-message card draws a thread again')
+      .toMatch(/const conversation = lines\.length > 1 \? lines : \[\]/)
+    expect(detail, 'the thread stopped reading the gated list')
+      .toMatch(/<Thread card=\{card\} lines=\{conversation\}/)
   })
 })
 
-describe('one key does one thing', () => {
-  test('a row with its drawer open owns the keyboard', () => {
-    // Measured: one Escape both shut the drawer and dismissed the detail pane,
-    // because two document-level handlers were listening for it. Worse, `e`
-    // would have completed a card while that card's own Done sat revealed and
-    // unpressed two inches away.
-    const home = read('src/web/pages/Home.tsx')
-    const handler = home.slice(home.indexOf('const onKey = (e: KeyboardEvent)'))
-    expect(handler.slice(0, 900), 'the desk shortcuts fire through an open drawer')
-      .toMatch(/if \(openSwipeKey\(\)\) return/)
+describe('a thread is one row, all the way down', () => {
+  test('the card is keyed on the parent the permalink names', () => {
+    const slack = read('src/server/sources/slack.ts')
+    // The one line the whole thing turned on: `thread_ts: hit.ts` made every
+    // message its own thread.
+    expect(slack, 'the bucket went back to keying on the message rather than the thread')
+      .toMatch(/const parent = parentTs\(h\)\s*\n\s*const key = `\$\{h\.channelId\}:\$\{parent\}`/)
+    expect(slack, 'a thread card stopped storing its parent')
+      .toMatch(/thread_ts: b\.parent/)
+  })
+
+  test('the whole conversation is read for references, not just the parent', () => {
+    // A `TRUTO-38` posted in a reply is what unions the row with the Sentry
+    // issue, and it is the reason collapsing a thread has to read all of it.
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack.slice(slack.indexOf('export function buildThreadCard')),
+      'references went back to being read off the parent alone')
+      .toMatch(/extractRefs\(said\.join\('\\n'\)\)/)
+  })
+
+  test('a pasted permalink is not a second identity for the row', () => {
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack.slice(slack.indexOf('export function buildThreadCard')),
+      'a quoted Slack link can union two unrelated conversations again')
+      .toMatch(/\.filter\(r => r\.t !== 'slackthread'\)/)
+  })
+
+  test('and the state he set follows the thread rather than being stranded', () => {
+    // The identity changed under the data, so a Done pressed on what turned out
+    // to be a reply has to move with it.
+    expect(read('src/server/db.ts'), 'the rekey migration is gone')
+      .toContain('export function rekeySlackThreadGroups')
   })
 })

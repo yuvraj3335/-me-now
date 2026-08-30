@@ -14,6 +14,25 @@ type Row = Record<string, any>
 const DAY = 864e5
 const offsetOf = (c: any) => Number(c.req.query('tzOffsetMinutes') ?? 0) || 0
 
+/**
+ * The kinds that mean a piece of work stopped being outstanding.
+ *
+ * Written once, because it is asked three times — the throughput chart's
+ * `cleared`, the rhythm clock and the streak — and the three drifted apart the
+ * moment one of them was corrected. `card_acked` is conspicuously not here: the
+ * detail pane emits one automatically now, the instant a card with unread
+ * activity is opened, so counting it would let a week of only *reading* report
+ * a seven-day streak and paint the "when I actually work" clock at the hours he
+ * was reading in bed.
+ *
+ * `card_status` is not here either, and for the opposite reason: `setStatus`
+ * emits `card_done` / `card_not_mine` alongside it from one place, whether the
+ * move came from the Done button, the swipe's picker or the pane's dropdown, so
+ * counting both would count every one of them twice.
+ */
+const FINISHED_KINDS = ['task_done', 'card_done', 'card_not_mine'] as const
+const FINISHED_SQL = FINISHED_KINDS.map(k => `'${k}'`).join(',')
+
 /** Local day key (YYYY-MM-DD) for an epoch, given the client's UTC offset. */
 const dayKey = (t: number, offMin: number) => new Date(t - offMin * 60_000).toISOString().slice(0, 10)
 
@@ -22,30 +41,6 @@ function emptyDays(days: number, offMin: number): Map<string, number> {
   const today = Date.now()
   for (let i = days - 1; i >= 0; i--) out.set(dayKey(today - i * DAY, offMin), 0)
   return out
-}
-
-/**
- * The status writes that are also a clear.
- *
- * `POST /cards/:group/status` logs one event kind whatever it was handed, so
- * "this card was set to Done" and "this card was set to In review" are the same
- * row of `events` distinguished only by the JSON in `meta`. The two that take a
- * row off the list belong in the cleared series; the other three are progress,
- * not throughput. Parsed rather than pattern-matched in SQL: a `LIKE '%done%'`
- * would also match a card whose group key says `done`.
- */
-function clearingStatuses(since: number): Array<{ at: number }> {
-  const rows = db.query<{ at: number; meta: string | null }, [number]>(
-    `SELECT at, meta FROM events WHERE kind = 'card_status' AND at >= ?`,
-  ).all(since)
-  return rows.filter(r => {
-    try {
-      const s = (JSON.parse(r.meta ?? '{}') as { status?: string }).status
-      return s === 'done' || s === 'wont_do'
-    } catch {
-      return false
-    }
-  })
 }
 
 function seriesOf(rows: Array<{ at: number }>, days: number, offMin: number) {
@@ -70,27 +65,23 @@ analytics.get('/', c => {
     ).all(kind, since)
 
   const done = ev('task_done')
-  const created = ev('task_created')
   const appeared = ev('card_appeared')
   /**
    * What actually takes a card off the list, and nothing that does not.
    *
-   * `card_acked` used to be counted here on the grounds that it was also a card
-   * he dealt with, back when nothing in the product emitted one. The detail pane
-   * emits one now, automatically, the moment a card with unread activity is
-   * opened — so one Slack thread that gets a reply on twelve different days and
-   * is read each time reported twelve clears while still sitting on the desk.
-   * Reading is not clearing. The three events left are the three writes that
-   * actually take a row off the list: Done, Won't do, and the status control
-   * landing on either of those.
+   * `FINISHED_KINDS` minus `task_done`, because this series is the card half of
+   * the picture and `done` above is the task half — the chart draws them as two
+   * lines. `card_acked` was counted here once, on the grounds that an
+   * acknowledgement is also a card he dealt with, which was harmless back when
+   * the only thing that emitted one was a notification being dismissed. Reading
+   * is not clearing.
    */
-  const cleared = [...ev('card_done'), ...ev('card_not_mine'), ...clearingStatuses(since)]
+  const cleared = [...ev('card_done'), ...ev('card_not_mine')]
     .sort((a, b) => a.at - b.at)
 
   /* --- throughput ------------------------------------------------------- */
   const throughput = {
     done: seriesOf(done, days, off),
-    created: seriesOf(created, days, off),
     appeared: seriesOf(appeared, days, off),
     cleared: seriesOf(cleared, days, off),
   }
@@ -121,7 +112,7 @@ analytics.get('/', c => {
       }
       return [...emptyDays(days, off).keys()].map(day => {
         const v = (buckets.get(day) ?? []).sort((a, b) => a - b)
-        return { day, value: v.length ? v[Math.floor((v.length - 1) * 0.5)]! : null, n: v.length }
+        return { day, value: v.length ? v[Math.floor((v.length - 1) * 0.5)]! : null }
       })
     })(),
   }
@@ -152,19 +143,29 @@ analytics.get('/', c => {
   }
 
   /* --- rhythm: when I actually work ------------------------------------- */
-  const allDone = db.query<{ at: number }, []>(
-    `SELECT at FROM events WHERE kind IN ('task_done','card_acked')`,
-  ).all()
+  // Windowed, like `pace` already was. Unbounded, "when you work" was the one
+  // panel the range control could not move: 7d, 30d and 90d drew a
+  // character-identical clock, which reads as a control that does nothing.
+  const windowDone = db.query<{ at: number }, [number]>(
+    `SELECT at FROM events WHERE kind IN (${FINISHED_SQL}) AND at >= ?`,
+  ).all(since)
   const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, value: 0 }))
   const byWeekday = Array.from({ length: 7 }, (_, d) => ({ weekday: d, value: 0 }))
-  for (const r of allDone) {
+  for (const r of windowDone) {
     const local = new Date(r.at - off * 60_000)
     byHour[local.getUTCHours()]!.value++
     byWeekday[local.getUTCDay()]!.value++
   }
 
   /* --- streak: consecutive local days with something finished ----------- */
-  const doneDays = new Set(allDone.map(r => dayKey(r.at, off)))
+  // Deliberately its own, unbounded query. A streak is an all-time fact and the
+  // page labels it as one; reading it off the windowed set would silently cap it
+  // at the range and make "best 14" become "best 7" for no reason the reader can
+  // see.
+  const everDone = db.query<{ at: number }, []>(
+    `SELECT at FROM events WHERE kind IN (${FINISHED_SQL})`,
+  ).all()
+  const doneDays = new Set(everDone.map(r => dayKey(r.at, off)))
   // Count back from today. An empty *today* does not break the streak — the day
   // is not over yet — but an empty earlier day does.
   let streak = 0
@@ -185,14 +186,30 @@ analytics.get('/', c => {
   })()
 
   /* --- what is piling up ------------------------------------------------ */
-  const aging = db.query<{ source: string; first_seen_at: number }, [number]>(
+  // `status`, not `done_at`/`not_mine`. Those two are kept in sync by the card
+  // API and still work, but they are the old vocabulary — a card is off the desk
+  // because he said Done or Won't do, and a row whose state predates the status
+  // column has NULL there and is still on it.
+
+  // No snooze clause, and that is the fix rather than an omission. This set is
+  // the donut's slices; `openNow` below is the number printed in the middle of
+  // it, and the two have to select the same rows or the ring reports a whole it
+  // does not add up to. It did: one snoozed card made the slices sum to 111
+  // against a centre of 112, and the percentages beside them totalled 99%. A
+  // snoozed card is still on the desk — `/api/state` sends it, the table renders
+  // it, and its status is still one of the three that means it is on him — so
+  // the answer is for the slices to count it, not for the centre to stop.
+  const aging = db.query<{ source: string; first_seen_at: number }, []>(
     `SELECT c.source AS source, s.first_seen_at AS first_seen_at
        FROM cards c
        JOIN card_state s ON s.group_key = c.group_key
-      WHERE c.gone = 0 AND s.done_at IS NULL AND s.not_mine = 0
-        AND (s.snoozed_until IS NULL OR s.snoozed_until < ?)
-      GROUP BY c.group_key`,
-  ).all(Date.now())
+      WHERE c.gone = 0 AND (s.status IS NULL OR s.status NOT IN ('done','wont_do'))
+      GROUP BY c.group_key
+      -- Ordered, so the donut's slices keep their positions between polls. An
+      -- unordered GROUP BY let two sources swap places on a refresh, which reads
+      -- as the data having moved.
+      ORDER BY c.source`,
+  ).all()
 
   const BUCKETS: Array<[string, number, number]> = [
     ['today', 0, 1], ['2–3d', 1, 3], ['4–7d', 3, 7], ['1–2w', 7, 14], ['older', 14, Infinity],
@@ -219,7 +236,7 @@ analytics.get('/', c => {
   const openNow = db.query<Row, []>(
     `SELECT COUNT(DISTINCT c.group_key) AS n FROM cards c
        JOIN card_state s ON s.group_key = c.group_key
-      WHERE c.gone = 0 AND s.done_at IS NULL AND s.not_mine = 0`,
+      WHERE c.gone = 0 AND (s.status IS NULL OR s.status NOT IN ('done','wont_do'))`,
   ).get()!.n
 
   return c.json({
@@ -231,10 +248,13 @@ analytics.get('/', c => {
     aging: [...agingBySource].map(([source, buckets]) => ({ source, buckets })),
     agingBuckets: BUCKETS.map(b => b[0]),
     goals,
-    totals: {
-      openNow,
-      doneAllTime: db.query<Row, []>(`SELECT COUNT(*) AS n FROM tasks WHERE status = 'done'`).get()!.n,
-      tasksOpen: db.query<Row, []>(`SELECT COUNT(*) AS n FROM tasks WHERE status != 'done'`).get()!.n,
-    },
+    // `doneAllTime` and `tasksOpen` were two COUNT queries nothing rendered.
+    // `openNow` is the canonical count of what is on the desk, and the `aging`
+    // query above is required to be the same set. The donut's centre is summed
+    // from its own slices now rather than sent — a centre that arrives beside
+    // the arcs instead of out of them is a number that can disagree with them,
+    // and it did — so this is the thing the ring is checked *against* rather
+    // than the thing it prints.
+    totals: { openNow },
   })
 })

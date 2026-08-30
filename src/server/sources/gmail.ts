@@ -7,27 +7,19 @@
  * Read-only: only search_threads / get_thread are ever called, and the client's
  * write-tool denylist blocks the rest regardless.
  */
-import { McpSession, HttpTransport } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
-import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
+import { GMAIL_ACCOUNTS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
+import { gmailThreadUrl, sessionFor } from '../mail/gmail'
 import { plainBody, plainText } from '../mail/sanitize'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
-const sessions = new Map<string, McpSession>()
-
-export function sessionFor(account: string): McpSession {
-  let s = sessions.get(account)
-  if (!s) {
-    // Per-account credentials, falling back to a single shared "gmail" token so
-    // one connected inbox works before the second is authorised.
-    const getToken = async () =>
-      (await resolveToken(`gmail:${account}`)).token ?? (await resolveToken('gmail')).token
-    s = new McpSession(`gmail:${account}`, new HttpTransport(MCP_SERVERS.gmail!.url, getToken))
-    sessions.set(account, s)
-  }
-  return s
-}
+// The session map lives in `mail/gmail.ts`. There used to be a byte-identical
+// copy here under the same name and the same key space, and neither was ever
+// cleared — so after a Gmail reconnect both went on replaying the
+// `Mcp-Session-Id` issued under the old token, and the poller and the Mail page
+// each blamed the other's ghost.
+export { sessionFor }
 
 type GmailThread = {
   id?: string
@@ -162,16 +154,7 @@ export const gmail: SourceAdapter = {
           // address when there is not — never an empty string.
           who: nameOf(senderRaw) || addrOf(senderRaw) || undefined,
           excerpt: (snippet || body).slice(0, 400),
-          /*
-           * `mail/u/<address>` is not a Gmail URL. The `u/` segment is an
-           * *account index* — 0 is whichever account the browser signed in
-           * first — so interpolating an email address there produced a link
-           * that either 404s or lands on a stranger's mailbox. One address is
-           * configured on this deployment and it is the first one signed in,
-           * so 0 is the honest index; a second inbox would need the index
-           * Google assigned it, which is not a fact the API hands over.
-           */
-          url: `https://mail.google.com/mail/u/0/#inbox/${id}`,
+          url: gmailThreadUrl(account, id),
           ts,
           pile: direct ? 'now' : 'open',
           refs,
@@ -180,9 +163,16 @@ export const gmail: SourceAdapter = {
             labels: th.labelIds ?? th.labels ?? [],
             /*
              * A later message in a thread is activity on this card, not a
-             * second card. Gmail's `search_threads` already returns the whole
-             * `messages` array, so the fact was always in hand and simply
-             * thrown away — and `meta.replies` is what the desk's `+N` counts.
+             * second card.
+             *
+             * The identity was never the problem — a Gmail row has been keyed on
+             * `account:threadId` since the first commit — but the *arrival* of a
+             * reply was invisible: the card's `ts` moved and nothing said why,
+             * so a thread that had been answered twice looked exactly like one
+             * nobody had touched. `search_threads` already returns the whole
+             * `messages` array, so the fact was in hand and thrown away. This is
+             * the list `activity` in `api.ts` counts, under the same rule it
+             * counts a Slack thread's replies by.
              */
             replies: Math.max(msgs.length - 1, 0),
             messages: msgs.slice(-20).map(m => {

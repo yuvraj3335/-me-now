@@ -1,5 +1,5 @@
 import { expect, test, describe, afterAll } from 'bun:test'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -16,7 +16,13 @@ process.env.WAKE_CLAUDE_HOME = dir
 process.env.WAKE_DATA_DIR = join(dir, 'data')
 
 const write = (o: unknown) => writeFileSync(credPath, JSON.stringify(o))
+/** Backdate the credential file, which is what bounds an entry with no expiry. */
+const written = (msAgo: number) => {
+  const t = (Date.now() - msAgo) / 1000
+  utimesSync(credPath, t, t)
+}
 const { claudeBridgeToken, isGoogleWebClientId, pickGmailClientFromClaude } = await import('../src/server/mcp/creds')
+const { getStored, putStored } = await import('../src/server/mcp/oauth')
 
 const future = Date.now() + 3_600_000
 const past = Date.now() - 3_600_000
@@ -68,6 +74,20 @@ describe('claude credential bridge', () => {
     write({ mcpOAuth: { 'figma|x': {
       serverName: 'plugin:figma:figma', accessToken: 'figma-token', expiresAt: future,
     } } })
+    expect(claudeBridgeToken('slack')).toBeNull()
+  })
+
+  test('an entry with no expiry is trusted only as long as the file is fresh', () => {
+    // It used to score `Number.MAX_SAFE_INTEGER` and be served for the life of
+    // the process. Claude's Gmail grant is exactly that shape and lasts an hour,
+    // so the chain kept preferring a token that had already died over asking
+    // Wake's own store for a live one.
+    write({ mcpOAuth: { 'slack|noexp': {
+      serverName: 'slack', serverUrl: 'https://mcp.slack.com/mcp', accessToken: 'undated',
+    } } })
+    expect(claudeBridgeToken('slack')).toBe('undated')
+
+    written(2 * 3_600_000)
     expect(claudeBridgeToken('slack')).toBeNull()
   })
 
@@ -129,5 +149,46 @@ describe('Gmail client seed from Claude', () => {
         'Gmail|66c8': { serverName: 'Gmail', clientId: uuidId },
       },
     })).toBeNull()
+  })
+})
+
+describe('the stored row is patched, not replaced', () => {
+  const server = 'test-putstored'
+
+  test('a patch that omits refresh_token keeps the one already there', () => {
+    // `{ ...cur, ...patch }` let a bare `undefined` — the shape a caller
+    // produces by passing through a field the provider omitted — overwrite a
+    // perfectly good stored token. That is the persistence half of "Gmail dies
+    // every hour": the authorize URL was fixed, and the write threw the answer
+    // away an hour later.
+    putStored(server, { access_token: 'a1', refresh_token: 'r1', client_id: 'c1' })
+    putStored(server, { access_token: 'a2' })
+
+    const row = getStored(server)!
+    expect(row.access_token).toBe('a2')
+    expect(row.refresh_token).toBe('r1')
+    expect(row.client_id).toBe('c1')
+  })
+
+  test('an exchange that returns no refresh_token does not wipe the stored one', () => {
+    putStored(server, { access_token: 'a1', refresh_token: 'r1' })
+    // Exactly what `connections.ts` hands over on a re-authorisation.
+    const fromProvider: { access_token: string; refresh_token: string | null } =
+      { access_token: 'a3', refresh_token: null }
+    putStored(server, {
+      access_token: fromProvider.access_token,
+      refresh_token: fromProvider.refresh_token ?? undefined,
+    })
+    expect(getStored(server)!.refresh_token).toBe('r1')
+  })
+
+  test('an explicit null still clears — that is how a dead grant is dropped', () => {
+    putStored(server, { access_token: 'a1', refresh_token: 'r1' })
+    putStored(server, { access_token: null, refresh_token: null, last_auth_error: 'invalid_grant' })
+
+    const row = getStored(server)!
+    expect(row.access_token).toBeNull()
+    expect(row.refresh_token).toBeNull()
+    expect(row.last_auth_error).toBe('invalid_grant')
   })
 })

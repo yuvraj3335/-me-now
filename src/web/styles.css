@@ -77,11 +77,12 @@
   /*
     The ink that goes ON a solid `ok` or `bad` fill.
 
-    `ok` and `bad` invert between the themes — the green is light on a dark page
-    and dark on a light one — so a single hard-coded ink on top of them is
-    illegible in exactly one theme, which is the failure `on-accent` was
-    introduced to prevent. The swipe drawer's Done and Delete are the only solid
-    fills either colour has ever had, and they are the reason these exist.
+    Both invert between the themes — the green is light on a dark page and dark
+    on a light one — so a single hard-coded ink on top of them is illegible in
+    exactly one theme, which is the failure `--color-on-accent` was introduced
+    to prevent. `on-bad` was already here for the danger button; the swipe
+    drawer's Done is the first solid `ok` fill in the product and is why its
+    partner exists now.
   */
   --color-on-ok:  #14141a;
   --color-on-bad: #14141a;
@@ -207,13 +208,17 @@
     --color-ok:   #6bd39a;      /* 10.8:1 */
     /* Visibly not the accent. `warn` and `accent-ink` were byte-identical in
        both themes, so the one place the product reports a broken source painted
-       it in the colour reserved for "this one". A redder orange, and it is used
-       in exactly one place: the Slack entitlement line in Settings. */
+       it in the colour reserved for "this one". A redder orange. It carries two
+       things and only two: the Slack entitlement line in Settings, and the
+       `In review` status glyph — the one status that is a claim about somebody
+       else's attention rather than about his own. */
     --color-warn: #ee8b45;      /*  7.9:1 */
     --color-bad:  #ef9494;      /*  8.7:1 */
-    /* Dark ink on the two light fills: 12.4:1 on `ok`, 11.1:1 on `bad`. */
-    --color-on-ok:  #14141a;
-    --color-on-bad: #14141a;
+    /* Ink on a filled `bad` surface — the danger button. `bad` is a text colour
+       everywhere else, and a destructive control that is only red *text* is
+       indistinguishable from a disabled one. */
+    --color-on-ok:  #14141a;    /* 12.4:1 on ok */
+    --color-on-bad: #14141a;    /*  7.6:1 on bad */
   }
 
   /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
@@ -253,10 +258,8 @@
     --color-ok:   #0d6038;      /* 7.1:1 — was #157f4d at 4.7:1, under this file's own floor */
     --color-warn: #8f3300;      /* 7.4:1 — and a different hue from accent-ink #8a5300 */
     --color-bad:  #b3261e;      /* 6.5:1 */
-    /* White on the two dark fills: 7.4:1 on `ok`, 6.6:1 on `bad` — the same
-       ratio `bad` itself already carries as text on this page. */
-    --color-on-ok:  #ffffff;
-    --color-on-bad: #ffffff;
+    --color-on-ok:  #ffffff;    /* 7.4:1 on ok */
+    --color-on-bad: #ffffff;    /* 6.7:1 on bad */
   }
 
   /* No explicit choice: follow the system. Identical to the block above by
@@ -302,6 +305,28 @@
 }
 
 @layer base {
+  /*
+    How much of the bottom of the viewport is already spoken for.
+
+    Below `sm` that is the tab bar — 53px painted, plus whatever the device puts
+    under it for a home indicator. From `sm` up the nav is the left rail and only
+    the indicator is left. Either way it is the strip that anything fixed to the
+    bottom edge has to stop above, and it replaces that thing's own
+    `pad-bottom`: the two together would count the indicator twice.
+
+    Nothing may cover the tab bar. The card sheet did — `bottom: 0` with a 55dvh
+    height put 447px over the bar, so all six destinations measured unreachable
+    while a card was open and switching from Desk to Mail cost a dismissal
+    first. A bar that is not merely in the way but not drawn at all is worse,
+    because nothing on screen says the tap will not land.
+
+    It is a variable because a fixed element has no way to measure a sibling.
+  */
+  :root { --nav-h: max(env(safe-area-inset-bottom), 0px); }
+  @media (max-width: 639.98px) {
+    :root { --nav-h: calc(53px + max(env(safe-area-inset-bottom), 0px)); }
+  }
+
   html {
     background: var(--color-ink-900);
     /* Stop the iOS rubber-band from revealing white behind the app. */
@@ -372,9 +397,9 @@
 
     `touch-action` does not apply to a table row. The property's own "applies to"
     list excludes table rows, row groups, table columns and column groups — so
-    `style={{ touchAction: 'pan-y' }}` on the desk's `<tr>` was dropped by every
-    browser and the row fell back to `auto`, on an iPad in landscape, which is
-    the one device it was written for. The declaration goes on the cells, which
+    `style={{ touchAction: 'pan-y' }}` on the desk's `<tr>` is dropped by every
+    browser and the row falls back to `auto`, on an iPad in landscape, which is
+    the one device the declaration is written for. It goes on the cells, which
     are ordinary block containers and do take it; the used value is the
     intersection down the tree, so `pan-y` on a `<td>` covers everything inside
     it. The `<li>` on the phone takes it directly.
@@ -399,7 +424,7 @@
 
     Measured before this existed: four horizontal page pads in use on the laptop
     (12, 16, 20, 24) plus the table's own `px-2` on top, so the page title sat at
-    x=216 on Now and x=224 on Settings, Now's `<th>`s at 225, Settings' section
+    x=216 on the desk and x=224 on Settings, the desk's `<th>`s at 225, Settings'
     titles at 241 and its value column at 365 against the Sources column's 367 —
     two columns two pixels apart, which is one column drawn twice. Switching tabs
     moved every heading eight pixels.
@@ -414,6 +439,23 @@
   /* The single separator style used app-wide, instead of borders on cards. */
   .hairline { border-bottom: 1px solid var(--color-rule); }
 
+  /*
+    The two structural edges a resizable pane needs, and the grip that moves it.
+
+    They exist as classes rather than as Tailwind's `border-l border-edge`
+    because the pane's edge has to be paintable at a width the utility classes
+    cannot express — an inline `style.width` on the aside, with the divider
+    drawn on the element and the grab target sitting over it.
+
+    `touch-action: none` is the load-bearing half of `.grabber`: without it the
+    browser claims the drag for a scroll gesture and the pointermove events stop
+    arriving after the first few pixels, so a phone drag moves the sheet about
+    8px and then abandons it.
+  */
+  .edge-t  { border-top: 1px solid var(--color-edge); }
+  .edge-l  { border-left: 1px solid var(--color-edge); }
+  .grabber { cursor: col-resize; touch-action: none; }
+
   /* Respect the notch and the home indicator on iOS. */
   .pad-top    { padding-top: max(env(safe-area-inset-top), 0px); }
   .pad-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0px); }
@@ -427,29 +469,100 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
   /*
+    A rail that scrolls, and says so.
+
+    Six mail filters need 384px inside 343, so the last one — `All mail` — was
+    cut clean off at the viewport edge with nothing to suggest it was a scroll
+    region rather than a layout bug: the page itself does not scroll, the
+    scrollbar is hidden by the rule above, and a chip sliced down the middle by
+    the screen edge reads as broken, not as more. The fade is the affordance,
+    and it is painted only while there is something past it — a permanent one
+    would ghost the last chip when the rail is already at its end, which is the
+    same lie in the other direction. `data-spill` is set by `useRail`.
+
+    It stops 1px short of the bottom so a rail with a rule under it — the desk's
+    source tabs — keeps an unbroken hairline. A rail with no rule loses one
+    transparent pixel of fade, which is nothing.
+  */
+  .rail { position: relative; min-width: 0; }
+  .rail[data-spill]::after {
+    content: '';
+    position: absolute;
+    inset-block: 0 1px;
+    right: 0;
+    width: 32px;
+    pointer-events: none;
+    background: linear-gradient(to left, var(--color-ink-900), transparent);
+  }
+
+  /*
     Small ink, generous target — where there are fingers.
 
     A 26px row action and a 32px toolbar button are the right *painted* size for
     a tool; they are the wrong touch target. This decouples the two, so a button
     can shrink to where it belongs visually without becoming unhittable on a
-    phone. Applied by `Button` at sizes sm and md, and by `Chip`.
+    phone. Applied by `Button` at every size, and by `Chip` and `Segmented`.
+
+    It is a 44px box centred on the control, not a fixed outset. `inset: -6px`
+    was the outset, and an outset cannot reach a target from an unknown size:
+    28px of ink became 40, 30px of ink became 42, and every row action, every
+    close, every pager arrow and every filter tab measured under 44 on a phone.
+    `max(100%, 44px)` reaches exactly 44 on whichever axis is short and leaves
+    the other alone, so a 200px-wide bar grows in height only and nothing that
+    already clears the target moves at all.
+
+    The host needs `position: relative`. Without it the box is laid out against
+    the nearest positioned ancestor — which in this app is `<main>` — and a
+    control quietly acquires an invisible, page-sized target that swallows every
+    tap on the route. Three controls shipped that way.
 
     Scoped to coarse pointers, which is the case it was written for: a mouse
     hits a 26px box without help. It is scoped rather than unconditional because
-    an absolutely positioned box that reaches 6px past its parent's padding edge
-    IS scroll overflow, and Chrome counts it — `Connect` reported clientWidth 64
+    an absolutely positioned box that reaches past its parent's padding edge IS
+    scroll overflow, and Chrome counts it — `Connect` reported clientWidth 64
     against scrollWidth 70 while its label measured 47.64px inside 16px of
     padding and was not clipped at all. Every audit for clipped text then read
     every small button in the product as a sizing bug. `overflow: clip`,
     `overflow-clip-margin` and `contain: paint` were all measured: none of them
     take the box back out of the overflow, so the fix is to ask for the bigger
     target only where it buys something.
+
+    A rail that scrolls sideways clips this box on its own overflow, so a rail
+    carries enough vertical padding to hold a 44px target rather than relying on
+    an outset that will be cut off — see `.rail`.
   */
   @media (any-pointer: coarse) {
     .hit::after {
       content: '';
       position: absolute;
-      inset: -6px;
+      left: 50%;
+      top: 50%;
+      translate: -50% -50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+    }
+
+    /*
+      The same target, for the controls that cannot carry a pseudo-element.
+
+      `<select>` and `<input>` are replaced elements: `::after` on them
+      generates nothing in any engine, which is why the six native controls in
+      the product — three desk filters, Status, Priority, Due — measured 27–31px
+      of target against the 28–32px they paint, with no expansion at all. They
+      grow themselves to 44 instead and hand the difference straight back as a
+      negative margin, so the *layout* keeps the height the row was built around
+      while the finger gets the whole 44. The painted box moves to the wrapper
+      beside them, because a border on a control that is now 44px tall would
+      draw the target.
+
+      `--hit-ink` is that painted height; set it wherever it is not the 28px of
+      a row control. The element selector is deliberate — it has to outrank the
+      `h-*` utility sitting on the same element.
+    */
+    select.hit-native,
+    input.hit-native {
+      height: 44px;
+      margin-block: calc((44px - var(--hit-ink, 28px)) / -2);
     }
   }
 

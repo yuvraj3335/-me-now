@@ -1,60 +1,62 @@
 /**
- * The desk.
+ * Desk.
  *
- * A table of everything on him, in one downward glance: what it is, the thing
- * itself, why it is on him, where, which source, when, and the one thing he can
- * do about it without opening anything.
+ * One flat table of everything on him — Title, Status, Kind, Due — searched,
+ * filtered, paginated, with a resizable detail pane beside it.
  *
- * The three groups are `On you`, `Waiting` and `Snoozed`. They were `Now`,
- * `Open` and `Parked`, and only the words changed — what each group computes,
- * and what the JSON calls them, is untouched. `Now` was the page, the tab, a
- * group and a field, so the one word answered four questions; `Open` was a
- * group heading and the verb on the button beside it. Words that mean one thing
- * each are worth a lookup table.
+ * It used to be four chapters — three named after the machine's own guess at
+ * how urgent a card was, each with its own eyebrow and count, and a fourth
+ * collapsed underneath them for what had been finished. Those names are gone
+ * from the product. A guess about urgency printed as a heading reads as a
+ * decision he made, and it was not one; where a card stands is a value he sets
+ * now, and one table shows every card whatever that value is. So finished work
+ * is a filter rather than a chapter.
  *
- * Above the first row there is a title and one chrome row, and nothing else.
- * Everything left of that row's spacer narrows what you see; the one thing right
- * of it — Fetch — changes what exists. Piles with nothing in them are not
- * rendered: `On you 0` plus the sentence under it cost 109px of the fold to report
- * a zero, and three of them stacked cost 331px of a 844px phone to say nothing
- * at all.
+ * Four filter axes, all of them in the URL: source, search, due, priority,
+ * status. Because none of them is component-local tab state, they compose the
+ * same way on the All tab and inside a source tab, which is the whole
+ * requirement — you can be in Slack, at Urgent, overdue, on page 2, and put all
+ * of that in a bookmark.
  *
- * The three piles are `<tbody>` groups of one table sharing one `<colgroup>`, so
- * the columns hold their x-position from the first row of On you to the last row
- * of Snoozed. `Done and won't do` sits collapsed at the bottom, in the same columns.
+ * Paging happens *after* search and filter, on the client, and the server keeps
+ * sending the whole desk. That is deliberate: search has to span every row and
+ * not the fifty currently visible, and at ~100 rows the whole desk is smaller
+ * than one page of most APIs.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronRight, Download, Loader2, RotateCcw } from 'lucide-react'
-import { STATUS_LABEL, type CardStatus } from '../../shared/status'
+import { Download, Loader2 } from 'lucide-react'
 import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
-import { PILE_LABEL, type Card as CardT, type SourceName } from '../lib/types'
-import { ago, atHour, timeOfDay } from '../lib/time'
-import { clampPane, PANE_DEFAULT_W, readPane, writePane } from '../lib/pane'
+import type { Card as CardT, CardPriority, CardStatus, SourceName } from '../lib/types'
+import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
+import { timeOfDay } from '../lib/time'
 import {
-  CardLine, CardRow, columnsFor, colSpanOf, GroupHead, maxPaneFor, PANE_MIN, TABLE_MIN, TableCols,
-  TableHead, useViewport, sourceWords, type Columns, type RowAction,
+  CardLine, CardRow, PANE_MIN, TABLE_MIN, TableCols, TableHead, maxPaneFor,
+  useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { TaskSheet } from '../components/TaskSheet'
-import { Button, Chip, Empty } from '../components/primitives'
+import {
+  Button, Empty, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
+} from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
-import { SourceMark } from '../components/kinds'
+import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
+import { useStill } from '../lib/motion'
 import { overlayOpen, useOverlay } from '../lib/overlay'
 import { openSwipeKey } from '../lib/swipe'
-import { closeDetail, openDetail, setParam, useDetailKey, useParam } from '../lib/route'
+import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
 
 /**
- * Every source the filter row offers, in a fixed order, always all five.
+ * Every source the tab strip offers, in a fixed order, always all five.
  *
- * They used to be re-sorted by connectedness on every render, which moved chips
- * under the finger as polls landed and pushed the one broken source off the
- * right edge of a 390px screen inside `overflow-x-auto no-scrollbar` — so Gmail,
- * the source that was not connected, did not exist on the device he checks at
- * 7am. Hiding the broken thing is how the broken thing stops getting fixed.
+ * They used to be re-sorted by connectedness on every render, which moved
+ * controls under the finger as polls landed and pushed the one broken source off
+ * the right edge of a 390px screen — so Gmail, the source that was not
+ * connected, did not exist on the device he checks at 7am. Hiding the broken
+ * thing is how the broken thing stops getting fixed.
  *
  * They are filters over rows, not connection indicators, so none of them is ever
  * disabled either. A source whose last poll failed carries its own mark at a
@@ -66,18 +68,94 @@ const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
 /**
  * Stable empty arrays.
  *
- * `state?.now ?? []` builds a fresh array on every render, which makes every
+ * `state?.cards ?? []` builds a fresh array on every render, which makes every
  * `useMemo` keyed on it recompute, which makes the effect that registers this
  * page's palette actions re-run, which re-renders the shell — a loop that took
  * React's "maximum update depth" error to notice.
  */
 const NO_CARDS: CardT[] = []
 
+const DUE_OPTIONS = [
+  { id: 'any', label: 'Any date' },
+  { id: 'overdue', label: 'Overdue' },
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: 'This week' },
+  { id: 'none', label: 'No date' },
+] as const
+type DueFilter = typeof DUE_OPTIONS[number]['id']
+
+const DAY = 864e5
+
+/** Local start of tomorrow — the boundary `today` and `week` are measured from. */
+const endOfToday = (now: number) => {
+  const d = new Date(now)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
+}
+
+/** The pane's remembered width. Never allowed to be the reason nothing renders. */
+const PANE_KEY = 'wake:pane'
+const SHEET_KEY = 'wake:sheet'
+
+function readNumber(key: string, fallback: number): number {
+  try {
+    const v = Number(localStorage.getItem(key))
+    return Number.isFinite(v) && v > 0 ? v : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeNumber(key: string, value: number) {
+  try { localStorage.setItem(key, String(value)) } catch { /* private mode */ }
+}
+
+const isSettledFilter = (s: string) => s === 'done' || s === 'wont_do'
+
+/**
+ * What Done and Won't-do took away, reached through the same table.
+ *
+ * They are not in `state.cards` — the desk is what is still on him — so asking
+ * the Status filter for one of them changes where the rows come from rather
+ * than which of them survive. That is the whole replacement for the collapsed
+ * fourth chapter this page used to carry: no separate section, no second row
+ * shape, and no restore button of its own, because the control that took a card
+ * off the list is sitting on the row that will put it back.
+ *
+ * `version` is what a write bumps. The server owns this list, and a status
+ * changed from inside it has to be re-read rather than patched locally.
+ *
+ * `null` while it is being read, and an array once it has answered — including
+ * an empty array, which is a different fact from "not asked yet". Everything on
+ * this page that clamps a range against `rows.length` has to know which of the
+ * two it is looking at, or it clamps against a list that does not exist yet.
+ */
+function useHiddenCards(active: boolean, version: number) {
+  const [cards, setCards] = useState<CardT[] | null>(null)
+  useEffect(() => {
+    if (!active) return setCards(null)
+    let live = true
+    actions.doneCards()
+      .then(d => { if (live) setCards(d.cards) })
+      .catch(() => { if (live) setCards(NO_CARDS) })
+    return () => { live = false }
+  }, [active, version])
+  return cards
+}
+
 export function Home() {
   const { state } = useStore()
   const width = useViewport()
-  const filter = (useParam('src') ?? 'all') as SourceName | 'all'
-  const doneOpen = useParam('done') === '1'
+  const p = useParams(['src', 'q', 'due', 'pri', 'status', 'page', 'sort'])
+  const filter = (p.src ?? 'all') as SourceName | 'all'
+  const query = p.q ?? ''
+  const due = (p.due ?? 'any') as DueFilter
+  const pri = p.pri ?? 'any'
+  const status = p.status ?? 'any'
+  const page = Math.max(1, Number(p.page) || 1)
+  // Read through a whitelist rather than cast: `?sort=` is a string a person
+  // can type, and an unrecognised one has to mean the default order rather than
+  // an order nothing implements.
+  const sort: DueSort = p.sort === 'due' || p.sort === '-due' ? p.sort : null
   const selectedKey = useDetailKey()
   const [taskFrom, setTaskFrom] = useState<CardT | null>(null)
   /**
@@ -87,158 +165,253 @@ export function Home() {
    * and — worse — a stray `e` completed something the reader had not selected.
    */
   const [cursor, setCursor] = useState<number | null>(null)
+  /** Bumped by every status write, so a settled list re-reads itself. */
+  const [written, setWritten] = useState(0)
 
-  const now = state?.now ?? NO_CARDS
-  const open = state?.open ?? NO_CARDS
-  const parked = state?.parked ?? NO_CARDS
+  const settled = isSettledFilter(status)
+  const hidden = useHiddenCards(settled, written)
+  const cards = settled ? (hidden ?? NO_CARDS) : (state?.cards ?? NO_CARDS)
+  /**
+   * Whether the list this page is standing over has actually answered.
+   *
+   * Both sources arrive over the wire — the desk in `/api/state`, the settled
+   * list in its own read — and both are an empty array until they do. That is
+   * indistinguishable from a list that really is empty unless it is asked
+   * separately, which is why this is a third value rather than `rows.length`.
+   */
+  const loaded = settled ? hidden !== null : state !== null
 
-  const matches = useCallback(
+  /**
+   * Five predicates over one list, composed in a fixed order.
+   *
+   * Each reads exactly one URL parameter, so none of them can know about any of
+   * the others — which is what makes "the source tab and the priority filter
+   * both apply" true by construction rather than by remembering to write it.
+   */
+  const matchSource = useCallback(
     (c: CardT) => filter === 'all' || c.sources.some(s => s.source === filter),
     [filter],
   )
-  const fNow = useMemo(() => now.filter(matches), [now, matches])
-  const fOpen = useMemo(() => open.filter(matches), [open, matches])
-  const fParked = useMemo(() => parked.filter(matches), [parked, matches])
 
-  const rows = useMemo(() => [...fNow, ...fOpen, ...fParked], [fNow, fOpen, fParked])
+  /**
+   * Search spans every column the table dropped, not just the two it kept.
+   *
+   * Why, who, channel, repo, project, excerpt and every account a group was
+   * seen under. Those facts left the table; they did not stop being how he
+   * remembers a row.
+   */
+  const matchQuery = useCallback((c: CardT) => {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    const lead = c.sources[0]
+    const channel = c.meta?.channel ?? lead?.meta?.channel
+    const hay = [
+      c.title, c.why, c.who, c.actor, c.excerpt,
+      cardKind(c).word,
+      whereOf(lead, c),
+      channel ? cleanChannel(String(channel)) : null,
+      STATUS_LABEL[c.status],
+      ...c.sources.map(s => s.account ?? ''),
+      ...c.sources.map(s => SOURCE_LABEL[s.source]),
+    ]
+    return hay.some(v => v && String(v).toLowerCase().includes(q))
+  }, [query])
+
+  const matchDue = useCallback((c: CardT) => {
+    if (due === 'any') return true
+    if (due === 'none') return c.due_at === null
+    if (c.due_at === null) return false
+    const now = Date.now()
+    if (due === 'overdue') return c.due_at < now
+    if (due === 'today') return c.due_at < endOfToday(now)
+    return c.due_at < endOfToday(now) + 6 * DAY
+  }, [due])
+
+  const matchPriority = useCallback(
+    (c: CardT) => pri === 'any' || c.priority === Number(pri),
+    [pri],
+  )
+
+  const matchStatus = useCallback(
+    (c: CardT) => status === 'any' || c.status === status,
+    [status],
+  )
+
+  /**
+   * Filtered, then ordered — and the order is the sixth thing in the URL.
+   *
+   * The five predicates decide which rows exist; this decides where they sit,
+   * and it has to happen here rather than inside the table because the page
+   * slice, the palette's eight entries and the j/k cursor all index this list.
+   * Sorting the visible page instead would put "the soonest thing due" at the
+   * top of page 1 and a second, unrelated soonest thing at the top of page 2.
+   *
+   * A card with no deadline is not the earliest and not the latest; it has no
+   * position on this axis at all, so it sits after everything that does in both
+   * directions. Sending it to the front of "latest first" would answer "what is
+   * furthest out" with sixty rows that were never due.
+   */
+  const rows = useMemo(
+    () => {
+      const kept = cards
+        .filter(matchSource)
+        .filter(matchQuery)
+        .filter(matchDue)
+        .filter(matchPriority)
+        .filter(matchStatus)
+      if (!sort) return kept
+      const dir = sort === '-due' ? -1 : 1
+      // In place is safe — every `.filter` above already handed back a fresh
+      // array, so the store is never the thing being reordered. `sort` is
+      // stable, so rows sharing a date keep the order they arrived in.
+      return kept.sort((a, b) =>
+        a.due_at === null || b.due_at === null
+          ? Number(a.due_at === null) - Number(b.due_at === null)
+          : (a.due_at - b.due_at) * dir,
+      )
+    },
+    [cards, matchSource, matchQuery, matchDue, matchPriority, matchStatus, sort],
+  )
+
+  const pages = pageCount(rows.length)
+  const pageRows = useMemo(() => pageSlice(rows, page), [rows, page])
+
   /**
    * The pane's resting state is the top row's detail, not the words "No
    * selection" in a 400×855 void — 27.8% of the viewport, every morning, until
    * something is clicked. At 7am there is always a most-likely thing.
    *
-   * The keyboard cursor still starts at `null`, so nothing is destructible by
-   * accident: showing a row is not selecting it. Neither is showing it reading
-   * it — `resting` below is what stops the pane acknowledging a row nobody
-   * opened, which would clear its `+N` every time the desk loaded.
+   * An explicit close is different from never having chosen, and that is the
+   * whole close-button fix: `''` is the address bar saying "he closed it", and
+   * it yields an empty pane column that stays empty. `null` — a fresh visit —
+   * still gets the top row. Both halves have to be true at once, which is why
+   * no amount of local state in the pane could fix this on its own.
    */
   const selected = useMemo(
     () => rows.find(c => c.group_key === selectedKey) ?? null,
     [rows, selectedKey],
   )
-
-  /**
-   * The cross has to actually close the pane.
-   *
-   * `closeDetail()` only clears the fragment, and the pane falls back to the top
-   * row — so pressing X cleared a selection nobody could see and changed nothing
-   * on screen. The dismissal is a fact the page holds, and any row being opened
-   * puts it back: the pane is empty until it is asked for again, not forever.
-   */
-  const [dismissed, setDismissed] = useState(false)
-  useEffect(() => { if (selectedKey) setDismissed(false) }, [selectedKey])
-  const dismiss = useCallback(() => {
-    setDismissed(true)
-    closeDetail()
-  }, [])
-
-  const shown = dismissed ? null : (selected ?? rows[0] ?? null)
-  const pane = usePaneWidth(maxPaneFor(width))
+  const shown = selectedKey === '' ? null : (selected ?? rows[0] ?? null)
   const isTable = width >= TABLE_MIN
   const hasPane = width >= PANE_MIN
-  const cols = columnsFor(width, hasPane ? pane.width : 0)
+
+  /* ------------------------------- the pane ------------------------------- */
+
+  const [paneW, setPaneW] = useState(() => readNumber(PANE_KEY, 400))
+  const paneWidth = Math.min(Math.max(paneW, 320), Math.min(720, maxPaneFor(width)))
+  const dragging = useRef(false)
+
+  const onGrab = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    dragging.current = true
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current) return
+    // Measured from the right edge, because that is the edge the pane is pinned
+    // to; measuring the delta from the grab point drifts once the clamp bites.
+    setPaneW(Math.round(window.innerWidth - e.clientX))
+  }
+  const onRelease = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current) return
+    dragging.current = false
+    e.currentTarget.releasePointerCapture(e.pointerId)
+    writeNumber(PANE_KEY, paneWidth)
+  }
+
+  /* ------------------------------- actions -------------------------------- */
 
   /** Remove locally first so the list closes under the thumb immediately. */
   const drop = (g: string) =>
     optimistic(s => {
-      for (const k of ['now', 'open', 'parked'] as const) s[k] = s[k].filter(c => c.group_key !== g)
+      s.cards = s.cards.filter(c => c.group_key !== g)
+      // The three legacy splits are still on the wire for one release and the
+      // phone's badge still counts one of them, so a card removed here has to
+      // leave them too or the number sits a poll behind the list.
+      s.now = s.now.filter(c => c.group_key !== g)
+      s.open = s.open.filter(c => c.group_key !== g)
+      s.parked = s.parked.filter(c => c.group_key !== g)
       return s
     })
 
   /**
-   * Every action on a row, each with a way back.
+   * Status and due date, each with a way back.
    *
-   * The undo restores every field the action replaced, not the one it is named
-   * after — `Snooze` writes `snoozed_until` *and* clears `pile_override`, and an
-   * undo that cleared only the first destroyed a deferral the product could not
-   * re-create.
+   * The undo names the field it is putting back rather than clearing
+   * everything: `actions.restore(g)` with no second argument drops every
+   * suppression on the card, which is right for "bring this back" out of the
+   * settled list and wrong for an undo, because it also destroys a due date or
+   * a pin the action never touched.
    */
-  const undoable = (c: CardT, text: string, undo: 'done' | 'snoozed' | 'moved' | 'not_mine' | 'status') =>
+  const undoable = (c: CardT, text: string, undo: 'status') =>
     toast(text, {
       label: 'Undo',
-      run: async () => { await actions.restore(c.group_key, undo); await reload() },
+      run: async () => {
+        await actions.restore(c.group_key, undo)
+        setWritten(v => v + 1)
+        await reload()
+      },
     })
 
-  const done = async (c: CardT) => {
-    drop(c.group_key)
-    if (c.group_key === selectedKey) closeDetail()
-    await actions.doneCard(c.group_key)
-    undoable(c, 'Marked done.', 'done')
-    void reload()
-  }
-  const snooze = async (c: CardT) => {
-    drop(c.group_key)
-    await actions.snooze(c.group_key, atHour(1, 9))
-    undoable(c, 'Back tomorrow morning.', 'snoozed')
-    void reload()
-  }
-  /** The counterpart, and the only second action a snoozed card is offered. */
-  const back = async (c: CardT) => {
-    drop(c.group_key)
-    await actions.move(c.group_key, null)
-    undoable(c, 'Back on your list.', 'moved')
-    void reload()
-  }
-
-  /**
-   * The swipe's Delete, which on a card is not a delete.
-   *
-   * Wake already has a word for work that is not his: it takes the card off the
-   * desk, keeps it in the restore list, and is undone by the same toast as
-   * everything else. Inventing a second kind of removal for the sake of the
-   * word on the button would be the one place in the product where a red action
-   * meant something irreversible.
-   */
-  const wontDo = async (c: CardT) => {
-    drop(c.group_key)
-    if (c.group_key === selectedKey) closeDetail()
-    await actions.notMine(c.group_key)
-    undoable(c, `${STATUS_LABEL.wont_do}.`, 'not_mine')
-    void reload()
-  }
-
-  const setStatus = async (c: CardT, s: CardStatus) => {
-    // Only the two that take it off the desk make the row leave under the thumb.
-    if (s === 'done' || s === 'wont_do') {
-      drop(c.group_key)
+  const setStatus = async (c: CardT, next: CardStatus) => {
+    // A card that settles leaves the desk entirely; one that merely moves along
+    // stays where it is, so the row updates under the pointer instead of
+    // jumping. The exception is the settled list itself, which is server-owned
+    // and re-read rather than patched.
+    if (isSettledFilter(next)) {
+      if (!settled) drop(c.group_key)
       if (c.group_key === selectedKey) closeDetail()
+    } else {
+      optimistic(s => {
+        const x = s.cards.find(i => i.group_key === c.group_key)
+        if (x) x.status = next
+        return s
+      })
     }
-    await actions.setStatus(c.group_key, s)
-    undoable(c, `${STATUS_LABEL[s]}.`, 'status')
+    await actions.setStatus(c.group_key, next)
+    setWritten(v => v + 1)
+    undoable(c, next === 'done' ? 'Done.' : `${STATUS_LABEL[next]}.`, 'status')
+    void reload()
+  }
+
+  const setDue = async (c: CardT, at: number | null) => {
+    optimistic(s => {
+      const x = s.cards.find(i => i.group_key === c.group_key)
+      if (x) x.due_at = at
+      return s
+    })
+    await actions.setDue(c.group_key, at)
+    setWritten(v => v + 1)
     void reload()
   }
 
   const rowActions: RowAction = {
-    onDone: done,
-    onSnooze: snooze,
-    onBack: back,
     onOpen: c => openDetail(c.group_key),
-    onStatus: setStatus,
-    onWontDo: wontDo,
+    onStatus: (c, s) => void setStatus(c, s),
+    onDue: (c, at) => void setDue(c, at),
   }
 
   /**
-   * j/k over the visible rows, Enter to open, e and s to act.
+   * j/k over the *filtered* list, Enter to open, e to finish.
+   *
+   * The cursor indexes every matching row rather than the visible page, and the
+   * page follows it — otherwise `j` on the last row of a page moves a selection
+   * onto a row nobody can see, which is worse than doing nothing.
    *
    * Inert while any modal is open. The handler is bound to `document` and used
    * to skip only INPUT / TEXTAREA / contentEditable — a `role="dialog"` panel is
-   * none of those, so `e` marked a card Done straight through an open sheet,
-   * and the undo toast rendered underneath the scrim where it could not be
-   * reached.
+   * none of those, so `e` marked a card Done straight through an open sheet, and
+   * the undo toast rendered underneath the scrim where it could not be reached.
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (overlayOpen()) return
-      /*
-       * A row with its drawer open owns the keyboard until it is shut.
-       *
-       * Without this, one Escape both closed the drawer and dismissed the pane —
-       * two things on one key, neither of them asked for twice — and `e` would
-       * have completed a card while its own Done sat revealed and unpressed. The
-       * drawer closes itself on Escape; this only has to stay out of the way.
-       */
+      // A drawer open on some row owns the keyboard until it is shut. Without
+      // this, `e` on an open swipe finishes the *cursor* card rather than the
+      // one whose actions are showing under the thumb.
       if (openSwipeKey()) return
       const el = document.activeElement
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable)) return
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el as HTMLElement).isContentEditable)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
       if (!rows.length) return
 
@@ -251,27 +424,46 @@ export function Home() {
         return setCursor(c => (c === null ? 0 : Math.max(c - 1, 0)))
       }
       if (e.key === 'Escape') {
-        if (selectedKey) return dismiss()
+        if (selectedKey) return closeDetail()
         return setCursor(null)
       }
 
       const card = cursor === null ? null : rows[cursor]
       if (!card) return
       if (e.key === 'Enter') { e.preventDefault(); openDetail(card.group_key) }
-      else if (e.key === 'e') { e.preventDefault(); void done(card) }
-      else if (e.key === 's') {
-        e.preventDefault()
-        void (card.pile === 'parked' ? back(card) : snooze(card))
-      }
+      else if (e.key === 'e') { e.preventDefault(); void setStatus(card, 'done') }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rows, cursor, selectedKey, dismiss])
+  }, [rows, cursor, selectedKey])
 
-  // A shrinking list must not leave the cursor past the end.
+  // The page follows the cursor rather than trapping it.
+  useEffect(() => {
+    if (cursor === null) return
+    const want = Math.floor(cursor / PAGE_SIZE) + 1
+    if (want !== page) setParam('page', want === 1 ? null : String(want))
+  }, [cursor, page])
+
+  // A shrinking list must not leave the cursor past the end, nor the reader on
+  // a page that no longer exists.
   useEffect(() => {
     setCursor(c => (c === null ? null : Math.min(c, Math.max(rows.length - 1, 0))))
   }, [rows.length])
+  /**
+   * And it waits for the list before it decides that a page is past the end.
+   *
+   * Every mount runs this effect once with no cards in hand: `state` is null
+   * until `/api/state` lands, so `rows.length` is 0, `pageCount` answers 1, and
+   * a perfectly valid `?page=3` was rewritten to `/` about 40ms after load —
+   * before any row existed to be counted. A reloaded page-3 landed on page 1
+   * and the bookmark was destroyed on the way. `loaded` is the difference
+   * between "there is no page 3" and "nobody has answered yet"; only the first
+   * of those is a reason to move the reader.
+   */
+  useEffect(() => {
+    if (!loaded) return
+    if (page > pages) setParam('page', pages === 1 ? null : String(pages))
+  }, [loaded, page, pages])
 
   /**
    * The palette's card entries, capped.
@@ -293,121 +485,121 @@ export function Home() {
   // Nothing at all until the first read lands. A 200ms loader is worse than a
   // beat of nothing, and a sentence explaining that a page is loading is chrome
   // that teaches.
-  if (!state) return <div className="pad-x pt-4"><Header /></div>
-
-  const groups: Array<{ title: string; shown: CardT[]; total: number }> = [
-    { title: PILE_LABEL.now, shown: fNow, total: now.length },
-    { title: PILE_LABEL.open, shown: fOpen, total: open.length },
-    { title: PILE_LABEL.parked, shown: fParked, total: parked.length },
-  ]
-  const live = groups.filter(g => g.shown.length > 0)
+  if (!state) return <div className="pad-x pt-4"><Header source={filter} /></div>
 
   /**
-   * A filter that matches nothing anywhere is one line.
+   * A filter that matches nothing is one line.
    *
-   * Not three chapters and a count and a fourth heading. One word, with no
-   * source name appended either — the chip above it is already pressed and
-   * already names the source, so the suffix restates the question inside the
-   * answer, and the phrase it would make is a banned one. `Done and won't do` is
-   * not rendered here either: it is scoped to the same filter, so it opens to
-   * either a different population than the filter implies or a second empty
-   * state, and both are worse than absence.
+   * Not a heading and a count and an apology. One word, with no source name
+   * appended either — the pressed tab already names the source, so the suffix
+   * restates the question inside the answer.
    */
   const list = (
     <div className="min-w-0 grow pad-x pb-24 lg:pb-8">
-      <Header />
-      <FilterRow value={filter} state={state} />
+      <Header count={rows.length} source={filter} />
+      <SourceTabs value={filter} state={state} />
+      <FilterRow query={query} due={due} pri={pri} status={status} />
 
-      {live.length === 0 ? (
+      {rows.length === 0 ? (
         <Empty>Nothing</Empty>
       ) : isTable ? (
-        <table className="w-full table-fixed border-collapse">
-          <TableCols cols={cols} />
-          <TableHead cols={cols} />
-          {live.map((g, i) => (
-            <tbody key={g.title}>
-              <GroupHead title={g.title} shown={g.shown.length} total={g.total} cols={cols}
-                first={i === 0} />
-              {g.shown.map(c => (
+        <>
+          <table className="w-full table-fixed border-collapse">
+            <TableCols />
+            {/* Re-ordering does not change which rows exist, but it does change
+                which of them page 3 holds — and the reader who just asked what
+                is due soonest wants the top of the answer, not row 101 of it. */}
+            <TableHead
+              sort={sort}
+              onSort={next => { setParam('sort', next); setParam('page', null) }}
+            />
+            <tbody>
+              {pageRows.map(c => (
                 <CardRow
-                  key={c.group_key} card={c} cols={cols}
+                  key={c.group_key} card={c}
                   selected={c.group_key === selectedKey}
                   focused={cursor !== null && rows[cursor]?.group_key === c.group_key}
                   actions={rowActions}
                 />
               ))}
             </tbody>
-          ))}
-          <DoneGroup cols={cols} open={doneOpen} />
-        </table>
+          </table>
+          <Pager page={page} pages={pages} total={rows.length}
+            onPage={n => setParam('page', n === 1 ? null : String(n))} />
+        </>
       ) : (
-        <div>
-          {live.map(g => (
-            <section key={g.title}>
-              <div className="flex items-baseline gap-2 pt-6 pb-2">
-                <h2 className="text-eyebrow uppercase text-fg-mute">{g.title}</h2>
-                <span className="text-eyebrow uppercase tnum text-fg-mute">
-                  {g.shown.length !== g.total ? `${g.shown.length} of ${g.total}` : g.shown.length}
-                </span>
-              </div>
-              <ul>
-                {g.shown.map(c => (
-                  <CardLine key={c.group_key} card={c}
-                    selected={c.group_key === selectedKey} actions={rowActions} />
-                ))}
-              </ul>
-            </section>
-          ))}
-          <DoneList open={doneOpen} />
-        </div>
+        <>
+          <ul>
+            {pageRows.map(c => (
+              <CardLine key={c.group_key} card={c}
+                selected={c.group_key === selectedKey} actions={rowActions} />
+            ))}
+          </ul>
+          <Pager page={page} pages={pages} total={rows.length}
+            onPage={n => setParam('page', n === 1 ? null : String(n))} />
+        </>
       )}
     </div>
   )
 
   /*
-   * Below the pane width the detail is a full-screen push view, not a bottom
-   * sheet. The sheet was 963px of content in a 725px scroller that also
-   * drag-dismissed on the same axis as its own scroll, and its last two actions
-   * sat behind the tab bar. A push view fixes the clipping structurally and
-   * makes the OS Back button close the detail instead of leaving Wake.
+   * Below the pane width the detail is a bottom sheet with a drag handle, not a
+   * full-screen takeover.
+   *
+   * The takeover it replaces returned *instead of* the list, so reading four
+   * rows in sequence was four closes and four finds; and the sheet before that
+   * was 963px of content in a 725px scroller that drag-dismissed on the same
+   * axis as its own scroll. The list stays mounted underneath this one, which
+   * is the whole difference — and it is only offered once a row has actually
+   * been chosen, because a sheet over the list on arrival is a takeover with a
+   * handle on it.
    */
-  if (!hasPane && selected) {
-    return <PushDetail card={selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
-  }
+  const sheet = !hasPane && selectedKey && shown
+    ? <PushDetail card={shown} resting={!selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
+    : null
 
   return (
     <div className="lg:flex lg:items-stretch lg:min-h-dvh">
       {list}
+      {sheet}
       {/*
         The pane column always exists at the pane width, so opening a row never
         re-lays out the list. No fill: `bg-ink-850` is pure white in light mode,
         which put a 400px white panel on a grey page on the product's main
-        screen. A left hairline is the whole edge it needs — and that hairline is
-        also the grab handle, which is the only place a resize control belongs.
+        screen. A left hairline is the whole edge it needs.
       */}
       <aside
-        style={{ width: pane.width }}
-        className="hidden xl:block xl:shrink-0 xl:border-l xl:border-edge
-                   xl:sticky xl:top-0 xl:h-dvh relative"
+        style={{ width: paneWidth }}
+        className="hidden xl:block relative xl:shrink-0 edge-l xl:sticky xl:top-0 xl:h-dvh"
       >
+        {/* Six pixels of grab, sitting over the hairline rather than beside it,
+            so the edge the eye sees and the edge the hand finds are one edge. */}
         <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Pane width"
-          {...pane.handle}
-          /* `touch-none`: at 1280 on a touch screen this is a real grab handle,
-             and without it the page's own scroll claims the drag and cancels the
-             pointer halfway through, leaving the pane wherever the finger was. */
-          className="absolute inset-y-0 -left-1 w-2 z-20 cursor-col-resize touch-none
-                     hover:bg-ink-700 transition-colors duration-100"
+          role="separator" aria-orientation="vertical" aria-label="Resize the detail pane"
+          onPointerDown={onGrab} onPointerMove={onDrag}
+          onPointerUp={onRelease} onPointerCancel={onRelease}
+          className="grabber absolute -left-[3px] top-0 h-full w-[6px] z-20 hover:bg-ink-600"
         />
         {shown && (
-          <CardDetail
-            card={shown}
-            resting={!selected}
-            onClose={dismiss}
-            onMakeTask={c => { dismiss(); setTaskFrom(c) }}
-          />
+          /*
+           * `resting` is the difference between "he opened this" and "something
+           * had to be in the pane". The pane falls back to the top row when
+           * nothing has been chosen, and a fallback that acknowledges what it
+           * happens to be showing would clear the `+N` on the newest thread
+           * every morning before he had read a word of it.
+           *
+           * `!selected`, not `!selectedKey`, and the gap between the two is a
+           * second way into that same failure. `shown` falls back to `rows[0]`
+           * whenever the key in the URL does not match a row on the desk — which
+           * is not only "nothing chosen": it is also a card he opened and then
+           * finished, or one a poll swept while the pane was still on it. In
+           * every one of those the pane silently swaps to the top row, and with
+           * `!selectedKey` it would then acknowledge it. `selected` is the row
+           * that was actually asked for, so this is exactly "the pane is showing
+           * what somebody asked for" and nothing else.
+           */
+          <CardDetail card={shown} onClose={closeDetail} resting={!selected}
+            onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
         )}
       </aside>
       <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
@@ -416,85 +608,149 @@ export function Home() {
 }
 
 /**
- * The pane's width, dragged from its own left hairline and remembered.
+ * The phone and narrow-laptop detail.
  *
- * The pointer is captured on the handle rather than tracked on the document, so
- * a drag that leaves the window still ends when the button comes up, and the
- * write happens once at the end rather than on every frame — `localStorage` is
- * synchronous, and a synchronous write per pointermove is a stutter you can see.
+ * A bottom sheet with two snap heights rather than a full-screen view: the list
+ * stays visible above it, which is what makes reading four rows in a row one
+ * gesture instead of twelve. It snaps rather than resting anywhere, because a
+ * freely-dragged sheet is a control that has to be re-aimed every time.
  *
- * `max` is what the list can spare at this viewport, and it is applied to the
- * remembered width as well as to the drag: the width outlives the window it was
- * chosen in.
- */
-function usePaneWidth(max: number) {
-  const [width, setWidth] = useState(readPane)
-  const from = useRef<{ x: number; w: number } | null>(null)
-
-  // A window that narrows takes the room back. Same rule as the drag, so there
-  // is no width the pane can reach by resizing that it could not be dragged to.
-  useEffect(() => { setWidth(w => clampPane(w, max)) }, [max])
-
-  /** Ends a drag, whether the pointer lifted or the browser took it away. */
-  const release = () => {
-    if (!from.current) return
-    from.current = null
-    writePane(width)
-  }
-
-  return {
-    width,
-    handle: {
-      onPointerDown: (e: React.PointerEvent) => {
-        // A right-click is a context menu's business. It used to start a drag
-        // whose `pointerup` was swallowed by the menu that opened over it,
-        // leaving the handle latched: the pane then tracked the bare cursor
-        // every time it crossed the hairline, which is the strip the mouse
-        // travels through on its way between the list and the pane.
-        if (e.button > 0) return
-        from.current = { x: e.clientX, w: width }
-        e.currentTarget.setPointerCapture(e.pointerId)
-        // Otherwise the drag starts a text selection across the whole list.
-        e.preventDefault()
-      },
-      onPointerMove: (e: React.PointerEvent) => {
-        const start = from.current
-        if (!start) return
-        // Nothing is pressed, so nothing is being dragged — the same one read
-        // the swipe layer takes, for the same latched-handle failure.
-        if (e.buttons === 0) { from.current = null; return }
-        // Leftward is wider: the pane is on the right, so its left edge moving
-        // left is the pane growing.
-        setWidth(clampPane(start.w + (start.x - e.clientX), max))
-      },
-      onPointerUp: release,
-      onPointerCancel: release,
-      onDoubleClick: () => {
-        const w = clampPane(PANE_DEFAULT_W, max)
-        setWidth(w)
-        writePane(w)
-      },
-    },
-  }
-}
-
-/**
- * The phone and narrow-laptop detail, and the bug it used to carry.
- *
- * `overlay.ts` exists precisely because `e` (Done) and `s` (Later) — both
- * destructive and both unconfirmed — leaked through open modals. This view was
- * added afterwards and never counted itself, so below the pane width, on a
- * laptop at half screen with a keyboard, `e` marked the *cursor* card done
- * rather than the one being read, and the undo toast rendered under the `z-50`
- * overlay. It counts itself now, which is what the module was written for.
+ * `useOverlay(true)` is load-bearing and not decoration. `overlay.ts` exists
+ * precisely because `e` — destructive and unconfirmed — leaked through open
+ * modals; this view was added afterwards and never counted itself, so on a
+ * laptop at half screen `e` finished the *cursor* card rather than the one being
+ * read, and the undo toast rendered under the `z-50` overlay.
  */
 function PushDetail({
-  card, taskFrom, onMakeTask,
-}: { card: CardT; taskFrom: CardT | null; onMakeTask: (c: CardT | null) => void }) {
+  card, resting, taskFrom, onMakeTask,
+}: {
+  card: CardT
+  /**
+   * The same word the pane uses, and for the same reason.
+   *
+   * `shown` falls back to the top row whenever the key in the URL names a row
+   * that is not on the desk — a card he finished, one a poll swept, one a source
+   * tab filtered away — and this sheet is gated on `selectedKey`, which is still
+   * set in every one of those. Without carrying `resting` through, the phone
+   * silently swapped to `rows[0]` and `CardDetail` acknowledged it: the `+N` and
+   * the amber edge on the newest unread thread destroyed by a card nobody
+   * opened. The desktop pane spends fifteen lines on this; the sheet is the same
+   * failure at the width he actually reads on.
+   */
+  resting: boolean
+  taskFrom: CardT | null
+  onMakeTask: (c: CardT | null) => void
+}) {
   useOverlay(true)
+  const still = useStill()
+  const [tall, setTall] = useState(() => readNumber(SHEET_KEY, 0) === 1)
+
+  const snap = (next: boolean) => { setTall(next); writeNumber(SHEET_KEY, next ? 1 : 0) }
+
+  /**
+   * Two heights, and both ways of asking for them.
+   *
+   * A drag past 24px snaps to whichever height it was heading for; anything
+   * shorter is a tap, which toggles. `dragged` is what keeps the two apart —
+   * `onClick` fires after every `onPointerUp`, so without it a drag would snap
+   * and then immediately toggle back.
+   *
+   * It snaps rather than resting wherever it is let go, because a sheet that
+   * can be any height is a control that has to be re-aimed every time it opens.
+   *
+   * **The sheet follows the finger while the finger is down.** It held `92dvh`
+   * through every `pointermove` and changed only on release, so the one direct
+   * manipulation in the product gave no sign it had been noticed until it was
+   * over: you drag a dead handle, let go, and the panel teleports. `held` is
+   * the live pixel height and it is dropped on release, so the resting height
+   * goes back to being a `dvh` that follows the viewport rather than a pixel
+   * count that was true once.
+   *
+   * Its ceiling is read off the element rather than recomputed here. The sheet
+   * is capped by a `max-height` that keeps the tab bar and a row of the list
+   * showing, and that cap is lower than the tall snap on a phone — a drag
+   * clamped to `92dvh` would have spent its last 50px moving nothing, which is
+   * the same dead handle in a smaller place.
+   */
+  const from = useRef<number | null>(null)
+  const dragged = useRef(false)
+  const grip = useRef({ height: 0, min: 0, max: 0 })
+  const [held, setHeld] = useState<number | null>(null)
+
+  const height = held !== null ? `${held}px` : tall ? '92dvh' : '55dvh'
+
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-ink-900 flex flex-col pad-top pad-bottom">
-      <CardDetail card={card} onClose={closeDetail}
+    <div
+      /*
+       * It stops above the phone's tab bar rather than on the bottom edge.
+       *
+       * At `bottom: 0` a 55dvh sheet covered all six destinations — every one of
+       * them measured unreachable with `elementFromPoint`, and no bar was even
+       * visible to explain why. This is a push sheet and not a modal: the list
+       * stays live underneath it, so the shell has to stay live under that. The
+       * cap keeps a row of the list showing at the tall snap too, which is the
+       * whole reason the sheet is not a takeover.
+       *
+       * From `sm` up `--nav-h` is only the home indicator, which is what the
+       * sheet's own `pad-bottom` used to supply — so that class goes with it,
+       * or the indicator's height is reserved twice.
+       */
+      style={{
+        height,
+        bottom: 'var(--nav-h)',
+        maxHeight: 'calc(100dvh - var(--nav-h) - 44px)',
+      }}
+      /* No transition while the finger is down — the drag is the animation, and
+         easing it would leave the sheet a frame or two behind the thumb. On
+         release it travels to the snap instead of jumping to it.
+         Gated on `useStill` like every other motion here: a height transition
+         needs frames, and a headless pane produces none, so an ungated one
+         leaves the sheet frozen at the height it was let go from. */
+      className={`fixed inset-x-0 z-50 bg-ink-900 edge-t flex flex-col
+                  ${held === null && !still ? 'transition-[height] duration-200 ease-out-quint' : ''}`}
+    >
+      <button
+        onPointerDown={e => {
+          from.current = e.clientY
+          dragged.current = false
+          const sheet = e.currentTarget.parentElement
+          const vh = window.innerHeight
+          const min = vh * 0.55
+          // `max-height` computes to a pixel length, so the cap the sheet is
+          // actually under can be read rather than re-derived from `--nav-h`.
+          const cap = sheet ? parseFloat(getComputedStyle(sheet).maxHeight) : NaN
+          grip.current = {
+            height: sheet?.getBoundingClientRect().height ?? min,
+            min,
+            max: Math.max(min, Math.min(vh * 0.92, Number.isFinite(cap) ? cap : Infinity)),
+          }
+          e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={e => {
+          if (from.current === null) return
+          const dy = e.clientY - from.current
+          if (Math.abs(dy) > 8) dragged.current = true
+          const { height: h0, min, max } = grip.current
+          setHeld(Math.min(max, Math.max(min, h0 - dy)))
+        }}
+        onPointerUp={e => {
+          const start = from.current
+          from.current = null
+          setHeld(null)
+          if (start === null) return
+          const dy = e.clientY - start
+          if (Math.abs(dy) > 24) snap(dy < 0)
+        }}
+        // A pointer the system takes away mid-drag still has to put the height
+        // back on a snap, or it rests at whatever pixel the last move wrote.
+        onPointerCancel={() => { from.current = null; setHeld(null) }}
+        onClick={() => { if (!dragged.current) snap(!tall) }}
+        aria-label={tall ? 'Shrink the panel' : 'Grow the panel'}
+        className="hit relative shrink-0 h-6 flex items-center justify-center touch-none cursor-row-resize"
+      >
+        <span className="block w-10 h-1 rounded-full bg-ink-600" />
+      </button>
+      <CardDetail card={card} onClose={closeDetail} resting={resting}
         onMakeTask={c => { closeDetail(); onMakeTask(c) }} />
       <TaskSheet open={!!taskFrom} onClose={() => onMakeTask(null)} fromCard={taskFrom} />
     </div>,
@@ -504,32 +760,58 @@ function PushDetail({
 
 /* --------------------------------- chrome --------------------------------- */
 
-function Header() {
+/**
+ * The title row: what this is, how much of it there is, and the one control
+ * that changes what exists.
+ *
+ * Fetch sits here rather than in the filter row beneath it, and the separation
+ * is the point — everything in the filter row narrows what you see, and this
+ * changes what there is to see. It is also the only row on the page that cannot
+ * scroll sideways on a phone, which is where a control worth pressing belongs.
+ *
+ * The mark rides this row on a phone and nowhere else — `PageTitle` owns that
+ * rule now, for all six routes rather than for the two that remembered it.
+ */
+function Header({ count, source }: { count?: number; source: SourceName | 'all' }) {
   return (
-    <header className="pt-4 pb-2">
-      <h1 className="text-lg font-medium">Desk</h1>
+    <header className="pt-4 pb-2 flex items-center gap-3">
+      <PageTitle>Desk</PageTitle>
+      {count !== undefined && <span className="tnum text-sm text-fg-mute">{count}</span>}
+      <span className="ml-auto shrink-0"><Fetch source={source} /></span>
     </header>
   )
 }
 
 /**
- * The chrome row: what you see, then what exists.
+ * All / Slack / Gmail / GitHub / Sentry / Claude, as a real tab strip.
  *
- * The filter lives in the URL. It used to live in `useState`, so a filtered view
- * could not be bookmarked and a refresh mid-triage lost his place.
+ * A strip with a rule under it and `aria-selected` on the pressed one, rather
+ * than six lozenges: a lozenge row reads as six filters that could be combined,
+ * and this is one choice of six. Everything below it — search, due, priority,
+ * status — composes *with* whichever tab is selected, because all of it lives in
+ * the URL rather than inside this component.
  *
  * All five sources, always, in one fixed order, never disabled and never
  * reordered. Each carries the mark its rows already carry in the Kind column, so
- * the row is readable on a device that cannot hover. A source whose last poll
+ * the strip is readable on a device that cannot hover. A source whose last poll
  * failed draws that mark at a quarter weight with the reason on `title`; a
- * source with no credential gets the same treatment with a different reason. That is the only sync mark on this page — `SyncLine`, a wrapping
- * five-clause paragraph at 12px that ended in amber and sat 424px below the
- * fold, is deleted rather than shortened. Failure belongs on the chip you are
- * about to press and on the row in Settings where you would go to fix it.
+ * source with no credential gets the same treatment with a different reason.
+ * That is the only sync mark on this page.
+ *
+ * The strip scrolls on a phone rather than wrapping. Six tabs need more than
+ * 358px whatever is done to them, and a second line of tabs pushes the first row
+ * of the list off the fold — so it fades at the right edge while there is more
+ * past it, because a tab sliced in half by the screen edge reads as a bug and
+ * not as more. A scrolling strip also clips its children's overflow, which is
+ * what took `.hit`'s vertical outset off every tab in it; the tab is 44px in its
+ * own right on a phone rather than borrowing one it cannot keep.
  */
-function FilterRow({
+function SourceTabs({
   value, state,
-}: { value: SourceName | 'all'; state: { lastSync: Array<{ source: string; ok: number; connected: number; error: string | null }> } }) {
+}: {
+  value: SourceName | 'all'
+  state: { lastSync: Array<{ source: string; ok: number; connected: number; error: string | null }> }
+}) {
   const runs = new Map(state.lastSync.map(r => [r.source, r]))
 
   const wordFor = (s: SourceName) => {
@@ -539,40 +821,98 @@ function FilterRow({
     return null
   }
 
+  const tab = (active: boolean) =>
+    `hit relative inline-flex items-center gap-2 h-11 sm:h-9 px-2 text-sm whitespace-nowrap
+     border-b-2 -mb-px transition-colors duration-100
+     ${active
+       ? 'border-accent text-fg font-medium'
+       : 'border-transparent text-fg-mute font-medium hover:text-fg-dim'}`
+
+  const rail = useRail<HTMLDivElement>()
+
   return (
-    <div className="flex items-center gap-2 pb-2">
-      <Chip active={value === 'all'} onClick={() => setParam('src', null)}>All</Chip>
-      {FILTERS.map(s => {
-        const bad = wordFor(s)
-        return (
-          <Chip
-            key={s}
-            active={value === s}
-            /* Below the width that fits five names, a chip carries either its
-               mark or its name and never both — and the one with a name is the
-               one that is pressed. Both together is 41–86px per chip on a row
-               that has 358 to spend on eight controls, which is how a filtered
-               phone ended up 71px wider than the screen. */
-            flexible={value === s}
-            mark={
-              <span className={value === s ? 'hidden lg:inline-flex' : 'inline-flex'}>
-                <SourceMark source={s} failed={!!bad} />
-              </span>
-            }
-            title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
-            ariaLabel={SOURCE_LABEL[s]}
-            onClick={() => setParam('src', value === s ? null : s)}
-          >
-            {/* Every name at `lg`, where all five fit; the pressed one's name at
-                every width, truncating rather than pushing Fetch off the screen.
-                The names used to appear from `sm`, where the row needs 612px and
-                has 392 — the page scrolled sideways at 640 and 768. */}
-            <span className={value === s ? 'truncate' : 'hidden lg:inline'}>{SOURCE_LABEL[s]}</span>
-          </Chip>
-        )
-      })}
-      <span className="grow" />
-      <Fetch />
+    <div className="rail" data-spill={rail.spill || undefined}>
+      <div ref={rail.ref}
+        className="flex items-center gap-4 border-b border-edge overflow-x-auto no-scrollbar">
+        <button aria-selected={value === 'all'} role="tab" className={tab(value === 'all')}
+          onClick={() => { setParam('src', null); setParam('page', null) }}>
+          All
+        </button>
+        {FILTERS.map(s => {
+          const bad = wordFor(s)
+          return (
+            <button
+              key={s}
+              role="tab"
+              aria-selected={value === s}
+              className={tab(value === s)}
+              title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
+              onClick={() => { setParam('src', value === s ? null : s); setParam('page', null) }}
+            >
+              <SourceMark source={s} failed={!!bad} />
+              {/* The name from `sm` up, where six of them fit. On a phone the six
+                  marks are the strip, and the pressed one keeps its name so the
+                  answer to "which am I in" never needs a hover. */}
+              <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Search, and the three closed sets.
+ *
+ * One row under the tabs. Everything here narrows what you see and none of it
+ * changes what exists — which is why Fetch sits up on the tab row instead,
+ * behind a spacer, where it cannot be mistaken for a fourth filter.
+ *
+ * Each control writes one URL parameter and resets the page, because page 4 of
+ * a list you just re-filtered is a page that may not exist.
+ *
+ * It wraps rather than scrolls on a phone. Four controls need about 450px and
+ * have 358; squeezed onto one line the three closed sets each rendered as `A…`,
+ * which is three anonymous dropdowns, and scrolled sideways two of them are
+ * simply not there. Search takes the first line and the three sets take the
+ * second, which is exactly 346px of the 358 available.
+ */
+function FilterRow({
+  query, due, pri, status,
+}: { query: string; due: DueFilter; pri: string; status: string }) {
+  const set = (k: string, v: string | null) => { setParam(k, v); setParam('page', null) }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 py-2">
+      <input
+        type="search"
+        value={query}
+        onChange={e => set('q', e.target.value || null)}
+        placeholder="Search"
+        aria-label="Search every column"
+        className={`${inputClass} h-8 py-0 w-full sm:w-64`}
+      />
+      <Select
+        value={due}
+        options={DUE_OPTIONS}
+        onChange={v => set('due', v === 'any' ? null : v)}
+        ariaLabel="Filter by due date"
+      />
+      <Select
+        value={pri}
+        options={[{ id: 'any', label: 'Any priority' },
+          ...PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))]}
+        onChange={v => set('pri', v === 'any' ? null : v)}
+        ariaLabel="Filter by priority"
+      />
+      <Select
+        value={status}
+        options={[{ id: 'any', label: 'Any status' },
+          ...STATUS_ORDER.map(s => ({ id: s as string, label: STATUS_LABEL[s] }))]}
+        onChange={v => set('status', v === 'any' ? null : v)}
+        ariaLabel="Filter by status"
+      />
     </div>
   )
 }
@@ -581,8 +921,8 @@ function FilterRow({
  * Pipe 2, as one control.
  *
  * Bordered rather than amber, and to the right of a spacer: everything left of
- * that spacer narrows what you see; this changes what exists. An amber chip in a
- * filter row reads as a hero, and Fetch is a tool.
+ * that spacer narrows what you see; this changes what exists. An amber control
+ * in a filter row reads as a hero, and Fetch is a tool.
  *
  * Pressing it blocks nothing. Triage continues while it runs, because Fetch only
  * ever adds. A second press is never disabled and never scolded — it re-runs,
@@ -590,14 +930,30 @@ function FilterRow({
  * chrome that teaches. The label swaps to `Fetching` and the control does not
  * change width, so nothing on the page moves.
  */
-function Fetch() {
+/**
+ * Collect now — from every source, or from the one you are looking at.
+ *
+ * The brief asked for a way to fetch a single source. This is that, and it is
+ * the tab strip rather than a second control: the desk already carries the
+ * question "which source" in the URL, and answering it twice — once to filter,
+ * once again inside a menu on the button — is two places to be out of step with
+ * each other. On the All tab the button reads `Fetch` and asks everything; on
+ * the Slack tab it reads `Fetch Slack` and asks Slack alone.
+ *
+ * The label is what makes it discoverable. A control that silently changed what
+ * it did based on a filter elsewhere on the page would be a trap; one that
+ * renames itself is a statement, and it is the only affordance needed.
+ */
+function Fetch({ source }: { source: SourceName | 'all' }) {
   const [busy, setBusy] = useState(false)
   const [line, setLine] = useState<{ text: string; title?: string } | null>(null)
+  const only = source === 'all' ? undefined : source
+  const word = only ? SOURCE_LABEL[only] : null
 
   const run = async () => {
     setBusy(true)
     try {
-      const r = await fetchNow()
+      const r = await fetchNow(only)
       const asked = r.connectors.filter(c => c.via !== 'none')
       const quiet = asked.filter(c => !c.ok).map(c => c.name)
       setLine({
@@ -625,132 +981,27 @@ function Fetch() {
         </span>
       )}
       <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
-        title="Ask every connector this machine can reach what is on you">
+        title={only
+          ? `Ask ${SOURCE_LABEL[only]} alone what is on you — the other sources are left as they are`
+          : 'Ask every connector this machine can reach what is on you'}>
         {/* The word is the control; the glyph is decoration, and on a phone it
-            is 22px of a 358px row that six filters and this have to share. It
-            comes back at the width where the filters get their names. The busy
-            state is still legible without it — the label is the indicator. */}
+            is 22px this row does not have to spend. It comes back at the width
+            where the tabs get their names. The busy state is still legible
+            without it — the label is the indicator. */}
         <span className="hidden lg:inline-flex">
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
         </span>
-        {/* One width for both words, so the row does not shift under the finger. */}
-        <span className="w-14 text-left">{busy ? 'Fetching' : 'Fetch'}</span>
+        {/* Unscoped, the verb holds one width for both states so the button does
+            not resize under the finger mid-press. Scoped, it must not: a fixed
+            56px column against a 36px word opens a 20px hole and `Fetch  Slack`
+            reads as two controls rather than one label. The scoped button does
+            change width between its two states, and that is the better trade —
+            it is right-aligned so only its left edge moves, and it is disabled
+            for the whole of the state that moves it. */}
+        <span className={word ? '' : 'w-14 text-left'}>
+          {busy ? 'Fetching' : 'Fetch'}{word ? ` ${word}` : ''}
+        </span>
       </Button>
     </span>
-  )
-}
-
-/* ------------------------- done and not mine ------------------------------ */
-
-/**
- * What Done and Not-mine took away, as a fourth group rather than a modal.
- *
- * Done is one unconfirmed keystroke, which is only defensible because it is
- * reversible. The undo bar covers the next few seconds; this covers the rest,
- * including the card he finished yesterday and needs again. Collapsed, because
- * it is the only group he is not looking for.
- */
-function useDoneCards(open: boolean) {
-  const [cards, setCards] = useState<CardT[] | null>(null)
-  useEffect(() => {
-    if (!open) return
-    let live = true
-    setCards(null)
-    actions.doneCards().then(d => { if (live) setCards(d.cards) }).catch(() => { if (live) setCards([]) })
-    return () => { live = false }
-  }, [open])
-
-  const restore = async (c: CardT) => {
-    setCards(cur => cur?.filter(x => x.group_key !== c.group_key) ?? cur)
-    await actions.restore(c.group_key)
-    await reload()
-    toast('Back on your list.')
-  }
-  return { cards, restore }
-}
-
-/**
- * Why a card is not on the desk, read from `status` rather than from the two
- * legacy columns. The server keeps all three in step, so either answer is
- * correct — but only one of them is the vocabulary the rest of the product now
- * uses, and a restore list saying `not mine` beside a picker saying `Won't do`
- * is two names for one state.
- */
-const doneWord = (c: CardT) =>
-  c.status === 'wont_do'
-    ? STATUS_LABEL.wont_do.toLowerCase()
-    : `done ${c.state?.done_at ? ago(c.state.done_at) : ''}`.trim()
-
-function DoneGroup({ cols, open }: { cols: Columns; open: boolean }) {
-  const { cards, restore } = useDoneCards(open)
-  const Chevron = open ? ChevronDown : ChevronRight
-  return (
-    <tbody>
-      <tr>
-        <td colSpan={colSpanOf(cols)} className="pt-6 pb-2">
-          <button
-            onClick={() => setParam('done', open ? null : '1')}
-            className="inline-flex items-center gap-2 text-eyebrow uppercase
-                       text-fg-mute hover:text-fg-dim transition-colors duration-100"
-          >
-            <Chevron size={13} />
-            Done and won't do
-            {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
-          </button>
-        </td>
-      </tr>
-      {/* The real columns, not a second table wearing the first one's headers.
-          `doneWord` used to land in KIND, the title spanned three columns, and
-          the source names landed left-aligned in the right-aligned WHEN column. */}
-      {open && cards?.map(c => (
-        <tr key={c.group_key} className="border-b border-rule">
-          <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate">{doneWord(c)}</td>
-          <td className="py-3 pr-4 text-base text-fg-dim align-middle truncate">{c.title}</td>
-          {cols.why && <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate">{c.why}</td>}
-          {cols.where && <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate font-mono">{sourceWords(c)}</td>}
-          <td />
-          <td className="py-3 pr-4 text-sm text-fg-mute align-middle tnum text-right">{ago(c.ts)}</td>
-          <td className="py-1 pr-0 align-middle text-right">
-            <Button size="sm" variant="ghost" title="Bring it back" ariaLabel="Bring it back"
-              onClick={() => void restore(c)}>
-              <RotateCcw size={14} />
-            </Button>
-          </td>
-        </tr>
-      ))}
-    </tbody>
-  )
-}
-
-function DoneList({ open }: { open: boolean }) {
-  const { cards, restore } = useDoneCards(open)
-  const Chevron = open ? ChevronDown : ChevronRight
-  return (
-    <section>
-      <button
-        onClick={() => setParam('done', open ? null : '1')}
-        className="inline-flex items-center gap-2 pt-6 pb-2 text-eyebrow uppercase text-fg-mute"
-      >
-        <Chevron size={13} />
-        Done and won't do
-        {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
-      </button>
-      {open && !!cards?.length && (
-        <ul>
-          {cards.map(c => (
-            <li key={c.group_key} className="flex items-center h-11 border-b border-rule">
-              <span className="text-base text-fg-dim truncate grow min-w-0">{c.title}</span>
-              <span className="text-sm text-fg-mute shrink-0 pl-3">{doneWord(c)}</span>
-              <span className="pl-2 shrink-0">
-                <Button size="sm" variant="ghost" title="Bring it back" ariaLabel="Bring it back"
-                  onClick={() => void restore(c)}>
-                  <RotateCcw size={14} />
-                </Button>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   )
 }

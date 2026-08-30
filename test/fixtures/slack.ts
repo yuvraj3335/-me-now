@@ -1,6 +1,7 @@
 /**
- * What mcp.slack.com actually answered, on 2026-08-30, to the three calls Wake
- * makes. Captured before the parsers were written and copied here verbatim —
+ * What mcp.slack.com actually answered, on 2026-08-30, to the two calls a thread
+ * row is built from. Captured before the parsers were written and copied here
+ * verbatim —
  * abridged only where the original capture was abridged, and never reshaped to
  * suit a test. A fixture somebody tidied is a fixture that stops proving
  * anything.
@@ -45,91 +46,6 @@ From: Riya <riya@truto.one> (U0B5V7G3NQ5)
 Time: 2026-08-27 14:20:16 IST
 Message TS: 1787820616.819949
 Added comments
-`
-
-/**
- * `slack_read_channel` — C0BERTMS9K4 (#sentry-alerts), limit 4.
- *
- * The line that makes alert channels READ rather than searched is in here:
- * `notes: <!subteam^S06HDT77E1M|@truto-eng>` lives in Block Kit, and Slack's
- * search index does not cover it.
- */
-export const CHANNEL_READ = `Channel: #sentry-alerts (C0BERTMS9K4)
-
-=== Message from Cursor <botuser-T04CWR1AM1R-B092446N6LB@slack-bots.com> (U092446PCTV) at 2026-08-30 18:27:14 IST ===
-Message TS: 1788094634.851449
-_TRUTO-38_ — \`TypeError: Cannot read properties of undefined (reading 'payload_transform')\`
-<https://truto.sentry.io/issues/7700748352/>
-
-_Root cause:_ \`POST /environment-integration-webhook/:id\` read
-_Classification:_ (a) application bug
-_Fix:_ Guard with \`isNil\` Vitest: 2 passed.
-<https://cursor.com/agents/bc-023e1f21|Open in Cursor> · Cursor Grok 4.5 · <https://github.com/trutohq/truto/pull/2037|View PR>
-App notification from App (https://truto.sentry.io/issues/7700748352/): :red_circle: <https://truto.sentry.io/issues/7700748352/?referrer=slack|*TypeError*>
-processRequest(index)
-\`\`\`Cannot read properties of undefined (reading 'payload_transform')\`\`\`
-State: *New*   First Seen: *4 minutes ago*
-Resolve button
-Archive button
-Project: <https://truto.sentry.io/issues/?project=4511647571574784|truto>    Alert: TRUTO-38    Short ID: TRUTO-38
-
-=== Message from Sentry <botuser-T04CWR1AM1R-B0BEVJZV9BN@slack-bots.com> (U0BFL7HM40Y) at 2026-08-30 18:22:59 IST ===
-Message TS: 1788094379.882969
-:red_circle: <https://truto.sentry.io/issues/7700748352/?referrer=slack&amp;notification_uuid=1&amp;workflow_id=3657647&amp;alert_type=issue|*TypeError*>
-processRequest(index)
-\`\`\`Cannot read properties of undefined (reading 'payload_transform')\`\`\`
-State: *New*   First Seen: *Just now*
-Resolve button
-Archive button
-notes: <!subteam^S06HDT77E1M|@truto-eng>
-Project: <https://truto.sentry.io/issues/?project=4511647571574784|truto>    Alert: <https://sentry.io/organizations/truto/monitors/alerts/3657647/|Notify #sentry-alerts via Slack>    Short ID: TRUTO-38
-`
-
-/**
- * `slack_read_channel` — C05UPHVT2CQ (#truto-api-alerts).
- *
- * The capture that produced DESIGN §7. There is no digest in this channel:
- * there is a `Warn:` and a `Recovered:` six minutes apart, every few minutes,
- * forever, naming `@slack-truto-api-alerts` — a channel handle, not him and not
- * `@truto-eng`. A card per message here is a Datadog metronome on the desk.
- *
- * The third message is the one that would still land: a real digest that pages
- * the team. It is here so the rule is proven to admit as well as refuse.
- */
-export const CHANNEL_READ_METRONOME = `Channel: #truto-api-alerts (C05UPHVT2CQ)
-
-=== Message from Datadog <botuser-T04CWR1AM1R-B05UPHTF70Q@slack-bots.com> (U05UPHTF70Q) at 2026-08-30 22:11:32 IST ===
-Message TS: 1788108092.130049
-Attachment: Recovered: Number of requests is high (https://us3.datadoghq.com/monitors/453870)
-@slack-truto-api-alerts
-
-Less than or exactly 30000.0 log events matched in the last 5m
-Notified: @slack-truto-api-alerts
-Attachment: View in Log Explorer (https://us3.datadoghq.com/logs)
-
-=== Message from Datadog <botuser-T04CWR1AM1R-B05UPHTF70Q@slack-bots.com> (U05UPHTF70Q) at 2026-08-30 22:05:32 IST ===
-Message TS: 1788107732.884019
-Attachment: Warn: Number of requests is high (https://us3.datadoghq.com/monitors/453870)
-@slack-truto-api-alerts
-
-More than 30000.0 log events matched in the last 5m
-Notified: @slack-truto-api-alerts
-
-=== Message from Datadog <botuser-T04CWR1AM1R-B05UPHTF70Q@slack-bots.com> (U05UPHTF70Q) at 2026-08-30 21:00:00 IST ===
-Message TS: 1788103800.000100
-Nightly API digest for <!subteam^S06HDT77E1M|@truto-eng>: 4 endpoints over budget
-`
-
-/**
- * A message whose body renders empty — a reaction-only post, or an image with
- * no caption. `Reactions:` and `Files:` are transport, so nothing is left.
- */
-export const CHANNEL_READ_WORDLESS = `Channel: #sentry-alerts (C0BERTMS9K4)
-
-=== Message from Sentry <botuser-T04CWR1AM1R-B0BEVJZV9BN@slack-bots.com> (U0BFL7HM40Y) at 2026-08-30 18:22:59 IST ===
-Message TS: 1788094379.882969
-Reactions: eyes (1)
-Files: chart.png (ID: F0BSY2UPBL6, image/png, 12.0 KB)
 `
 
 /**
@@ -237,33 +153,4 @@ Text:
 
 `
 
-/** `#github-updates` — matches the query, is about nobody, and names nobody. */
-export const SEARCH_FIREHOSE = `# Search Results for: <!subteam^S06HDT77E1M> after:2026-08-16
-
-## Messages (2 results)
-### Result 1 of 2
-Channel: #github-updates (ID: C0GHUPD8888)
-From: GitHub <github@truto.one> (ID: B0GH1111)
-Time: 2026-08-30 10:00:00 IST
-Message_ts: 1788000000.000100
-Permalink: [link](https://truto.slack.com/archives/C0GHUPD8888/p1788000000000100)
-Text:
-<!subteam^S06HDT77E1M> pushed 3 commits to main
-
----
-
-### Result 2 of 2
-Channel: #github-updates (ID: C0GHUPD8888)
-From: GitHub <github@truto.one> (ID: B0GH1111)
-Time: 2026-08-30 10:05:00 IST
-Message_ts: 1788000300.000200
-Permalink: [link](https://truto.slack.com/archives/C0GHUPD8888/p1788000300000200)
-Text:
-<@U09617LRRDF> was requested as a reviewer on trutohq/truto#2037
-
----
-
-`
-
 export const ME_ID = 'U09617LRRDF'
-export const TRUTO_ENG = 'S06HDT77E1M'

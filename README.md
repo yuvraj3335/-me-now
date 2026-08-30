@@ -28,17 +28,26 @@ pair clears WCAG AA in both.
 
 ---
 
-## The three piles
+## Status, priority, due date
 
-| Pile | What it means |
+The desk is one flat, searchable, filterable table. Every row carries three
+stored facts you set yourself:
+
+| | |
 |---|---|
-| **Now** | Someone else is blocked on you — a DM, a mention, a review request, an assigned issue, unread mail addressed to you |
-| **Open** | You started it and nobody is waiting — your open PRs, live Claude Code sessions, tasks in flight |
-| **Parked** | You snoozed it. It comes back on its own when the snooze expires |
+| **Status** | Not started · In progress · In review · Done · Won't do |
+| **Priority** | Urgent · High · Normal · Low. Normal renders nothing — a mark the eye skips on every row is not information |
+| **Due** | A real date and time, or nothing |
 
-Piles are computed from the card plus your state, never filed by hand — so they
-cannot drift out of sync with reality. A manual move always wins, and "not mine"
-is permanent.
+Only `Not started` is ever assumed. `In progress` and `In review` are claims
+about work that only you can make, so nothing infers them; `Done` and `Won't do`
+take the row off the desk and are reached again through the status filter.
+
+Underneath, Wake still computes an urgency rank from the card and your state —
+whether somebody else is blocked on you, whether you started it, whether it is
+waiting on a date — and that is what orders the table before you sort it. It is
+derived every time rather than filed once, so it cannot drift out of sync with
+what the sources actually say.
 
 ## One card per thing
 
@@ -64,12 +73,21 @@ on the individual card. That is what makes two promises hold:
 The one thing to know before reading any of the code: **Wake packs context, and
 then gets out of the way.**
 
-Pick a card, a mail thread, a Sentry issue. Pick a template — customer incident,
-sync-job failure, mapping, blank. Add or drop skills. Wake renders one
-self-contained brief: what you need, the repository it concerns, the skills to
-load first, and every object quoted and fenced as data — one entry per place the
-thing was seen, so a card deduped across Slack, GitHub and Sentry arrives as
-three sets of identifiers rather than one blob.
+Pick a card, a mail thread, a Sentry issue. Pick a session, a repository, a
+template — customer incident, sync-job failure, mapping, blank. Browse the skill
+catalogs and add or drop what you want. Type what you need, or dictate it. Choose
+how it should run. Wake renders one self-contained brief: how to run it, what you
+need, the repository it concerns, the skills to load first, and every object
+quoted and fenced as data — one entry per place the thing was seen, so a card
+deduped across Slack, GitHub and Sentry arrives as three sets of identifiers
+rather than one blob.
+
+The templates are briefs, not one-liners. Each says what to establish before
+touching anything, which subagents to put on it — architect, senior engineer, UI,
+UX, designer, QA lead — what evidence it will not accept a conclusion without,
+and what to hand back. They say *what*, never *how*: "read the
+environment-integration override" stays true across CLI releases, and a command
+line with flags in it does not.
 
 **Then it shows you the brief and lets you edit it.** That is the step that
 matters: what goes is what you approved, not what Wake happened to render. The
@@ -80,6 +98,42 @@ hands you a link.
 That link is `https://claude.ai/new?q=<the brief>`. On a phone it is a universal
 link, so it opens the Claude app; on a laptop it opens a tab. Either way it is
 your own Claude login — Wake never sees it, holds no key, and starts nothing.
+
+### Sessions, and what picking one actually does
+
+`/sessions` lists every Claude Code session on the box, grouped by the directory
+it ran in, with a `live` badge on anything running right now. Sessions are filed
+on disk under a *flattened* form of that directory — every non-alphanumeric
+becomes a dash — so `-Users-me-work-truto-app` is both `truto-app` and
+`truto/app` and there is no telling which. Wake groups by the `cwd` the
+transcript itself recorded and falls back to the raw filed name, never to a
+reconstructed path.
+
+`turns` is counted from the tail of the transcript Wake reads, not from the whole
+thing, which is why every surface says **turns in view**.
+
+Picking a session in the launch sheet **targets it as context — it does not
+resume it.** `claude.ai/new?q=` opens a *new* conversation and there is no URL
+that reaches an existing one, so what the picker buys you is: the session's
+directory and branch fill in, its last exchanges are attached as a quoted object,
+and the brief carries a `claude --resume <id> --permission-mode <mode>` line you
+can copy into a terminal on the machine the transcript is actually on. The UI
+says that in those words. See `DECISIONS.md` #35.
+
+**Bypass permissions is the default.** A brief is written, read and approved
+before it is sent; asking again at the terminal asks the same question twice. The
+other position is `acceptEdits`. The link cannot carry either — there is no
+parameter for it — so the mode appears in the brief in words and in the copyable
+command, and the sheet says so rather than implying a setting that silently does
+nothing.
+
+**Deleting a session is irreversible and touches files Wake did not write.** It
+removes four paths under your Claude Code home: the transcript, its sidecar
+directory, `session-env/<id>` and `file-history/<id>` — the last of which is
+Claude Code's edit-undo history for real source files. So it names all four,
+takes a typed confirmation bound by a server-side token to that exact session id,
+and is refused outright while the session is running: unlinking a live transcript
+does not stop the process, it leaves it appending to a file with no name.
 
 It used to spawn `claude -p` on the DevBox instead: a headless process with no
 terminal attached, whose output nobody could see and whose permission prompts
@@ -119,9 +173,11 @@ token store as one link in its credential chain, which is why
 
 ```
 card / mail thread / Sentry issue ─┐
-a template (9 of them)             ├── one Markdown brief ── claude.ai/new?q=…
+a Claude Code session, as context  │
+templates (10 of them)             ├── one Markdown brief ── claude.ai/new?q=…
 the repository it concerns         │        │
-the skills worth loading (named)   ┘        └── the same text, on disk
+the skills worth loading (named)   │        └── the same text, on disk
+the permission mode, in words      ┘
 ```
 
 - **Repository registry** — every git repo under `~/work`, with its rule files,

@@ -10,7 +10,7 @@
  * So identity is three axes over the palette that already exists:
  *
  *   1. **The glyph is the kind.** A pull request and an issue are different
- *      marks; a thread and a DM are different marks.
+ *      marks; a conversation and a machine's page are different marks.
  *   2. **The colour is the source.** Same five hues, already theme-split.
  *   3. **The `Where` column is monospace**, and its texture differs by kind
  *      because the underlying data does: `trutohq/truto` is not `#eng-platform`
@@ -20,8 +20,8 @@
  */
 
 import {
-  AtSign, CircleDot, GitPullRequest, GitPullRequestArrow, Mail, MessageSquare,
-  Terminal, TriangleAlert, type LucideIcon,
+  BellRing, CircleDot, GitPullRequest, GitPullRequestArrow, Mail, MessageSquare,
+  SquareTerminal, TriangleAlert, type LucideIcon,
 } from 'lucide-react'
 import type { Card, CardSource, SourceName } from '../lib/types'
 import { SOURCE_COLOR } from './sources'
@@ -40,22 +40,28 @@ const FALLBACK: Kind = { word: 'Item', Icon: CircleDot, source: 'github' }
  * The kind of one source's contribution.
  *
  * `card.kind` is the adapter's own word (`review`, `my_pr`, `assigned`,
- * `mention`, `dm`, `thread`, `email`, `error`, `session`), and for GitHub it
+ * `mention`, `thread`, `alert`, `email`, `error`, `session`), and for GitHub it
  * describes *why* rather than *what* — `assigned` is an issue or a pull request
  * depending on `meta.is_pr`. Both facts are already on the card.
+ *
+ * Slack splits two ways now, and the split is the point of reading the alert
+ * channels at all: a person typed the one, a monitor emitted the other, and
+ * they want different things from him. `Alert` and Sentry's `Alert` share a
+ * word deliberately — they are the same event told by two systems, and the
+ * dedup engine merges them into one row wherever it can prove it.
  */
 export function kindOf(source: SourceName, kind: string, meta: Record<string, any> = {}): Kind {
   switch (source) {
     case 'slack':
-      return meta.is_dm || kind === 'dm'
-        ? { word: 'DM', Icon: AtSign, source }
+      return kind === 'alert'
+        ? { word: 'Alert', Icon: BellRing, source }
         : { word: 'Thread', Icon: MessageSquare, source }
     case 'gmail':
       return { word: 'Mail', Icon: Mail, source }
     case 'sentry':
       return { word: 'Alert', Icon: TriangleAlert, source }
     case 'claude':
-      return { word: 'Session', Icon: Terminal, source }
+      return { word: 'Session', Icon: SquareTerminal, source }
     case 'github': {
       // A review request is its own thing: it is the only GitHub row where
       // somebody is blocked on him rather than the other way round, and the
@@ -97,7 +103,7 @@ export const SOURCE_GLYPH: Record<SourceName, LucideIcon> = {
   gmail: Mail,
   github: GitPullRequest,
   sentry: TriangleAlert,
-  claude: Terminal,
+  claude: SquareTerminal,
 }
 
 /**
@@ -124,12 +130,57 @@ export function SourceMark({
   )
 }
 
+/* -------------------------------- channels -------------------------------- */
+
+/**
+ * The workspace's own name, which every shared channel is named after twice.
+ *
+ * Shared channels get the convention `<partner>-<workspace>`, and internal ones
+ * get `<workspace>-<topic>`, so on a desk read entirely from one workspace the
+ * token `truto` is on most rows and identifies none of them. It is the column's
+ * background, printed.
+ */
+const WORKSPACE = 'truto'
+
+/**
+ * A channel name with the part that is on every row taken out.
+ *
+ * `#truto-15-5-truto` is the worst case and it is real: the workspace token at
+ * both ends, wrapping two characters of actual information. `#spendflo-truto`
+ * and `#truto-api-alerts` each carry it at one end. What is left is what tells
+ * one row from another.
+ *
+ * The guard is `tokens.length > 1`: `#truto` itself strips to nothing, and a
+ * blank is worse than a redundant word, so a name made only of the workspace
+ * token survives whole.
+ *
+ * **Display only.** The stored `channel_id` is the identity — it is what the
+ * `slack://` link and the permalink are built from — and it is never rewritten.
+ * Two different channels can clean to the same label and that is fine; the
+ * label is not what anything is keyed on.
+ */
+export function cleanChannel(raw: string): string {
+  const tokens = String(raw)
+    .replace(/^#+/, '')
+    // A channel read out of a rendered line sometimes trails the id it was
+    // resolved from — `#sentry-alerts (ID: C0BERTMS9K4)`. The id is worth
+    // keeping; it is not worth showing.
+    .replace(/\s*\(ID:\s*[A-Z0-9]+\)\s*$/i, '')
+    .trim()
+    .toLowerCase()
+    .split('-')
+
+  while (tokens.length > 1 && tokens[0] === WORKSPACE) tokens.shift()
+  while (tokens.length > 1 && tokens[tokens.length - 1] === WORKSPACE) tokens.pop()
+  return tokens.join('-')
+}
+
 /* --------------------------------- where ---------------------------------- */
 
 /**
  * The context a row belongs to, in the vocabulary its own system uses.
  *
- * Rendered in mono, which is the point: `trutohq/truto`, `#eng-platform` and
+ * Rendered in mono, which is the point: `trutohq/truto`, `eng-platform` and
  * `truto` look different before they are read, and that difference is free —
  * the data already had it.
  */
@@ -137,10 +188,7 @@ export function whereOf(source: CardSource | undefined, card: Card): string | nu
   const m = { ...(source?.meta ?? {}), ...card.meta }
   switch (source?.source) {
     case 'slack':
-      // Slack's search result names the channel as `#truto`, and the poller
-      // stores that string verbatim, so prefixing it again rendered `##truto`.
-      // Invisible until now: `Where` was dropped at every laptop width.
-      return m.is_dm ? 'DM' : m.channel ? String(m.channel).replace(/^#*/, '#') : null
+      return m.channel ? cleanChannel(String(m.channel)) : null
     case 'gmail':
       return (source.account ?? m.account) || null
     case 'github':

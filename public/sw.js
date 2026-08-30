@@ -67,6 +67,10 @@ self.addEventListener('push', event => {
   let data = {}
   try { data = event.data ? event.data.json() : {} } catch { data = { title: 'Wake' } }
 
+  // The title may lead with one emoji — the server puts exactly one there per
+  // notification kind, because this is the only surface Wake draws on where no
+  // glyph and no colour token of its own reaches. The body never carries one:
+  // it is his own words, quoted back.
   const title = data.title || 'Wake'
   event.waitUntil(
     self.registration.showNotification(title, {
