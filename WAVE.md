@@ -577,3 +577,108 @@ Every VERDICT row **NO**, answered from a fresh screenshot of **https://yuvraj-w
 1440 and 390, dark and light. No new screenshot pairs with FAIL 1–9. No banned string appears as
 product chrome anywhere in `src/web`. `bun run typecheck` and `bun test` green, and the box confirmed
 restarted on the pushed SHA.
+
+---
+
+# WHAT CHANGED, AND THE VERDICT
+
+Appended 2026-08-30 after Gate B. Shipped as fifteen commits on `main`, ending at
+**`01c2cadf285d68d31f3bdaaa02caa9dec6d9dc05`**.
+
+**Deploy confirmed, not assumed.** The box reports HEAD `01c2cadf…`, `systemctl --user is-active
+wake` → `active`, `/healthz` ok. `bun run typecheck` clean and **283 tests pass, 0 fail** on the
+box's committed state — which matters, because the pull deployer runs that gate first and *silently
+does nothing* if it fails, and a rewrite that never lands looks exactly like a rewrite that did.
+
+**How the live URL was graded.** Cloudflare Access began challenging headless requests from the
+grading machine partway through, and its login is an email OTP — not something to complete on the
+operator's behalf. So identity was proven instead of assumed: **the public URL serves
+`assets/index-CeG7A_o9.js` + `index-CxueZjGq.css`, byte-identical to the box's `dist/` at
+`01c2cad` and to what an SSH tunnel to the same process serves.** Photographs were taken from
+`https://yuvraj-wake.truto.dev` itself; pixel measurements were taken through the tunnel, against
+that same build and that same database.
+
+## The pipes
+
+`now: 0` was a broken pipe, and it is no longer broken.
+
+| | before | after |
+|---|---|---|
+| Now / Open / Parked | 0 / 19 / 1 | **45 / 60 / 1** |
+| Slack | `ok:0` — every poll 400ing | **38**, own credential |
+| Gmail | no obtainable credential | **30** |
+| Sentry | `ok:1, count:0` — green, and had never worked | **16** |
+| Claude Code | 22, of which Wake's own runs | **21**, self-runs excluded |
+| GitHub | 4 | 4 |
+
+Sentry had never returned a row: `search_issues` requires `organizationSlug`, Wake never sent it,
+and a swallowed exception reported a green sync of zero for the source's entire life. Three adapters
+turned an upstream failure into a successful empty poll, and `ingest.ts` then marked that source's
+cards `gone = 1` — a data-loss path that is now closed.
+
+**Fetch exists and is a second pipe, not a refresh button.** It was proven by returning real Slack
+asks while Wake's own Slack credential was still being refused, using the box's own reach. A live
+run: `found:25, fresh:1` in 9.8s across four connectors, each with a distinguishable state. Its rows
+survive the poller (`fetch|5, poll|41`, 0 swept). It costs about a dollar and up to a minute when it
+goes through the box, against the ~$0.25 this brief assumed — recorded honestly in DECISIONS #31
+along with the reopening of #26, and the anti-spawn test was rewritten to guard the real invariant
+(one spawn site, `--print`, a read-only allowlist, a timeout, a turn ceiling) rather than deleted.
+
+## The verdict — every row from the live build
+
+| # | Question | | Evidence |
+|---|---|:--:|---|
+| 1 | Settings wraps a section in a rounded bordered card? | **NO** | 0 bordered elements on every page surface, 24 surface×viewport×theme probes |
+| 2 | A Mail section separate from Sources? | **NO** | Gmail is one row in SOURCES; no MAIL section exists |
+| 3 | Target / char limit / templates / sessions-seen as a card? | **NO** | section list is You · Sources · Notifications · Appearance · This machine · Audit |
+| 4 | "Connect one from a terminal" without a Connect failure? | **NO** | 0 hits in rendered text and in source |
+| 5 | Push is an amber Turn on brick? | **NO** | `Turn on` is ghost text; 0 amber fills on Settings |
+| 6 | Connect and Disconnect two control styles? | **NO** | both ghost, same weight, right-aligned at x=1320 w=96 |
+| 7 | Source rows two lines / uneven height? | **NO** | all rows **44px**, name x=224 w=96, value x=320 |
+| 8 | A 0-item pile as a titled chapter plus a sentence? | **NO** | a zero pile is not rendered; the Slack filter draws one group |
+| 9 | Empty copy contains "from Slack" / "in flight"? | **NO** | `emptyWord` deleted; 0 hits |
+| 10 | Sync is a wrapping paragraph at the foot of Now? | **NO** | `SyncLine` deleted; state lives on the chip and in Settings |
+| 11 | No control labelled Fetch in the filter row? | **NO** | `Fetch` present in the chrome row on all 8 Now captures |
+| 12 | Phone row joins kind · repo · why on one muted line? | **NO** | 44px, one line: glyph, title, age |
+| 13 | Page title and group title the same type size? | **NO** | title 20px at x=224; groups **11px uppercase** + tabular count at x=224 |
+| 14 | Detail shows a Wake pack as the body? | **NO** | 0 `<pre>`; `Packed by Wake` / `## Instruction` 0 hits |
+| 15 | Two fact tables instead of one ≤4 rows? | **NO** | one table, 2 rows (mail card) / 3 rows (session card) |
+| 16 | Resume is a bordered box? | **NO** | one mono line, `background: transparent`, `border 0px`, in a 44px row |
+| 17 | Open is amber? | **NO** | every detail action ghost; 0 amber fills in the pane |
+| 18 | Pulse has a subtitle or a hint sentence? | **NO** | titles only; no captions, no footer |
+| 19 | A long empty axis for one day's bar, or a "not enough history" hole? | **NO** | a series with ≤1 marked day is a 44px row printing its number — `THROUGHPUT 4 on 08-30`, `RESPONSE TIME —` |
+| 20 | Work empty says "A clear desk"? | **NO** | it is `—` |
+| 21 | New task has a DETAIL textarea? | **NO** | 0 textareas in the sheet; stickies available at creation |
+| 22 | Open in Claude a 1/2/3 tour or an amber Instruction brick? | **NO** | one sheet, 0 `<select>`, one amber commit (`Write the brief`) |
+| 23 | Mail inbox teaches a terminal command? | **NO** | 0 hits; the down state is two lines |
+| 24 | A banned string as product copy in `src/web`? | **NO** | whitespace-normalised sweep of all 41 strings over every file, **comments included: 0** |
+| 25 | A new screenshot pairs with FAIL 1–9? | **NO** | see below |
+
+**Row 25, photograph by photograph.** 1 — `<th>` x `[224,320,644,804,916,936,992]` equals `<td>` x
+exactly; no dead band; the detail is a 2-row table with no amber. 2 — the phone detail is title, one
+line, one table, a 3-line clipped excerpt with `More`, one seen-in line, four ghost actions. 3 — one
+sheet, no rail, no native select, one amber commit. 4 — no DETAIL textarea. 5 — sparse series are
+rows, not stretched axes. 6 — one column, no cards, ghost `Turn on`. 7 — 44px one-line rows, six
+identifiable filters plus `Fetch` in one non-scrolling row, visible light hairlines. 8 — the Slack
+filter is a title, a chip row and 39 real rows. 9 — one column, one label x, one value x, uniform
+row height, no terminal chrome.
+
+**Measured system.** Seven font sizes and no arbitrary size. Zero bordered cards on any page
+surface. Zero banned strings rendered. **No horizontal scroll in 108 combinations** — coarse and
+fine pointer × 360/390/414/640/768/1024/1280/1440/1920 × six routes. Amber at most two marks per
+screen, and zero on Now, Settings and Pulse at laptop width.
+
+## What is not true, stated rather than glossed
+
+- The first actionable row sits at **y≈151** at 1440×900, not the ≤130 this brief asked for. The
+  stack is title 42 + chrome row 32 + `<thead>` 31 + group eyebrow 30. It was 265.
+- With the new-task sheet open on a phone, four accent fills exist in the DOM: the commit, a colour
+  swatch in a colour picker, and two nav badges behind the scrim.
+- The Mail composer still pairs an amber `Write` trigger with an amber commit inside it — the same
+  pattern the task sheet had, out of scope for the pass that fixed the task sheet.
+- Fetch costs roughly a dollar and up to a minute when it routes through the box.
+- Sentry's standing query lands org-wide review issues nobody owns. That is the poller's question,
+  not a regression, and it is noise on the desk.
+- `Truto CLI` shows a placeholder for 3–5s before resolving.
+- Slack's app-level MCP entitlement and the Cloudflare Access login are operator actions in someone
+  else's console, not code.
