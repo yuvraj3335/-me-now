@@ -7,10 +7,11 @@
  *
  * Four things changed, all of them measured.
  *
- * **A panel with no data is not rendered.** `Response time` spent 210px printing
- * "Not enough history" into a 572×132 hole, and `Bars` centred "Nothing here
- * yet" in another. An empty series is an em dash on the title row, and the chart
- * is not drawn — which is what `Goals` and `Ageing` already did, correctly.
+ * **A series with no data does not hold a cell.** Two panels each spent 210px
+ * centring an apology into a 572×132 hole, and a third then sat beside a
+ * full-height neighbour with nothing under it. An empty series is an em dash on
+ * a title row, the chart is not drawn, and the row is laid out after the grid so
+ * it cannot leave a hole next to a short tile.
  *
  * **The hint sentences are gone from the stat feet.** The `hint` prop left
  * `Panel` in an earlier pass and the sentences moved into the numbers'
@@ -70,6 +71,96 @@ export function Pulse() {
   const arrived = a.throughput.appeared.reduce((n, d) => n + d.value, 0)
   const cleared = a.throughput.cleared.reduce((n, d) => n + d.value, 0)
 
+  /**
+   * Every series this page can draw, and whether it has anything in it.
+   *
+   * Built as data rather than as JSX so the two answers can be laid out
+   * differently: a series with values takes a cell in the grid, and a series
+   * without one takes a row under it. Rendered in place, an empty panel held a
+   * full cell to print an em dash — `RESPONSE TIME —` sat beside a full-height
+   * `THROUGHPUT` with 210px of nothing under it.
+   */
+  const panels: Array<{ title: string; empty: boolean; node: React.ReactNode }> = [
+    {
+      title: 'Throughput',
+      empty: a.throughput.done.every(d => !d.value),
+      node: <Bars data={a.throughput.done} label={d => `${d.day.slice(5)} · ${d.value} done`} />,
+    },
+    {
+      title: 'Response time',
+      empty: !hasTrend,
+      node: <Trend data={a.responseTime.daily} format={v => duration(v)} />,
+    },
+    { title: 'Arrived', empty: !arrived, node: <Bars data={a.throughput.appeared} height={96} /> },
+    { title: 'Cleared', empty: !cleared, node: <Bars data={a.throughput.cleared} height={96} /> },
+    {
+      title: 'Your rhythm',
+      empty: a.rhythm.byHour.every(h => !h.value),
+      node: (
+        <div className="grid sm:grid-cols-2 gap-6">
+          <DayClock data={a.rhythm.byHour} />
+          <div>
+            <SubLabel>By weekday</SubLabel>
+            <WeekdayBars data={a.rhythm.byWeekday} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Ageing',
+      empty: !a.aging.length,
+      node: (
+        <>
+          <StackedAging
+            rows={a.aging}
+            buckets={a.agingBuckets}
+            /* The same names every other surface uses: this legend said `Claude`
+               and `Github` where the rest of the product says `Claude Code` and
+               `GitHub`. */
+            labelOf={(s: string) => SOURCE_LABEL[s as keyof typeof SOURCE_LABEL] ?? s}
+            colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
+          />
+          <div className="mt-4 flex items-end gap-1">
+            {a.agingBuckets.map((b, i) => (
+              <span key={b} className="flex-1">
+                <span className="block h-1.5 rounded-chip bg-fg-dim"
+                      style={{ opacity: 0.3 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.7 }} />
+                <span className="block mt-1 text-sm text-fg-mute">{b}</span>
+              </span>
+            ))}
+          </div>
+        </>
+      ),
+    },
+    {
+      title: 'Goals',
+      empty: !a.goals.length,
+      node: (
+        <div className="space-y-4">
+          {a.goals.map((g, i) => {
+            const pctDone = g.total ? g.done / g.total : 0
+            return (
+              <div key={g.id}>
+                <div className="flex items-baseline justify-between mb-2">
+                  <span className="text-sm text-fg-dim">{g.title}</span>
+                  <span className="tnum text-sm text-fg-mute">{g.done}/{g.total}</span>
+                </div>
+                <div className="h-1 bg-ink-800 rounded-full overflow-hidden">
+                  <motion.div className="h-full rounded-full bg-fg-dim"
+                    style={g.color ? { background: g.color } : undefined}
+                    initial={reduce ? false : { width: 0 }} animate={{ width: `${pctDone * 100}%` }}
+                    transition={{ delay: 0.1 + i * 0.06, duration: 0.7, ease: [0.22, 1, 0.36, 1] }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ),
+    },
+  ]
+  const drawn = panels.filter(p => !p.empty)
+  const quiet = panels.filter(p => p.empty)
+
   return (
     <div className="pb-24">
       <Header days={days} />
@@ -90,77 +181,39 @@ export function Pulse() {
       </section>
 
       {/* One gutter, one row gap, and no `items-start`: a 109px cell beside a
-          320px cell in an `items-start` grid is where the 275px hole came from. */}
+          320px cell in an `items-start` grid is where the 275px hole came from.
+          Only the series that have something to draw are in the grid — an empty
+          one held a full cell to print one character, which is the hole beside a
+          short tile this page is not allowed to have. */}
       <div className="lg:grid lg:grid-cols-2 lg:gap-6">
-        <Panel title="Throughput" empty={a.throughput.done.every(d => !d.value)}>
-          <Bars data={a.throughput.done} label={d => `${d.day.slice(5)} · ${d.value} done`} />
-        </Panel>
-
-        <Panel title="Response time" empty={!hasTrend}>
-          <Trend data={a.responseTime.daily} format={v => duration(v)} />
-        </Panel>
-
-        <Panel title="Arrived" empty={!arrived}>
-          <Bars data={a.throughput.appeared} height={96} />
-        </Panel>
-
-        <Panel title="Cleared" empty={!cleared}>
-          <Bars data={a.throughput.cleared} height={96} />
-        </Panel>
-
-        <Panel title="Your rhythm" empty={a.rhythm.byHour.every(h => !h.value)}>
-          <div className="grid sm:grid-cols-2 gap-6">
-            <DayClock data={a.rhythm.byHour} />
-            <div>
-              <SubLabel>By weekday</SubLabel>
-              <WeekdayBars data={a.rhythm.byWeekday} />
-            </div>
-          </div>
-        </Panel>
-
-        <Panel title="Ageing" empty={!a.aging.length}>
-          <StackedAging
-            rows={a.aging}
-            buckets={a.agingBuckets}
-            /* The same names every other surface uses: this legend said `Claude`
-               and `Github` where the rest of the product says `Claude Code` and
-               `GitHub`. */
-            labelOf={(s: string) => SOURCE_LABEL[s as keyof typeof SOURCE_LABEL] ?? s}
-            colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
-          />
-          <div className="mt-4 flex items-end gap-1">
-            {a.agingBuckets.map((b, i) => (
-              <span key={b} className="flex-1">
-                <span className="block h-1.5 rounded-chip bg-fg-dim"
-                      style={{ opacity: 0.3 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.7 }} />
-                <span className="block mt-1 text-sm text-fg-mute">{b}</span>
-              </span>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="Goals" empty={!a.goals.length} wide>
-          <div className="space-y-4">
-            {a.goals.map((g, i) => {
-              const pctDone = g.total ? g.done / g.total : 0
-              return (
-                <div key={g.id}>
-                  <div className="flex items-baseline justify-between mb-2">
-                    <span className="text-sm text-fg-dim">{g.title}</span>
-                    <span className="tnum text-sm text-fg-mute">{g.done}/{g.total}</span>
-                  </div>
-                  <div className="h-1 bg-ink-800 rounded-full overflow-hidden">
-                    <motion.div className="h-full rounded-full bg-fg-dim"
-                      style={g.color ? { background: g.color } : undefined}
-                      initial={reduce ? false : { width: 0 }} animate={{ width: `${pctDone * 100}%` }}
-                      transition={{ delay: 0.1 + i * 0.06, duration: 0.7, ease: [0.22, 1, 0.36, 1] }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </Panel>
+        {drawn.map((p, i) => (
+          <Panel
+            key={p.title}
+            title={p.title}
+            /* The last tile spans both columns when the count is odd, so the
+               row it lands on cannot orphan a hole beside it. It is a fact
+               about the count, not a property of one chart, which is why it is
+               computed rather than declared: the count moves with the data. */
+            wide={i === drawn.length - 1 && drawn.length % 2 === 1}
+          >
+            {p.node}
+          </Panel>
+        ))}
       </div>
+
+      {/* And the ones with nothing to draw, one row each. The series is still
+          named — its absence is a fact about the window — but a name and an em
+          dash is one line, not a cell. */}
+      {quiet.length > 0 && (
+        <section className="mt-8">
+          {quiet.map(p => (
+            <div key={p.title} className="flex items-baseline gap-2 h-11 border-b border-rule last:border-0">
+              <h2 className="text-eyebrow uppercase text-fg-mute">{p.title}</h2>
+              <span className="text-sm text-fg-mute">—</span>
+            </div>
+          ))}
+        </section>
+      )}
     </div>
   )
 }
@@ -205,24 +258,24 @@ function Stat({
 }
 
 /**
- * A heading and a chart, and an em dash when there is no chart.
+ * A heading and a chart.
  *
  * `hint` left this signature in an earlier pass and a test keeps it out. `empty`
- * is the other half of the same idea: a panel with nothing to draw states that
- * on its own title row in one character, rather than reserving 210px to say it
- * in three words.
+ * followed it: a series with nothing in it is not a panel at all now, because a
+ * panel is a grid cell and reserving one to print a single character is the hole
+ * beside a short tile. The caller lays those out as rows instead.
  *
  * Rendered statically. `whileInView` with `once: true` left everything below the
  * fold at `opacity: 0` in any capture, print or background tab.
  */
 function Panel({
-  title, empty, wide, children,
-}: { title: string; empty?: boolean; wide?: boolean; children: React.ReactNode }) {
+  title, wide, children,
+}: { title: string; wide?: boolean; children: React.ReactNode }) {
   const still = useStill()
   return (
     <motion.section
-      /* The last panel spans both columns rather than orphaning a 470×130 hole
-         beside itself, which is what an odd count in a two-column grid does. */
+      /* Spans both columns when the caller says the count is odd, so the last
+         row cannot orphan a 470×130 hole beside itself. */
       className={`mt-8 ${wide ? 'lg:col-span-2' : ''}`}
       initial={still ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -230,9 +283,8 @@ function Panel({
     >
       <div className="flex items-baseline gap-2 mb-4">
         <h2 className="text-eyebrow uppercase text-fg-mute">{title}</h2>
-        {empty && <span className="text-sm text-fg-mute">—</span>}
       </div>
-      {!empty && children}
+      {children}
     </motion.section>
   )
 }
