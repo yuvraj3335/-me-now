@@ -16,7 +16,7 @@ process.env.WAKE_CLAUDE_HOME = dir
 process.env.WAKE_DATA_DIR = join(dir, 'data')
 
 const write = (o: unknown) => writeFileSync(credPath, JSON.stringify(o))
-const { claudeBridgeToken } = await import('../src/server/mcp/creds')
+const { claudeBridgeToken, isGoogleWebClientId, pickGmailClientFromClaude } = await import('../src/server/mcp/creds')
 
 const future = Date.now() + 3_600_000
 const past = Date.now() - 3_600_000
@@ -76,5 +76,58 @@ describe('claude credential bridge', () => {
     expect(claudeBridgeToken('slack')).toBeNull()
     rmSync(credPath)
     expect(claudeBridgeToken('slack')).toBeNull()
+  })
+})
+
+describe('Gmail client seed from Claude', () => {
+  const googleId = '285417044045-example.apps.googleusercontent.com'
+  const uuidId = '66b074ef-4545-4f2e-9fc0-c96356552caa'
+
+  test('only a Google Cloud client is usable against accounts.google.com', () => {
+    expect(isGoogleWebClientId(googleId)).toBe(true)
+    expect(isGoogleWebClientId(uuidId)).toBe(false)
+    expect(isGoogleWebClientId(null)).toBe(false)
+  })
+
+  test('skips the claude.ai Gmail UUID when the Google client is also present', () => {
+    const picked = pickGmailClientFromClaude({
+      mcpOAuth: {
+        'Gmail|66c8': {
+          serverName: 'Gmail',
+          serverUrl: 'https://api.anthropic.com/v2/ccr-sessions/cse_01/mcp'
+            + '?mcp_url=https%3A%2F%2Fgmailmcp.googleapis.com%2Fmcp%2Fv1',
+          clientId: uuidId,
+        },
+        'gmail|ccf1': {
+          serverName: 'gmail',
+          serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1',
+          clientId: googleId,
+          clientSecret: 'from-entry',
+        },
+      },
+    })
+    expect(picked).toEqual({ client_id: googleId, client_secret: 'from-entry' })
+  })
+
+  test('reads the secret from mcpOAuthClientConfig when the entry has none', () => {
+    const picked = pickGmailClientFromClaude({
+      mcpOAuth: {
+        'gmail|ccf1': {
+          serverName: 'gmail',
+          serverUrl: 'https://gmailmcp.googleapis.com/mcp/v1',
+          clientId: googleId,
+        },
+      },
+      mcpOAuthClientConfig: { 'gmail|ccf1': { clientSecret: 'from-config' } },
+    })
+    expect(picked?.client_secret).toBe('from-config')
+  })
+
+  test('does not seed a UUID — Google would reject it as client_id', () => {
+    expect(pickGmailClientFromClaude({
+      mcpOAuth: {
+        'Gmail|66c8': { serverName: 'Gmail', clientId: uuidId },
+      },
+    })).toBeNull()
   })
 })

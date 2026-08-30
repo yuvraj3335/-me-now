@@ -15,6 +15,7 @@ const GH_URL = /github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/(?:pull|issue
 /** "trutohq/truto#2034" and bare "#2034" when a repo is already in context. */
 const GH_SHORT = /\b([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)#(\d+)\b/g
 const SENTRY_URL = /sentry\.io\/(?:organizations\/[^/]+\/)?issues\/(\d+)/gi
+const TRUTO_SENTRY = /\bTRUTO-\d+\b/gi
 const SLACK_ARCHIVE = /slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})/gi
 
 /** Strip the noise that makes the same conversation look like many subjects. */
@@ -146,6 +147,7 @@ export function extractRefs(text: string, contextRepo?: string): Ref[] {
   for (const m of text.matchAll(GH_URL)) push({ t: 'gh', v: `${m[1]}/${m[2]}#${m[3]}`.toLowerCase() })
   for (const m of text.matchAll(GH_SHORT)) push({ t: 'gh', v: `${m[1]}#${m[2]}`.toLowerCase() })
   for (const m of text.matchAll(SENTRY_URL)) if (m[1]) push({ t: 'sentry', v: m[1] })
+  for (const m of text.matchAll(TRUTO_SENTRY)) push({ t: 'sentry', v: m[0].toUpperCase() })
   for (const m of text.matchAll(SLACK_ARCHIVE)) push({ t: 'slackthread', v: `${m[1]}:${m[2]}.${m[3]}` })
 
   if (contextRepo) {

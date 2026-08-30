@@ -67,13 +67,48 @@ export function claudeBridgeToken(server: string): string | null {
   return best?.token ?? null
 }
 
+type ClaudeGmailClient = ClaudeMcpEntry & { clientId?: string; clientSecret?: string }
+
+function isGmailEntryName(name: string) {
+  return name.toLowerCase().replace(/[\s_-]/g, '') === 'gmail'
+}
+
+/** Installed Google OAuth clients look like this. Claude.ai's Gmail connector does not. */
+export function isGoogleWebClientId(id: string | null | undefined): boolean {
+  return !!id && id.endsWith('.apps.googleusercontent.com')
+}
+
+/**
+ * Claude stores two things named Gmail. The claude.ai connector has a UUID
+ * client and an Anthropic proxy URL. `claude mcp login gmail` has the Google
+ * Cloud client (`*.apps.googleusercontent.com`) against gmailmcp.googleapis.com.
+ * Wake authorizes at accounts.google.com, so only the second one can work.
+ */
+export function pickGmailClientFromClaude(parsed: {
+  mcpOAuth?: Record<string, ClaudeGmailClient>
+  mcpOAuthClientConfig?: Record<string, { clientSecret?: string }>
+}): { client_id: string; client_secret: string | null } | null {
+  let best: { client_id: string; client_secret: string | null; score: number } | null = null
+  for (const [key, entry] of Object.entries(parsed.mcpOAuth ?? {})) {
+    const name = entry.serverName ?? key.split('|')[0] ?? ''
+    const id = entry.clientId?.trim()
+    if (!isGmailEntryName(name) || !id || !isGoogleWebClientId(id)) continue
+    const secret = entry.clientSecret ?? parsed.mcpOAuthClientConfig?.[key]?.clientSecret ?? null
+    const url = entry.serverUrl ?? ''
+    // Direct Gmail MCP beats a URL that only mentions it inside an Anthropic query string.
+    const score = url.includes('gmailmcp.googleapis.com') && !url.includes('anthropic.com') ? 2 : 1
+    if (!best || score > best.score) best = { client_id: id, client_secret: secret, score }
+  }
+  return best ? { client_id: best.client_id, client_secret: best.client_secret } : null
+}
+
 /**
  * The Google client Claude already used for `claude mcp login gmail`.
  * Wake needs the same id/secret to run its own offline grant. Does not
  * copy the hourly access token — that one cannot be refreshed.
  */
 export function seedGmailClientFromClaude() {
-  if (getStored('gmail')?.client_id) return
+  if (isGoogleWebClientId(getStored('gmail')?.client_id)) return
   let raw: string
   try {
     raw = readFileSync(claudeCredentialsPath(), 'utf8')
@@ -81,7 +116,7 @@ export function seedGmailClientFromClaude() {
     return
   }
   let parsed: {
-    mcpOAuth?: Record<string, ClaudeMcpEntry & { clientId?: string }>
+    mcpOAuth?: Record<string, ClaudeGmailClient>
     mcpOAuthClientConfig?: Record<string, { clientSecret?: string }>
   }
   try {
@@ -89,13 +124,9 @@ export function seedGmailClientFromClaude() {
   } catch {
     return
   }
-  for (const [key, entry] of Object.entries(parsed.mcpOAuth ?? {})) {
-    const name = (entry.serverName ?? key.split('|')[0] ?? '').toLowerCase()
-    if (name !== 'gmail' || !entry.clientId) continue
-    const secret = parsed.mcpOAuthClientConfig?.[key]?.clientSecret
-    putStored('gmail', { client_id: entry.clientId, client_secret: secret ?? null })
-    return
-  }
+  const picked = pickGmailClientFromClaude(parsed)
+  if (!picked) return
+  putStored('gmail', { client_id: picked.client_id, client_secret: picked.client_secret })
 }
 
 /** Refresh Wake's own token when it is within a minute of expiring. */
