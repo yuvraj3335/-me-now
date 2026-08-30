@@ -6,6 +6,7 @@
 import { Hono } from 'hono'
 import { latestFinishedRuns, db, now, uid } from './db'
 import { resetSlackSession } from './sources/slack'
+import { resetGmailSessions } from './mail/gmail'
 import { MCP_SERVERS, PUBLIC_URL } from './env'
 import { ADAPTERS, ingest } from './ingest'
 import type { SourceName } from './sources/types'
@@ -58,6 +59,12 @@ connections.get('/', async c => {
       hasClaudeBridge: oauthable ? !!claudeBridgeToken(a.name) : false,
       hasClientId: !!stored?.client_id,
       needsClientId: oauthable && !stored?.client_id,
+      // The two facts `ok` cannot carry. A source can poll perfectly at the same
+      // moment its refresh token is dead, and go on doing so until the access
+      // token expires — so "when did this credential last actually authenticate"
+      // is a separate column, and so is the provider's own word for the refusal.
+      lastAuthOkAt: stored?.last_auth_ok_at ?? null,
+      lastAuthError: stored?.last_auth_error ?? null,
     }
   }))
   return c.json({ sources, redirectUri: REDIRECT })
@@ -141,14 +148,20 @@ connections.get('/callback', async c => {
     })
     putStored(pending.server, {
       access_token: t.access_token,
-      refresh_token: t.refresh_token,
+      // `undefined`, not `null`. A provider that re-issues an access token
+      // without a refresh token has not revoked the one it gave last time, and
+      // `putStored` only inherits a field the patch leaves out.
+      refresh_token: t.refresh_token ?? undefined,
       expires_at: t.expires_in ? Date.now() + t.expires_in * 1000 : null,
       scope: t.scope,
+      last_auth_ok_at: Date.now(),
+      last_auth_error: null,
     })
-    // The Slack MCP session caches tools/list. A reconnect that just granted
-    // search scopes would otherwise keep serving the three-tool list from
-    // the previous token for the rest of the process lifetime.
+    // The MCP sessions cache both the handshake and tools/list. A reconnect that
+    // just granted search scopes would otherwise keep serving the previous
+    // token's tool surface — and its session id — for the rest of the process.
     if (pending.server === 'slack') resetSlackSession()
+    if (pending.server === 'gmail') resetGmailSessions()
     // Do not wait. The Allow tab is closing; Settings is about to reload
     // and must not still be reading the poll from before this grant.
     void ingest(pending.server as SourceName)
@@ -165,8 +178,8 @@ connections.post('/:server/disconnect', c => {
 
 connections.get('/:server/probe', async c => {
   const server = c.req.param('server')
-  const { token, via } = await resolveToken(server)
-  return c.json({ connected: !!token, via })
+  const { token, via, lastAuthOkAt, lastAuthError } = await resolveToken(server)
+  return c.json({ connected: !!token, via, lastAuthOkAt, lastAuthError })
 })
 
 /**

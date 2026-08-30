@@ -7,27 +7,19 @@
  * Read-only: only search_threads / get_thread are ever called, and the client's
  * write-tool denylist blocks the rest regardless.
  */
-import { McpSession, HttpTransport } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
-import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
+import { GMAIL_ACCOUNTS, ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
+import { gmailThreadUrl, sessionFor } from '../mail/gmail'
 import { plainBody, plainText } from '../mail/sanitize'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
-const sessions = new Map<string, McpSession>()
-
-export function sessionFor(account: string): McpSession {
-  let s = sessions.get(account)
-  if (!s) {
-    // Per-account credentials, falling back to a single shared "gmail" token so
-    // one connected inbox works before the second is authorised.
-    const getToken = async () =>
-      (await resolveToken(`gmail:${account}`)).token ?? (await resolveToken('gmail')).token
-    s = new McpSession(`gmail:${account}`, new HttpTransport(MCP_SERVERS.gmail!.url, getToken))
-    sessions.set(account, s)
-  }
-  return s
-}
+// The session map lives in `mail/gmail.ts`. There used to be a byte-identical
+// copy here under the same name and the same key space, and neither was ever
+// cleared — so after a Gmail reconnect both went on replaying the
+// `Mcp-Session-Id` issued under the old token, and the poller and the Mail page
+// each blamed the other's ghost.
+export { sessionFor }
 
 type GmailThread = {
   id?: string
@@ -161,7 +153,7 @@ export const gmail: SourceAdapter = {
           // address when there is not — never an empty string.
           who: nameOf(senderRaw) || addrOf(senderRaw) || undefined,
           excerpt: (snippet || body).slice(0, 400),
-          url: `https://mail.google.com/mail/u/${encodeURIComponent(account)}/#inbox/${id}`,
+          url: gmailThreadUrl(account, id),
           ts,
           pile: direct ? 'now' : 'open',
           refs,

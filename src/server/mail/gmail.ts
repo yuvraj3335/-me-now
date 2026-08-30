@@ -12,21 +12,60 @@
  * named escape hatch and is reached only after a bound confirmation is spent.
  */
 
-import { HttpTransport, McpSession, McpUnauthorized } from '../mcp/client'
-import { resolveToken } from '../mcp/creds'
+import { HttpTransport, McpSession, McpUnauthorized, type TokenSource } from '../mcp/client'
+import { forceRefresh, resolveToken } from '../mcp/creds'
 import { GMAIL_ACCOUNTS, MCP_SERVERS } from '../env'
 
+/**
+ * The one place a Gmail thread URL is built.
+ *
+ * `/u/<address>` wants the literal address. `encodeURIComponent` turned
+ * `yuvraj@truto.one` into `yuvraj%40truto.one`, which Google does not resolve —
+ * every mail card on the desk pointed at a page that does not exist. The other
+ * half of the same bug was a second site hard-coding `/u/0/`, so one thread had
+ * two URLs depending on which code path produced it and `0` is whichever account
+ * Google happens to rank first, not necessarily his.
+ */
+export const gmailThreadUrl = (account: string, threadId: string) =>
+  `https://mail.google.com/mail/u/${account}/#inbox/${threadId}`
+
 const sessions = new Map<string, McpSession>()
+
+/**
+ * The credential behind one inbox: the per-account key, falling back to a single
+ * shared `gmail` token so one connected inbox works before the second is
+ * authorised. `refresh` renews whichever of the two is actually holding the
+ * grant, and is what lets a 401 be recovered instead of reported.
+ */
+function gmailToken(account: string): TokenSource {
+  const key = `gmail:${account}`
+  const get = async () => (await resolveToken(key)).token ?? (await resolveToken('gmail')).token
+  get.refresh = async () => (await forceRefresh(key)) ?? (await forceRefresh('gmail'))
+  return get
+}
 
 export function sessionFor(account: string): McpSession {
   let s = sessions.get(account)
   if (!s) {
-    const getToken = async () =>
-      (await resolveToken(`gmail:${account}`)).token ?? (await resolveToken('gmail')).token
-    s = new McpSession(`gmail:${account}`, new HttpTransport(MCP_SERVERS.gmail!.url, getToken))
+    s = new McpSession(`gmail:${account}`, new HttpTransport(MCP_SERVERS.gmail!.url, gmailToken(account)))
     sessions.set(account, s)
   }
   return s
+}
+
+/**
+ * Forget every Gmail session and the capability probe behind them.
+ *
+ * There used to be two of these maps under the same name and the same key space
+ * — one here, one in `sources/gmail.ts` — and neither was ever cleared, so after
+ * a reconnect both went on replaying the `Mcp-Session-Id` issued under the old
+ * token. There is one map now, and this is how it is emptied: from the OAuth
+ * callback, beside `resetSlackSession()`, and on a terminal 401.
+ */
+export function resetGmailSessions() {
+  for (const s of sessions.values()) void s.reset()
+  sessions.clear()
+  capCache = null
 }
 
 /* ------------------------------ capabilities ------------------------------ */
@@ -75,8 +114,15 @@ export type MailCapabilities = {
   canDraft: boolean
 }
 
-let capCache: { at: number; value: MailCapabilities } | null = null
+let capCache: { at: number; ttl: number; value: MailCapabilities } | null = null
 const CAP_TTL_MS = 60_000
+/**
+ * A failed probe is held for seconds, not for a minute. The long TTL is there to
+ * stop six call sites re-listing tools on one page load; holding a *failure* for
+ * the same minute means a reconnect is invisible until it expires, which reads
+ * as the reconnect not having worked.
+ */
+const CAP_FAIL_TTL_MS = 5_000
 
 const pick = (names: string[], want: RegExp[]): string | null => {
   for (const re of want) {
@@ -121,14 +167,30 @@ const NOT_CONNECTED_DETAIL =
   '`~/.claude/.credentials.json`, then from `WAKE_GMAIL_TOKEN`. Any one of the three is enough; ' +
   'adding Gmail as a direct HTTP MCP server is the shortest of them.'
 
-/** Probe every configured account. Cached briefly; a failure is reported, not hidden. */
-export async function probeMail(force = false): Promise<MailCapabilities> {
-  if (!force && capCache && Date.now() - capCache.at < CAP_TTL_MS) return capCache.value
+let probing: Promise<MailCapabilities> | null = null
 
+/**
+ * Probe every configured account. Cached briefly; a failure is reported, not hidden.
+ *
+ * Single-flighted, because six call sites await this concurrently — `/mail/state`,
+ * `listThreads`, `getThread`, `listLabels`, `sendMail`, `saveDraft` — and the
+ * cache is only written at the very end. Without this, every one of them missed
+ * and every one of them ran the full `tools/list` fan-out.
+ */
+export function probeMail(force = false): Promise<MailCapabilities> {
+  if (!force && capCache && Date.now() - capCache.at < capCache.ttl) {
+    return Promise.resolve(capCache.value)
+  }
+  probing ??= runProbe().finally(() => { probing = null })
+  return probing
+}
+
+async function runProbe(): Promise<MailCapabilities> {
   const accounts: MailCapabilities['accounts'] = []
   let names: string[] = []
   let params: Record<string, string[]> = {}
   let firstError: string | null = null
+  let unauthorized = 0
 
   for (const address of GMAIL_ACCOUNTS) {
     const per = await resolveToken(`gmail:${address}`)
@@ -145,11 +207,12 @@ export async function probeMail(force = false): Promise<MailCapabilities> {
       }
       accounts.push({ address, connected: true, via: shared.via, reason: null })
     } catch (e) {
-      const reason =
-        e instanceof McpUnauthorized
-          ? `Gmail rejected the credential for ${address} — it needs re-authorising.`
-          : `Gmail is unreachable for ${address}: ${(e as Error).message}`
+      const rejected = e instanceof McpUnauthorized
+      const reason = rejected
+        ? `Gmail rejected the credential for ${address} — it needs re-authorising.`
+        : `Gmail is unreachable for ${address}: ${(e as Error).message}`
       firstError ??= reason
+      if (rejected) unauthorized++
       accounts.push({ address, connected: false, via: shared.via, reason })
     }
   }
@@ -177,7 +240,12 @@ export async function probeMail(force = false): Promise<MailCapabilities> {
     canSend: !!tools.send,
     canDraft: !!tools.draft,
   }
-  capCache = { at: Date.now(), value }
+  // Every inbox was rejected: the grant is the thing that is wrong, and it can
+  // be fixed from Settings in the next few seconds. Caching that answer at all
+  // would make the fix look like it did nothing.
+  capCache = unauthorized && unauthorized === GMAIL_ACCOUNTS.length
+    ? null
+    : { at: Date.now(), ttl: connected ? CAP_TTL_MS : CAP_FAIL_TTL_MS, value }
   return value
 }
 

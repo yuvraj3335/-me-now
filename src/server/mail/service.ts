@@ -77,6 +77,21 @@ export async function listThreads(opts: {
   }
 
   const query = queryFor({ box: opts.box, label: opts.label, q: opts.q })
+  /**
+   * One name for the page size, one for the cursor.
+   *
+   * Both used to go out speculatively, on the reasoning that the server would
+   * ignore the one it did not recognise. Google's does not — it answers
+   * `Unknown name "maxResults"` and fails the whole request, which took out
+   * every mailbox at once. `onlyDeclared` was supposed to narrow that, but it
+   * only narrows once a probe has populated the module cache, and an unprobed
+   * process declares nothing. The caps for *this* request are already in hand,
+   * so read them here; where the server declared nothing, send one name rather
+   * than two, and prefer the one Gmail actually takes.
+   */
+  const declared = caps.params[caps.tools.search] ?? []
+  const sizeArg = declared.includes('maxResults') && !declared.includes('pageSize') ? 'maxResults' : 'pageSize'
+  const pageArg = declared.includes('cursor') && !declared.includes('pageToken') ? 'cursor' : 'pageToken'
   const errors: ListResult['errors'] = []
   const cursors: Record<string, string | null> = {}
   const threads: MailThread[] = []
@@ -92,9 +107,8 @@ export async function listThreads(opts: {
         const page = opts.cursors?.[account] ?? undefined
         const payload = await call<any>(account, caps.tools.search!, {
           query,
-          maxResults: limit,
-          pageSize: limit,
-          ...(page ? { pageToken: page, cursor: page } : {}),
+          [sizeArg]: limit,
+          ...(page ? { [pageArg]: page } : {}),
         })
         cursors[account] = cursorOf(payload)
         for (const raw of listOf(payload)) {
@@ -110,7 +124,16 @@ export async function listThreads(opts: {
   threads.sort((a, b) => b.ts - a.ts)
   cacheThreads(threads)
 
-  return { threads, cursors, accounts, errors, connected: true, reason: null }
+  // `connected: true` was unconditional here, so a response in which every
+  // account threw claimed a healthy connection and an empty inbox — the exact
+  // shape this codebase keeps getting bitten by. An inbox that answered nothing
+  // because nobody could ask it is not an empty inbox.
+  const connected = errors.length < accounts.length
+  return {
+    threads, cursors, accounts, errors,
+    connected,
+    reason: connected ? null : (errors[0]?.error ?? 'no configured mail account answered'),
+  }
 }
 
 function cacheThreads(threads: MailThread[]) {
@@ -255,15 +278,24 @@ function rowToThread(r: Record<string, any>): MailThread {
 
 /* --------------------------------- labels --------------------------------- */
 
-export async function listLabels(account: string): Promise<{ labels: string[]; error?: string }> {
+/**
+ * `ok` is the whole point of the shape.
+ *
+ * Every failure here returned `{ labels: [] }` with a sibling `error` a
+ * destructuring caller never looked at, so "this mailbox has no custom labels"
+ * and "nobody could ask this mailbox" were the same value. One boolean makes
+ * them different without anyone having to remember to check a string.
+ */
+export async function listLabels(account: string): Promise<{ labels: string[]; ok: boolean; error?: string }> {
   const caps = await probeMail()
   if (!caps.connected || !caps.tools.labels) {
-    return { labels: [], error: caps.reason ?? 'This Gmail server exposes no label tool.' }
+    return { labels: [], ok: false, error: caps.reason ?? 'This Gmail server exposes no label tool.' }
   }
   try {
     const payload = await call<any>(account, caps.tools.labels, {})
     const rows = listOf(payload, 'labels')
     return {
+      ok: true,
       labels: rows
         .map((l: any) => String(l?.name ?? l?.id ?? l))
         // Gmail's own system labels are already the boxes above; showing them
@@ -271,7 +303,7 @@ export async function listLabels(account: string): Promise<{ labels: string[]; e
         .filter((n: string) => n && !/^(INBOX|SENT|DRAFT|SPAM|TRASH|UNREAD|STARRED|IMPORTANT|CHAT|CATEGORY_.*)$/.test(n)),
     }
   } catch (e) {
-    return { labels: [], error: (e as Error).message }
+    return { labels: [], ok: false, error: (e as Error).message }
   }
 }
 

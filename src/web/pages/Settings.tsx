@@ -41,7 +41,9 @@ import type { SourceStatus } from '../lib/types'
 import {
   currentSubscription, disablePush, enablePush, needsHomeScreenInstall, pushSupported,
 } from '../lib/push'
-import { Button, Field, Segmented, Sheet, inputClass } from '../components/primitives'
+import {
+  Button, Field, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice,
+} from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
 import { fmtBytes, recordingSupported } from '../lib/voice'
 import { ago } from '../lib/time'
@@ -75,11 +77,22 @@ export function Settings() {
    * connect — never as standing chrome.
    */
   const [connectError, setConnectError] = useState<{ name: string; text: string } | null>(null)
+  /**
+   * Why the Sources list is empty, when it is.
+   *
+   * `.catch(() => {})` left `sources` at `[]`, and an empty Sources section
+   * reads as "nothing is configured" — a healthy-looking answer produced by a
+   * request that failed. This page's whole job is telling him which connections
+   * are alive, so it is the last place that may answer a failure with silence.
+   */
+  const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [audit, setAudit] = useState(false)
 
   const load = async () => {
     await Promise.all([
-      actions.connections().then(d => { setSources(d.sources); setRedirectUri(d.redirectUri) }).catch(() => {}),
+      actions.connections()
+        .then(d => { setSources(d.sources); setRedirectUri(d.redirectUri); setSourcesError(null) })
+        .catch(e => setSourcesError((e as Error).message || 'could not read the connection status')),
       fetch('/api/settings').then(r => r.json()).then(setOver).catch(() => {}),
       fetch('/api/settings/truto').then(r => r.json()).then(setTruto).catch(() => setTruto({ profiles: [], active: null, error: 'the CLI did not answer' })),
       actions.pushStatus().then(d => setDevices(d.devices.length)).catch(() => {}),
@@ -149,6 +162,9 @@ export function Settings() {
       </Section>
 
       <Section title="Sources">
+        {sourcesError && !sources.length && (
+          <Row label="Sources" value={sourcesError} tone="warn" />
+        )}
         {sources.map(s => (
           <SourceRow
             key={s.name} s={s} busy={busy === s.name}
@@ -303,14 +319,14 @@ function SourceRow({
   // refused before it names the console page that fixes it, and only the second
   // one is somewhere to go.
   const link = links.at(-1)
-  const detail = s.detail && !s.ok
+  const detail = word.detail ?? (s.detail && !s.ok
     ? s.detail
         .replace(/https?:\/\/\S+/g, '')
         .replace(/\s*[:.]\s*(?=[.:]|$)/g, '')
         .replace(/\s{2,}/g, ' ')
         .replace(/^[\s:.]+|[\s:.]+$/g, '')
         .trim()
-    : null
+    : null)
 
   return (
     <>
@@ -339,9 +355,11 @@ function SourceRow({
         {s.oauthable && s.connectable && (
           <span className="shrink-0 pl-3">
             <Button size="sm" variant="ghost" disabled={busy}
-              onClick={() => (s.hasWakeToken && s.ok ? onDisconnect() : onConnect())}>
+              onClick={() => (s.hasWakeToken && s.ok && !s.lastAuthError ? onDisconnect() : onConnect())}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : null}
-              {!s.hasWakeToken ? 'Connect' : s.ok ? 'Disconnect' : 'Reconnect'}
+              {/* A refused grant has already had its tokens cleared, so there is
+                  nothing left to disconnect — the honest offer is Connect. */}
+              {!s.hasWakeToken ? 'Connect' : s.lastAuthError ? 'Reconnect' : s.ok ? 'Disconnect' : 'Reconnect'}
             </Button>
           </span>
         )}
@@ -355,20 +373,37 @@ function SourceRow({
 }
 
 /**
- * Four states, and each one has an owner.
+ * Five states, and each one has an owner.
+ *
+ * `reconnect — <reason>` comes first because it is the only one that names
+ * something he can do. A grant the provider has refused is not a failed sync:
+ * the poll failed *because* of it, and "sync failed · 401 from
+ * https://mcp.slack.com/mcp" blames the sync for a problem in the credential and
+ * offers nothing. The reason is the provider's own word — `invalid_grant`,
+ * `token_revoked` — and it is worth printing verbatim, because it is the thing
+ * you would search for. See DECISIONS.md #36.
  *
  * `not connected` means no credential from any link in the chain. `sync failed`
  * means a credential that was accepted and a poll that was not. `synced` needs
  * `ok`, `connected` and a count. The row used to answer `not connected` for a
  * Slack holding a real, accepted token — flatly wrong, and the opposite of what
- * the footer on Now said about the same source in the same second.
+ * the footer on the desk said about the same source in the same second.
+ *
+ * `detail` is the slot beside the word. A working source spends it on when the
+ * credential last actually authenticated, which is the fact `ok` cannot carry:
+ * a source can poll perfectly at the same moment its refresh token is dead, and
+ * will keep doing so until the access token expires.
  */
-export function stateWord(s: SourceStatus): { text: string; tone: string } {
+export function stateWord(s: SourceStatus): { text: string; tone: string; detail?: string } {
+  if (s.lastAuthError) {
+    return { text: `reconnect — ${s.lastAuthError}`, tone: 'text-warn' }
+  }
   // A token Wake holds is connected. Live MCP failure is sync failed, never
   // "not connected" — that word is reserved for no credential at all.
   if (!s.hasWakeToken && !s.lastSync?.connected && !s.ok) {
     return { text: 'not connected', tone: 'text-fg-mute' }
   }
+  const authOk = s.lastAuthOkAt ? `auth ok ${ago(s.lastAuthOkAt)}` : undefined
   if ((s.lastSync && !s.lastSync.ok) || (s.hasWakeToken && !s.ok)) {
     return { text: 'sync failed', tone: 'text-warn' }
   }
@@ -376,16 +411,23 @@ export function stateWord(s: SourceStatus): { text: string; tone: string } {
     return {
       text: `synced ${ago(s.lastSync.at)}${s.lastSync.count === null ? '' : ` · ${s.lastSync.count}`}`,
       tone: 'text-ok',
+      detail: authOk,
     }
   }
-  return { text: s.ok ? 'connected' : 'not connected', tone: s.ok ? 'text-ok' : 'text-fg-mute' }
+  return {
+    text: s.ok ? 'connected' : 'not connected',
+    tone: s.ok ? 'text-ok' : 'text-fg-mute',
+    detail: s.ok ? authOk : undefined,
+  }
 }
 
 function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [data, setData] = useState<any>(null)
   useEffect(() => {
     if (!open) return
-    fetch('/api/settings/audit?limit=80').then(r => r.json()).then(setData).catch(() => {})
+    // Enough to page through. 80 was one and a half pages, so the pager it now
+    // has would have had almost nothing to do.
+    fetch('/api/settings/audit?limit=200').then(r => r.json()).then(setData).catch(() => {})
   }, [open])
 
   return (
@@ -413,14 +455,33 @@ function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   )
 }
 
+/**
+ * One audit list, paged.
+ *
+ * It used to be `rows.slice(0, 40)`: the rest of the trail was fetched, held in
+ * memory and silently dropped, which is the worst of the three options — the
+ * reader cannot see it and cannot tell it is missing.
+ *
+ * `pageSlice` and `pageCount` rather than a local page size, so the range the
+ * pager prints describes the rows underneath it.
+ *
+ * The page is local state rather than a URL parameter, unlike every table on a
+ * real page. Two independent lists share this sheet and the sheet itself is not
+ * in the URL, so one `?page=` would have to mean two things and would outlive
+ * the overlay that gave it meaning.
+ */
 function AuditGroup({ title, rows, render }: { title: string; rows: any[]; render: (r: any) => React.ReactNode }) {
+  const [page, setPage] = useState(1)
   if (!rows?.length) return null
+  const pages = pageCount(rows.length)
+  const at = Math.min(page, pages)
   return (
     <div>
       <div className="text-eyebrow uppercase text-fg-mute mb-2">{title}</div>
-      {rows.slice(0, 40).map((r, i) => (
+      {pageSlice(rows, at).map((r, i) => (
         <div key={r.id ?? i} className="flex items-center gap-2 h-11 border-b border-rule last:border-0">{render(r)}</div>
       ))}
+      <Pager page={at} pages={pages} total={rows.length} onPage={setPage} />
     </div>
   )
 }

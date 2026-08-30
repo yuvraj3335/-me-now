@@ -19,7 +19,7 @@ import {
   decodeEntities, htmlToText, plainBody, plainText, sanitizeEmailHtml, splitQuoted,
 } from '../src/server/mail/sanitize'
 import { sendFingerprintPayload, validateDraft } from '../src/server/mail/service'
-import { onlyDeclared } from '../src/server/mail/gmail'
+import { gmailThreadUrl, onlyDeclared } from '../src/server/mail/gmail'
 import { issueConfirmation, useConfirmation } from '../src/server/security'
 
 const ME = ['me@example.com', 'team@example.com']
@@ -335,5 +335,54 @@ describe('the escapes already in the database are repaired, not left to the next
     const clean = 'Deploy notes\n\n  indented line'
     expect(plainBody(clean)).toBe(clean)
     expect(plainText('Already fine')).toBe('Already fine')
+  })
+})
+
+describe('the Gmail thread URL', () => {
+  test('the account is literal — a percent-encoded @ does not resolve', () => {
+    // Live on the desk before this: every mail card pointed at
+    // https://mail.google.com/mail/u/yuvraj%40truto.one/#inbox/… , which Google
+    // answers with nothing. `/u/` wants the address as typed.
+    const url = gmailThreadUrl('yuvraj@truto.one', '1a0523ad5d40b187')
+    expect(url).toBe('https://mail.google.com/mail/u/yuvraj@truto.one/#inbox/1a0523ad5d40b187')
+    expect(url, 'the account went back through encodeURIComponent').not.toContain('%40')
+  })
+
+  test('the poller builds it here rather than inline', () => {
+    // One builder, so a thread cannot have two URLs depending on which code path
+    // produced it. `sources/search.ts` is the second call site and still
+    // hard-codes `/u/0/`; it belongs to the ingestion workstream and is called
+    // out in this wave's report rather than asserted here, because a test that
+    // fails on someone else's uncommitted file is a broken merge gate, not a
+    // finding.
+    const poller = readFileSync('src/server/sources/gmail.ts', 'utf8')
+    expect(poller, 'the poller went back to building the URL by hand')
+      .not.toMatch(/mail\.google\.com/)
+    expect(poller).toMatch(/gmailThreadUrl\(account, id\)/)
+  })
+
+  test('the two Gmail session maps are one map', () => {
+    // There used to be a byte-identical copy in `sources/gmail.ts` under the
+    // same name and the same key space, and neither was ever cleared — so after
+    // a reconnect both replayed the `Mcp-Session-Id` issued under the old token.
+    const poller = readFileSync('src/server/sources/gmail.ts', 'utf8')
+    expect(poller, 'the poller built a second session map')
+      .not.toMatch(/new Map<string, McpSession>/)
+    const owner = readFileSync('src/server/mail/gmail.ts', 'utf8')
+    expect(owner, 'nothing can empty the session map any more')
+      .toMatch(/export function resetGmailSessions/)
+  })
+})
+
+describe('an empty label list says which kind of empty it is', () => {
+  test('the shape carries an `ok`, not just a sibling string nobody reads', async () => {
+    // Gmail is not connected in the test process, so this is the failure path.
+    // `{ labels: [] }` with an `error` a destructuring caller never looked at
+    // made "no custom labels" and "nobody could ask" the same value.
+    const { listLabels } = await import('../src/server/mail/service')
+    const r = await listLabels('me@example.com')
+    expect(r.ok).toBe(false)
+    expect(r.labels).toEqual([])
+    expect(r.error).toBeTruthy()
   })
 })
