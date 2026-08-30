@@ -26,6 +26,9 @@ import { ago, timeOfDay } from '../lib/time'
 import { openLaunch } from '../lib/launch'
 import { registerPaletteActions } from '../components/palette'
 import { Mic } from '../components/voice'
+import { actions } from '../lib/api'
+import { toast } from '../lib/toast'
+import { setParam, useParam } from '../lib/route'
 
 export function Mail() {
   const { state, error, reload } = useMailState()
@@ -53,9 +56,20 @@ export function Mail() {
   const submitSearch = () => setQuery(p => ({ text: q, n: p.n + 1 }))
   const clearSearch = () => { setQ(''); setQuery(p => ({ text: '', n: p.n + 1 })) }
 
+  /**
+   * `Compose mail` is a shell command now, because from Now — the one moment a
+   * palette is worth having — a command registered by this page's own effect
+   * does not exist yet. It arrives as `?compose=1`, which this consumes once.
+   */
+  const composeParam = useParam('compose')
+  useEffect(() => {
+    if (composeParam !== '1') return
+    setComposing({})
+    setParam('compose', null)
+  }, [composeParam])
+
   useEffect(() =>
     registerPaletteActions(() => [
-      { id: 'mail:compose', label: 'Compose mail', group: 'Mail', icon: <PenLine size={14} />, run: () => setComposing({}) },
       { id: 'mail:refresh', label: 'Refresh mail', group: 'Mail', icon: <RefreshCw size={14} />, run: () => { void reload(true); listReload() } },
       ...(state?.boxes ?? []).map(b => ({
         id: `mail:box:${b.id}`,
@@ -642,30 +656,79 @@ function Composer({
  * Claude account and is never written to disk — so there is nothing for Wake to
  * read. Saying that, with the exact fix, beats an inbox of invented mail.
  */
+/**
+ * One honest error, and the button that fixes it.
+ *
+ * The screen where he notices the problem used to be the one screen that could
+ * not fix it: it offered `Fix it from a terminal` and `Check again`, while
+ * Settings offered a one-click `Connect` for the same source. And `Check again`
+ * re-checked and repainted an identical screen with no spinner, no toast and no
+ * timestamp — indistinguishable from a dead button.
+ */
 function NotConnected({ state, onRetry }: { state: MailState; onRetry: () => void }) {
+  const [checking, setChecking] = useState(false)
+  const [checkedAt, setCheckedAt] = useState<number | null>(null)
+  const [connecting, setConnecting] = useState(false)
+
+  const check = async () => {
+    setChecking(true)
+    try { await onRetry() } finally {
+      setChecking(false)
+      setCheckedAt(Date.now())
+    }
+  }
+
+  /** The same one-click Connect Settings offers, on the surface that needs it. */
+  const connect = async () => {
+    setConnecting(true)
+    try {
+      const r = await actions.connectStart('gmail')
+      if (r.url) window.open(r.url, '_blank', 'width=620,height=760')
+      else toast(r.detail ?? r.error ?? 'Could not start authorization.')
+    } catch (e) {
+      toast((e as Error).message)
+    } finally {
+      setConnecting(false)
+    }
+  }
+
   return (
-    <div className="column pt-16 pb-24">
+    <div className="column px-4 sm:px-6 pt-6 pb-24">
       <div className="flex items-start gap-3">
-        <MailIcon size={20} className="text-fg-mute mt-0.5 shrink-0" />
+        <MailIcon size={18} className="text-fg-mute mt-1 shrink-0" />
         <div>
-          <h1 className="text-[19px] font-medium tracking-[-0.02em]">Gmail is not connected</h1>
-          <p className="mt-2 text-[13.5px] text-fg-dim leading-relaxed max-w-[52ch]">{state.reason}</p>
+          <h1 className="text-lg font-medium">Gmail is not connected</h1>
+          {/* `state.reason` is a safety control, not help text: one honest
+              sentence about why is the whole requirement here. */}
+          <p className="mt-2 text-sm text-fg-dim max-w-[62ch]">{state.reason}</p>
         </div>
       </div>
 
       <div className="mt-6">
-        <div className="text-[11px] uppercase tracking-[0.08em] text-fg-mute mb-2">Accounts</div>
         {state.accounts.map(a => (
-          <div key={a.address} className="flex items-center gap-2 py-2 hairline last:border-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-fg-mute shrink-0" />
-            <span className="text-[13.5px] text-fg-dim">{a.address}</span>
-            <span className="ml-auto text-[12px] text-fg-mute">not connected</span>
+          <div key={a.address} className="flex items-center gap-3 h-11 border-b border-rule last:border-0">
+            <span className="text-base font-mono truncate grow">{a.address}</span>
+            <span className="text-sm text-fg-mute shrink-0">not connected</span>
           </div>
         ))}
       </div>
 
+      <div className="mt-4 flex items-center gap-2">
+        <Button size="lg" variant="primary" onClick={connect} disabled={connecting}>
+          {connecting ? <Loader2 size={16} className="animate-spin" /> : null} Connect
+        </Button>
+        <Button size="md" variant="default" onClick={check} disabled={checking}>
+          <RefreshCw size={14} className={checking ? 'animate-spin' : ''} /> Check again
+        </Button>
+        {/* The acknowledgement. Nothing changed is a result, and it has to look
+            different from nothing happening. */}
+        {checkedAt && !checking && (
+          <span className="text-sm text-fg-mute">Still not connected · checked {timeOfDay(checkedAt)}</span>
+        )}
+      </div>
+
       <details className="mt-6 group">
-        <summary className="cursor-pointer text-[12.5px] text-fg-mute hover:text-fg-dim transition-colors list-none">
+        <summary className="cursor-pointer text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100 list-none">
           Fix it from a terminal
         </summary>
         {/* The resolution order, the dotfile and the environment variable live
@@ -676,7 +739,8 @@ function NotConnected({ state, onRetry }: { state: MailState; onRetry: () => voi
             {state.reasonDetail}
           </p>
         )}
-        <pre className="mt-2 p-3 rounded-[10px] bg-ink-850 text-[12px] font-mono text-fg-dim overflow-x-auto leading-relaxed">
+        <pre className="mt-2 p-3 rounded-control bg-ink-850 border border-edge text-xs font-mono
+                        text-fg-dim overflow-x-auto">
 {`claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1
 claude mcp login gmail`}
         </pre>
@@ -686,9 +750,6 @@ claude mcp login gmail`}
         </p>
       </details>
 
-      <div className="mt-6">
-        <Button variant="default" onClick={onRetry}><RefreshCw size={13} /> Check again</Button>
-      </div>
     </div>
   )
 }

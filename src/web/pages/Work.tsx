@@ -1,22 +1,35 @@
-import { AnimatePresence, Reorder, motion } from 'motion/react'
+/**
+ * Work — his own list, beside his own notes.
+ *
+ * Two columns rather than one 760px reading strip with 65% of the screen dark:
+ * tasks and goals on the left, voice notes on the right, both visible at once
+ * because they are two halves of "what am I carrying".
+ *
+ * Every time on this page is stated in the words he set it in — `Thu 3 Sep,
+ * 2:35pm`, or `2:35pm` when it is today, or `late — Thu 3 Sep, 2:35pm` once it
+ * has passed. The storage was always right; the display only ever showed `in
+ * 4d`, which is not a commitment, it is a distance.
+ */
+
+import { Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, Circle, CircleCheck, CircleDot, Mic, Plus, Target } from 'lucide-react'
+import { Bell, Circle, CircleCheck, CircleDot, Mic, Plus } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
-import { shortDate, until } from '../lib/time'
-import { Button, Chip, Empty, Field, Sheet, inputClass, spring } from '../components/primitives'
+import { deadlineWords, shortDate, wallClock } from '../lib/time'
+import { Button, Empty, Field, Segmented, Sheet, inputClass, spring } from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
+import { setParam, useParam } from '../lib/route'
 
 type Tab = 'tasks' | 'goals'
 
 export function Work() {
   const { state } = useStore()
-  const still = useStill()
-  const [tab, setTab] = useState<Tab>('tasks')
+  const tab = (useParam('tab') === 'goals' ? 'goals' : 'tasks') as Tab
   const [editing, setEditing] = useState<Task | null>(null)
   const [creating, setCreating] = useState(false)
   const [goalEditing, setGoalEditing] = useState<Goal | null | 'new'>(null)
@@ -29,8 +42,8 @@ export function Work() {
   /**
    * Provenance, resolved once per render rather than per row: a task carries the
    * group key it was made from, and the card is what turns that key into "from
-   * Slack — Acme's sync stopped". Cards churn; the task does not, so a task
-   * whose card is gone simply loses the line rather than breaking.
+   * Slack". Cards churn; the task does not, so a task whose card is gone simply
+   * loses the line rather than breaking.
    */
   const cardByGroup = useMemo(() => {
     const all = [...(state?.now ?? []), ...(state?.open ?? []), ...(state?.parked ?? [])]
@@ -66,90 +79,73 @@ export function Work() {
   }
 
   // Same distinction as Now: no state yet is not the same fact as "0 waiting".
-  if (!state) return <div className="pt-24"><Empty>Reading what's queued…</Empty></div>
+  if (!state) return <div className="pt-16"><Empty>Reading what's queued</Empty></div>
+
+  const rowProps = (t: Task) => ({
+    task: t, reminders, goals,
+    origin: cardByGroup.get(t.source_card_group ?? ''),
+    onCycle: cycle, onEdit: setEditing,
+  })
 
   return (
     <div className="pb-24">
-      <header className="pt-8 pb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[26px] sm:text-[30px] font-medium tracking-[-0.025em] leading-none">
-            Work
-          </h1>
-          <p className="mt-2 text-[13px] text-fg-mute">
-            {doing.length ? `${doing.length} in flight` : `${todo.length} waiting`}
-            {goals.length > 0 && ` · ${goals.length} goal${goals.length > 1 ? 's' : ''}`}
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
-          <Plus size={15} /> {tab === 'tasks' ? 'Task' : 'Goal'}
-        </Button>
+      <header className="flex items-center gap-3 pt-4 pb-2">
+        <h1 className="text-lg font-medium">Work</h1>
+        <span className="tnum text-md text-fg-mute">
+          {doing.length ? `${doing.length} in flight` : todo.length}
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <Segmented
+            options={[{ id: 'tasks', label: 'Tasks' }, { id: 'goals', label: 'Goals' }]}
+            value={tab}
+            onChange={id => setParam('tab', id === 'tasks' ? null : id)}
+            ariaLabel="Tasks or goals"
+          />
+          <Button size="md" variant="primary"
+            onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
+            <Plus size={15} /> {tab === 'tasks' ? 'Task' : 'Goal'}
+          </Button>
+        </span>
       </header>
 
-      <div className="flex gap-1 mb-6">
-        <Chip active={tab === 'tasks'} onClick={() => setTab('tasks')}>Tasks</Chip>
-        <Chip active={tab === 'goals'} onClick={() => setTab('goals')}>Goals</Chip>
-      </div>
+      <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-8 lg:items-start">
+        <div className="min-w-0">
+          {tab === 'tasks' ? (
+            <>
+              {doing.length > 0 && (
+                <Group label="In flight" accent>
+                  <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
+                    {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
+                  </Reorder.Group>
+                </Group>
+              )}
 
-      {tab === 'tasks' ? (
-        <>
-          {/* "What I am working on" — the current view the brief asked for. */}
-          {doing.length > 0 && (
-            <Group label="In flight" accent>
-              <Reorder.Group axis="y" values={doing} onReorder={commitOrder} className="space-y-0">
-                {doing.map(t => (
-                  <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
-                    origin={cardByGroup.get(t.source_card_group ?? '')}
-                    onCycle={cycle} onEdit={setEditing} />
-                ))}
-              </Reorder.Group>
-            </Group>
-          )}
-
-          <Group label="Up next">
-            {todo.length ? (
-              <Reorder.Group axis="y" values={todo} onReorder={commitOrder} className="space-y-0">
-                {todo.map(t => (
-                  <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
-                    origin={cardByGroup.get(t.source_card_group ?? '')}
-                    onCycle={cycle} onEdit={setEditing} />
-                ))}
-              </Reorder.Group>
-            ) : (
-              <EmptyDesk />
-            )}
-          </Group>
-
-          {done.length > 0 && (
-            <div className="mt-8">
-              <button onClick={() => setShowDone(v => !v)}
-                className="text-[13px] text-fg-mute hover:text-fg-dim transition-colors min-h-9">
-                {showDone ? 'Hide' : 'Show'} {done.length} done
-              </button>
-              <AnimatePresence>
-                {showDone && (
-                  <motion.div
-                    initial={still ? false : { height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={still ? undefined : { height: 0, opacity: 0 }}
-                    className="overflow-hidden">
-                    <div className="pt-2">
-                      {done.slice(0, 40).map(t => (
-                        <TaskRow key={t.id} task={t} reminders={reminders} goals={goals}
-                          origin={cardByGroup.get(t.source_card_group ?? '')}
-                          onCycle={cycle} onEdit={setEditing} static />
-                      ))}
-                    </div>
-                  </motion.div>
+              <Group label="Up next">
+                {todo.length ? (
+                  <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
+                    {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
+                  </Reorder.Group>
+                ) : (
+                  <Empty>No tasks</Empty>
                 )}
-              </AnimatePresence>
-            </div>
-          )}
-        </>
-      ) : (
-        <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
-      )}
+              </Group>
 
-      {tab === 'tasks' && <VoiceNotes />}
+              {done.length > 0 && (
+                <Group label={`Done — ${done.length}`}>
+                  <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
+                    {showDone ? 'Hide' : 'Show'}
+                  </Button>
+                  {showDone && done.slice(0, 40).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+                </Group>
+              )}
+            </>
+          ) : (
+            <GoalList goals={goals} tasks={tasks} onEdit={setGoalEditing} />
+          )}
+        </div>
+
+        <VoiceNotes />
+      </div>
 
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
       <TaskSheet open={!!editing} onClose={() => setEditing(null)} task={editing} />
@@ -160,9 +156,8 @@ export function Work() {
 
 function Group({ label, children, accent }: { label: string; children: React.ReactNode; accent?: boolean }) {
   return (
-    <section className="mb-8">
-      <h2 className={`text-[11.5px] uppercase tracking-[0.08em] mb-2.5
-        ${accent ? 'text-accent-ink' : 'text-fg-mute'}`}>{label}</h2>
+    <section className="mb-6">
+      <h2 className={`text-eyebrow uppercase mb-1 ${accent ? 'text-accent-ink' : 'text-fg-mute'}`}>{label}</h2>
       {children}
     </section>
   )
@@ -182,10 +177,10 @@ function TaskRow({
   const Icon = task.status === 'done' ? CircleCheck : task.status === 'doing' ? CircleDot : Circle
 
   const body = (
-    <div className="flex items-start gap-3 py-3 group">
+    <div className="flex items-start gap-3 py-2 min-h-11">
       <button
         onClick={e => { e.stopPropagation(); onCycle(task) }}
-        className="pt-[3px] shrink-0 transition-colors"
+        className="pt-0.5 shrink-0 transition-colors duration-100"
         aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}`}
       >
         <Icon size={16} className={
@@ -194,33 +189,35 @@ function TaskRow({
       </button>
 
       <div className="min-w-0 grow cursor-pointer" onClick={() => onEdit(task)}>
-        <div className={`text-[14.5px] leading-snug tracking-[-0.01em]
-          ${task.status === 'done' ? 'text-fg-mute line-through' : 'text-fg'}`}>
+        <div className={`text-base ${task.status === 'done' ? 'text-fg-mute line-through' : 'text-fg'}`}>
           {task.title}
         </div>
 
-        {/* Boolean-coerced: `task.notes?.length` is 0 for a task with no notes,
-            and a bare 0 is renderable, so `&&` would print "0" under the title. */}
         {!!(goal || task.due_at || reminder || task.notes?.length) && (
-          <div className="mt-1.5 flex items-center gap-x-2 gap-y-1 flex-wrap text-[12px] text-fg-mute leading-none">
+          <div className="mt-0.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-sm text-fg-mute">
             {goal && (
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: goal.color ?? 'var(--color-fg-mute)' }} />
                 {goal.title}
               </span>
             )}
+            {/* The wall-clock time he picked, not a distance from now. */}
             {task.due_at && (
-              <span className={overdue ? 'text-bad' : ''}>{until(task.due_at)}</span>
+              <span className={overdue ? 'text-bad' : 'text-fg-dim'}>{deadlineWords(task.due_at)}</span>
             )}
-            {reminder && <Bell size={11} className="text-accent-ink/70" />}
+            {reminder && (
+              <span className="inline-flex items-center gap-1.5">
+                <Bell size={11} className="text-accent-ink" />
+                {wallClock(reminder.fire_at)}
+              </span>
+            )}
             {!!task.notes?.length && <span>{task.notes.length} note{task.notes.length > 1 ? 's' : ''}</span>}
             {origin && (
               <a
                 href={origin.url.startsWith('http') ? origin.url : undefined}
-                target="_blank"
-                rel="noreferrer"
+                target="_blank" rel="noreferrer"
                 onClick={e => e.stopPropagation()}
-                className="inline-flex items-center gap-1 text-fg-mute hover:text-fg-dim transition-colors"
+                className="hover:text-fg-dim transition-colors duration-100"
                 title={origin.title}
               >
                 from {SOURCE_LABEL[origin.sources[0]?.source ?? 'github']}
@@ -236,15 +233,15 @@ function TaskRow({
     </div>
   )
 
-  if (isStatic) return <div className="hairline last:border-0">{body}</div>
+  if (isStatic) return <div className="border-b border-rule last:border-0">{body}</div>
 
   return (
     <Reorder.Item
       value={task}
       id={task.id}
       transition={spring}
-      whileDrag={{ scale: 1.01, backgroundColor: 'var(--color-ink-850)', borderRadius: 12, zIndex: 10 }}
-      className="hairline last:border-0"
+      whileDrag={{ scale: 1.01, backgroundColor: 'var(--color-ink-850)', zIndex: 10 }}
+      className="border-b border-rule last:border-0"
     >
       {body}
     </Reorder.Item>
@@ -253,46 +250,35 @@ function TaskRow({
 
 function GoalList({ goals, tasks, onEdit }: { goals: Goal[]; tasks: Task[]; onEdit: (g: Goal) => void }) {
   const reduce = useStill()
-  if (!goals.length) {
-    return <Empty>No goals yet. A goal is a thing you are moving toward; tasks hang off it.</Empty>
-  }
+  if (!goals.length) return <Empty>No goals</Empty>
   return (
-    <div className="space-y-1">
+    <div>
       {goals.map(g => {
         const linked = tasks.filter(t => t.goal_id === g.id)
         const done = linked.filter(t => t.status === 'done').length
         const pct = linked.length ? done / linked.length : 0
         const color = g.color ?? 'var(--color-accent)'
         return (
-          <motion.button
-            key={g.id} layout onClick={() => onEdit(g)}
-            className="w-full text-left py-4 hairline last:border-0 group"
+          <button
+            key={g.id} onClick={() => onEdit(g)}
+            className="w-full text-left py-3 border-b border-rule last:border-0"
           >
             <div className="flex items-baseline gap-2.5">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
-              <span className="text-[15px] tracking-[-0.01em] grow">{g.title}</span>
-              <span className="tnum text-[13px] text-fg-mute">{done}/{linked.length}</span>
+              <span className="text-base grow">{g.title}</span>
+              {g.target_date && <span className="text-sm text-fg-mute">by {shortDate(g.target_date)}</span>}
+              <span className="tnum text-sm text-fg-mute">{done}/{linked.length}</span>
             </div>
-
-            {/* A hairline progress bar rather than a ring or a badge — it reads
-                as part of the type, not as a widget. */}
-            <div className="mt-3 h-[3px] bg-ink-800 rounded-full overflow-hidden">
+            <div className="mt-2 h-[3px] bg-ink-800 rounded-full overflow-hidden">
               <motion.div
                 className="h-full rounded-full"
                 style={{ background: color }}
                 initial={reduce ? false : { width: 0 }}
                 animate={{ width: `${pct * 100}%` }}
-                transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
               />
             </div>
-
-            {(g.target_date || g.detail) && (
-              <div className="mt-2 flex items-center gap-2 text-[12px] text-fg-mute">
-                {g.target_date && <span>by {shortDate(g.target_date)}</span>}
-                {g.detail && <span className="truncate">{g.detail}</span>}
-              </div>
-            )}
-          </motion.button>
+          </button>
         )
       })}
     </div>
@@ -311,21 +297,26 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
     setTitle(g?.title ?? '')
     setDetail(g?.detail ?? '')
     setColor(g?.color ?? null)
-    setTarget(g?.target_date ? new Date(g.target_date).toISOString().slice(0, 10) : '')
+    // Read back as LOCAL parts, not `toISOString().slice(0,10)`, which is UTC:
+    // the write below anchors at local noon, so the round-trip only survived
+    // because noon is far enough from either boundary to absorb the offset.
+    setTarget(g?.target_date ? localDay(g.target_date) : '')
   }, [g?.id, isNew])
 
   if (!goal) return null
 
   const save = async () => {
     if (!title.trim()) return
-    const body = {
-      title: title.trim(), detail: detail.trim() || null, color,
-      target_date: target ? new Date(`${target}T12:00`).getTime() : null,
-    }
-    g ? await actions.updateGoal(g.id, body) : await actions.createGoal(body)
+    await (g
+      ? actions.updateGoal(g.id, body())
+      : actions.createGoal(body()))
     await reload()
     onClose()
   }
+  const body = () => ({
+    title: title.trim(), detail: detail.trim() || null, color,
+    target_date: target ? new Date(`${target}T12:00`).getTime() : null,
+  })
 
   return (
     <Sheet open onClose={onClose} title={g ? 'Edit goal' : 'New goal'}
@@ -336,7 +327,7 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
               Delete
             </Button>
           )}
-          <Button variant="primary" className="grow" onClick={save} disabled={!title.trim()}>
+          <Button size="lg" variant="primary" className="grow" onClick={save} disabled={!title.trim()}>
             {g ? 'Save' : 'Add goal'}
           </Button>
         </div>
@@ -355,77 +346,59 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
       <Field label="Colour">
         <div className="flex gap-2 items-center">
           <button onClick={() => setColor(null)}
-            className={`w-6 h-6 rounded-full border ${!color ? 'border-fg-dim' : 'border-ink-600'}`} />
+            className={`w-6 h-6 rounded-full border ${!color ? 'border-fg-dim' : 'border-edge'}`} />
           {NOTE_COLORS.map(c => (
             <button key={c} onClick={() => setColor(c)} style={{ background: c }}
               className={`w-6 h-6 rounded-full ${color === c ? 'ring-2 ring-offset-2 ring-offset-ink-850 ring-fg-dim' : ''}`} />
           ))}
         </div>
       </Field>
-      <p className="text-[12.5px] text-fg-mute flex items-center gap-1.5 mt-1">
-        <Target size={12} /> Link tasks to this goal from any task's editor.
-      </p>
     </Sheet>
   )
 }
 
-/**
- * The empty desk.
- *
- * "Nothing queued" is true and useless. What someone wants at an empty desk is
- * the two ways work gets in — and one of them (make a task from a card) is the
- * habit that makes the rest of Wake worth having.
- */
-function EmptyDesk() {
-  return (
-    <div className="py-10">
-      <p className="text-[14px] text-fg-dim leading-relaxed">A clear desk.</p>
-      <p className="mt-1.5 text-[13px] text-fg-mute leading-relaxed max-w-[46ch]">
-        Work arrives two ways: press <span className="text-fg-dim">+ Task</span> above, or open something on
-        Now and turn it into one — a task made from a card keeps a link back to it and survives the card
-        disappearing.
-      </p>
-    </div>
-  )
+/** A date as local calendar parts. `toISOString()` would answer in UTC. */
+const localDay = (ts: number) => {
+  const d = new Date(ts)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
 /**
- * Voice notes, alongside written ones.
+ * Voice notes, beside the list rather than under it.
  *
- * They live here rather than on their own page because a note is a note: the
- * only difference is that this one was easier to make while walking.
+ * They live on this page because a note is a note; the only difference is that
+ * this one was easier to make while walking.
  */
 function VoiceNotes() {
   const [notes, setNotes] = useState<VoiceNote[]>([])
   const [stt, setStt] = useState<{ available: boolean; reason: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
-  const load = () =>
-    voiceApi
-      .list()
+  useEffect(() => {
+    voiceApi.list()
       .then(d => { setNotes(d.notes); setStt(d.stt) })
       .catch(e => setErr((e as Error).message))
-
-  useEffect(() => { void load() }, [])
+  }, [])
 
   return (
-    <section className="mt-10">
-      <div className="flex items-baseline gap-2 mb-3">
-        <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute">Voice notes</h2>
-        {notes.length > 0 && <span className="tnum text-[12px] text-fg-mute">{notes.length}</span>}
+    <section className="mt-8 lg:mt-0">
+      <div className="flex items-center gap-2 mb-1">
+        <h2 className="text-eyebrow uppercase text-fg-mute">Voice notes</h2>
+        {notes.length > 0 && <span className="tnum text-xs text-fg-mute">{notes.length}</span>}
         <Mic size={12} className="text-fg-mute ml-auto" />
       </div>
 
       <Recorder onSaved={n => setNotes(prev => [n, ...prev])} />
 
-      {err && <p className="mt-2 text-[12.5px] text-bad">{err}</p>}
+      {err && <p className="mt-2 text-sm text-bad">{err}</p>}
+      {/* A safety-adjacent fact rather than help text: it is the claim the
+          product keeps about where a recording goes. */}
       {stt && !stt.available && notes.some(n => !n.transcript) && (
-        <p className="mt-2 text-[11.5px] text-fg-mute leading-relaxed max-w-[54ch]">
-          Some notes have no transcript. {stt.reason}
-        </p>
+        <p className="mt-2 text-sm text-fg-mute">{stt.reason}</p>
       )}
 
-      <div className="mt-3">
+      <div className="mt-2">
         {notes.map(n => (
           <VoicePlayer
             key={n.id}
@@ -436,12 +409,7 @@ function VoiceNotes() {
             }}
           />
         ))}
-        {!notes.length && (
-          <p className="text-[12.5px] text-fg-mute py-3 leading-relaxed">
-            Nothing recorded. A voice note stays on this machine; nothing is uploaded unless you attach it
-            to something you send.
-          </p>
-        )}
+        {!notes.length && <Empty>No notes</Empty>}
       </div>
     </section>
   )

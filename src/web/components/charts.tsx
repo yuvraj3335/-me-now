@@ -99,6 +99,9 @@ export function Bars({
 
 /* ----------------------------- area + line ------------------------------- */
 
+/** How many days with a value a line needs before it is a line. */
+export const TREND_MIN_POINTS = 2
+
 export function Trend({
   data, height = 132, color = ACCENT, format = (n: number) => String(n),
 }: {
@@ -112,9 +115,12 @@ export function Trend({
   const points = data.map((d, i) => ({ i, v: d.value, day: d.day }))
   const known = points.filter(p => p.v != null) as Array<{ i: number; v: number; day: string }>
 
-  if (known.length < 2) {
-    return <div className="h-[132px] grid place-items-center text-[12.5px] text-fg-mute">
-      Not enough history yet
+  // A line needs two points. The caller is told the same threshold through
+  // `trendNeedsPoints`, so the tile above a chart cannot state a median while
+  // the chart under it says there is not enough history to draw one.
+  if (known.length < TREND_MIN_POINTS) {
+    return <div className="h-[132px] flex items-center text-sm text-fg-mute">
+      Not enough history
     </div>
   }
 
@@ -257,11 +263,13 @@ export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; val
 /* ------------------------------- stacked --------------------------------- */
 
 export function StackedAging({
-  rows, buckets, colorOf,
+  rows, buckets, colorOf, labelOf = s => s,
 }: {
   rows: Array<{ source: string; buckets: Record<string, number> }>
   buckets: string[]
   colorOf: (s: string) => string
+  /** The name the rest of the product uses. `capitalize` gave `Claude`, `Github`. */
+  labelOf?: (s: string) => string
 }) {
   const reduce = useStill()
   const totals = rows.map(r => buckets.reduce((n, b) => n + (r.buckets[b] ?? 0), 0))
@@ -274,11 +282,11 @@ export function StackedAging({
         return (
           <div key={r.source}>
             <div className="flex items-baseline justify-between mb-1.5">
-              <span className="inline-flex items-center gap-2 text-[13px] text-fg-dim capitalize">
+              <span className="inline-flex items-center gap-2 text-sm text-fg-dim">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: colorOf(r.source) }} />
-                {r.source}
+                {labelOf(r.source)}
               </span>
-              <span className="tnum text-[12.5px] text-fg-mute">{total}</span>
+              <span className="tnum text-sm text-fg-mute">{total}</span>
             </div>
             <div className="flex gap-[2px] h-2">
               {buckets.map((b, bi) => {

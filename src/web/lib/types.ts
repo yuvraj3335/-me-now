@@ -126,7 +126,11 @@ export type Analytics = {
     count: number; p50: number; p90: number
     daily: Array<{ day: string; value: number | null; n: number }>
   }
-  pace: { thisWeek: number; lastWeek: number; delta: number }
+  /**
+   * The selected period against the one before it. `delta` is null when the
+   * previous period was empty — a percentage change from zero is not a fact.
+   */
+  pace: { days: number; period: number; previous: number; delta: number | null }
   rhythm: {
     byHour: Array<{ hour: number; value: number }>
     byWeekday: Array<{ weekday: number; value: number }>

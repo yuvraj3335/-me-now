@@ -74,16 +74,17 @@ export function Button({
  * same decision asked once, so they render as one 32px segmented control.
  */
 export function Segmented<T extends string>({
-  options, value, onChange, ariaLabel,
+  options, value, onChange, ariaLabel, className = '',
 }: {
   options: Array<{ id: T; label: string; disabled?: boolean }>
   value?: T | null
   onChange: (id: T) => void
   ariaLabel?: string
+  className?: string
 }) {
   return (
     <div role="group" aria-label={ariaLabel}
-      className="inline-flex h-8 rounded-control border border-edge overflow-hidden">
+      className={`inline-flex h-8 rounded-control border border-edge overflow-hidden ${className}`}>
       {options.map((o, i) => (
         <button
           key={o.id}

@@ -5,15 +5,16 @@ import { Flame, TrendingDown, TrendingUp } from 'lucide-react'
 import { actions } from '../lib/api'
 import type { Analytics } from '../lib/types'
 import { duration } from '../lib/time'
-import { Bars, DayClock, StackedAging, Trend, WeekdayBars } from '../components/charts'
-import { SOURCE_COLOR } from '../components/sources'
-import { Chip, Empty } from '../components/primitives'
+import { Bars, DayClock, StackedAging, Trend, TREND_MIN_POINTS, WeekdayBars } from '../components/charts'
+import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
+import { Empty, Segmented } from '../components/primitives'
+import { setParam, useParam } from '../lib/route'
 
-const RANGES = [7, 30, 90]
+const RANGES = ['7', '30', '90'] as const
 
 export function Pulse() {
   const reduce = useStill()
-  const [days, setDays] = useState(30)
+  const days = Number(useParam('days') ?? 30) || 30
   const [a, setA] = useState<Analytics | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -25,53 +26,72 @@ export function Pulse() {
     return () => { live = false }
   }, [days])
 
-  if (err) return <Empty>Couldn’t load analytics: {err}</Empty>
-  if (!a) return <div className="pt-32"><Empty>Reading your history…</Empty></div>
+  if (err) return <Empty>Analytics unavailable — {err}</Empty>
+  if (!a) return <div className="pt-16"><Empty>Reading your history</Empty></div>
 
-  const up = a.pace.delta >= 0
-  const pct = Math.round(Math.abs(a.pace.delta) * 100)
+  /**
+   * One answer per fact.
+   *
+   * The median-reply tile used to read `10.3h · p90 11.6h` while the panel
+   * directly under it, fed by the same object, said "Not enough history yet" —
+   * because the tile counted every latency and the chart counted days that had
+   * one. They now agree by construction: both ask the chart's own question.
+   */
+  const trendDays = a.responseTime.daily.filter(d => d.value !== null).length
+  const hasTrend = trendDays >= TREND_MIN_POINTS
+
+  const period = `last ${a.pace.days}d`
 
   return (
     <div className="pb-24">
-      <header className="pt-8 pb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[26px] sm:text-[30px] font-medium tracking-[-0.025em] leading-none">Pulse</h1>
-          <p className="mt-2 text-[13px] text-fg-mute">How fast you’re actually moving</p>
-        </div>
-        <div className="flex gap-1">
-          {RANGES.map(d => (
-            <Chip key={d} active={days === d} onClick={() => setDays(d)}>{d}d</Chip>
-          ))}
-        </div>
+      <header className="flex items-center gap-3 pt-4 pb-2">
+        <h1 className="text-lg font-medium">Pulse</h1>
+        <Segmented
+          className="ml-auto"
+          options={RANGES.map(d => ({ id: d, label: `${d}d` }))}
+          value={String(days) as (typeof RANGES)[number]}
+          onChange={d => setParam('days', d === '30' ? null : d)}
+          ariaLabel="Range"
+        />
       </header>
 
-      {/* Hero row. Three numbers, no boxes — the type does the separating. */}
-      <section className="grid grid-cols-3 gap-4 sm:gap-8 py-6">
+      {/* Three numbers, no boxes — the type does the separating. Each one names
+          the window it was measured over, because the range control now moves
+          them and a number that changes without saying why is a number nobody
+          trusts. */}
+      <section className="grid grid-cols-3 gap-6 py-4">
         <Stat
-          value={a.pace.thisWeek}
-          label="done this week"
+          value={a.pace.period}
+          label={`tasks done · ${period}`}
           foot={
-            a.pace.lastWeek || a.pace.thisWeek ? (
-              <span className={`inline-flex items-center gap-1 ${up ? 'text-ok' : 'text-fg-mute'}`}>
-                {up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-                {pct}% vs last
-              </span>
-            ) : <span className="text-fg-mute">no history yet</span>
+            /* A percentage change from zero is not a fact; the two counts are. */
+            a.pace.delta === null
+              ? <span className="text-fg-mute">
+                  {a.pace.previous === 0 && a.pace.period === 0
+                    ? 'nothing in either period'
+                    : `against ${a.pace.previous} the period before`}
+                </span>
+              : <span className={`inline-flex items-center gap-1 ${a.pace.delta >= 0 ? 'text-ok' : 'text-fg-mute'}`}>
+                  {a.pace.delta >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                  {Math.round(Math.abs(a.pace.delta) * 100)}% against {a.pace.previous}
+                </span>
           }
           accent
         />
         <Stat
           value={a.rhythm.streak}
-          label={`day streak`}
+          label="day streak · all time"
           foot={<span className="inline-flex items-center gap-1 text-fg-mute">
             <Flame size={12} /> best {a.rhythm.bestStreak}
           </span>}
         />
         <Stat
-          value={a.responseTime.count ? duration(a.responseTime.p50) : '—'}
-          label="median reply"
+          value={hasTrend ? duration(a.responseTime.p50) : '—'}
+          label={`median reply · ${period}`}
           foot={<span className="text-fg-mute">
-            {a.responseTime.count ? `p90 ${duration(a.responseTime.p90)}` : 'not enough data'}
+            {hasTrend
+              ? `p90 ${duration(a.responseTime.p90)} · ${a.responseTime.count} replies`
+              : `${a.responseTime.count} replies on ${trendDays} day${trendDays === 1 ? '' : 's'} — not enough to trend`}
           </span>}
         />
       </section>
@@ -119,14 +139,20 @@ export function Pulse() {
             <StackedAging
               rows={a.aging}
               buckets={a.agingBuckets}
+              /* The same names every other surface uses: this legend said
+                 `Claude` and `Github` where the rest of the product says
+                 `Claude Code` and `GitHub`. */
+              labelOf={(s: string) => SOURCE_LABEL[s as keyof typeof SOURCE_LABEL] ?? s}
               colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
             />
-            <div className="flex gap-3 mt-4 text-[11px] text-fg-mute">
+            {/* One ramp with its labels under it, rather than five swatches that
+                in dark mode are five near-identical greys. */}
+            <div className="mt-4 flex items-end gap-1">
               {a.agingBuckets.map((b, i) => (
-                <span key={b} className="inline-flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-[2px] bg-fg-mute"
-                        style={{ opacity: 0.28 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.72 }} />
-                  {b}
+                <span key={b} className="flex-1">
+                  <span className="block h-1.5 rounded-chip bg-fg-dim"
+                        style={{ opacity: 0.3 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.7 }} />
+                  <span className="block mt-1 text-xs text-fg-mute">{b}</span>
                 </span>
               ))}
             </div>
@@ -160,9 +186,8 @@ export function Pulse() {
         )}
       </div>
 
-      <p className="mt-12 text-[12px] text-fg-mute leading-relaxed">
-        Every number here is counted from your own activity log — nothing is estimated,
-        and nothing was generated.
+      <p className="mt-10 pt-4 border-t border-rule text-sm text-fg-mute">
+        Counted from your own activity log. Nothing is estimated.
       </p>
     </div>
   )
@@ -177,13 +202,12 @@ function Stat({
       <motion.div
         initial={still ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 260, damping: 28 }}
-        className={`text-[32px] sm:text-[38px] leading-none font-medium tnum tracking-[-0.03em]
-          ${accent ? 'text-accent-ink' : 'text-fg'}`}
+        className={`text-xl font-medium tnum ${accent ? 'text-accent-ink' : 'text-fg'}`}
       >
         {value}
       </motion.div>
-      <div className="mt-2 text-[12.5px] text-fg-dim">{label}</div>
-      <div className="mt-1 text-[11.5px]">{foot}</div>
+      <div className="mt-2 text-sm text-fg-dim">{label}</div>
+      <div className="mt-0.5 text-sm">{foot}</div>
     </div>
   )
 }
@@ -192,15 +216,15 @@ function Panel({ title, hint, children }: { title: string; hint: string; childre
   const still = useStill()
   return (
     <motion.section
-      className="mt-12"
+      className="mt-10"
       initial={still ? false : { opacity: 0, y: 10 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: '-40px' }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="flex items-baseline gap-2.5 mb-5">
-        <h2 className="text-[15px] font-medium tracking-[-0.01em]">{title}</h2>
-        <span className="text-[12.5px] text-fg-mute">{hint}</span>
+      <div className="flex items-baseline gap-2 mb-4">
+        <h2 className="text-md font-medium tracking-[-0.01em]">{title}</h2>
+        <span className="text-sm text-fg-mute">{hint}</span>
       </div>
       {children}
     </motion.section>
@@ -208,5 +232,5 @@ function Panel({ title, hint, children }: { title: string; hint: string; childre
 }
 
 const SubLabel = ({ children }: { children: React.ReactNode }) => (
-  <div className="text-[11px] uppercase tracking-[0.08em] text-fg-mute mb-3">{children}</div>
+  <div className="text-eyebrow uppercase text-fg-mute mb-2">{children}</div>
 )

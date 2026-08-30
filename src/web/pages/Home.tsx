@@ -82,8 +82,7 @@ export function Home() {
     () => rows.find(c => c.group_key === selectedKey) ?? null,
     [rows, selectedKey],
   )
-  const paneOpen = !!selected
-  const cols = columnsFor(width, paneOpen)
+  const cols = columnsFor(width)
   const isTable = width >= TABLE_MIN
 
   /** Remove locally first so the list closes under the thumb immediately. */
@@ -211,7 +210,7 @@ export function Home() {
   ]
 
   const list = (
-    <div className="min-w-0 grow px-4 sm:px-6 pb-24 lg:pb-8">
+    <div className="min-w-0 grow px-4 pb-24 lg:pb-8">
       <Header syncing={syncing} />
       <FilterRow value={filter} state={state} />
 
@@ -221,7 +220,8 @@ export function Home() {
           <TableHead cols={cols} />
           {groups.map(g => (
             <tbody key={g.title}>
-              <GroupHead title={g.title} shown={g.shown.length} total={g.total} cols={cols} />
+              <GroupHead title={g.title} shown={g.shown.length} total={g.total} cols={cols}
+                first={g.title === 'Now'} />
               {g.shown.length === 0
                 ? <EmptyRow cols={cols}>{g.empty}</EmptyRow>
                 : g.shown.map(c => (
@@ -240,7 +240,7 @@ export function Home() {
         <div>
           {groups.map(g => (
             <section key={g.title}>
-              <div className="flex items-baseline gap-2 pt-8 pb-2">
+              <div className="flex items-baseline gap-2 pt-6 pb-2">
                 <h2 className="text-md font-medium tracking-[-0.01em]">{g.title}</h2>
                 <span className={`tnum text-md ${g.title === 'Now' && g.shown.length ? 'text-accent-ink' : 'text-fg-mute'}`}>
                   {g.shown.length !== g.total ? `${g.shown.length} of ${g.total}` : g.shown.length}
@@ -292,7 +292,7 @@ export function Home() {
         flip to `flex-1` the moment a card opened, which moved every row on the
         page as a side effect of reading one.
       */}
-      <aside className="hidden lg:block lg:w-100 lg:shrink-0 lg:border-l lg:border-edge
+      <aside className="hidden lg:block lg:w-88 xl:w-100 lg:shrink-0 lg:border-l lg:border-edge
                         lg:sticky lg:top-0 lg:h-dvh bg-ink-850">
         {selected
           ? <CardDetail card={selected} onClose={closeDetail}
@@ -315,7 +315,7 @@ const emptyWord = (base: string, filter: SourceName | 'all') =>
 
 function Header({ syncing }: { syncing: boolean }) {
   return (
-    <header className="flex items-center gap-3 pt-6 pb-4">
+    <header className="flex items-center gap-3 pt-4 pb-2">
       <h1 className="text-lg font-medium">Now</h1>
       <Button size="sm" variant="ghost" className="ml-auto"
         title="Refresh all sources" ariaLabel="Refresh all sources"
@@ -344,7 +344,7 @@ function FilterRow({ value, state }: { value: SourceName | 'all'; state: { lastS
     (a, b) => Number(connected.has(b)) - Number(connected.has(a)),
   )
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-3">
+    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2">
       <Chip active={value === 'all'} onClick={() => setParam('src', null)}>All</Chip>
       {ordered.map(s => {
         const on = connected.has(s)
@@ -435,7 +435,7 @@ function DoneGroup({ cols, open }: { cols: Columns; open: boolean }) {
   return (
     <tbody>
       <tr>
-        <td colSpan={colSpanOf(cols)} className="px-2 pt-8 pb-3">
+        <td colSpan={colSpanOf(cols)} className="px-2 pt-6 pb-2">
           <button
             onClick={() => setParam('done', open ? null : '1')}
             className="inline-flex items-center gap-2 text-md font-medium tracking-[-0.01em]
@@ -473,7 +473,7 @@ function DoneList({ open }: { open: boolean }) {
     <section>
       <button
         onClick={() => setParam('done', open ? null : '1')}
-        className="inline-flex items-center gap-2 pt-8 pb-2 text-md font-medium text-fg-dim"
+        className="inline-flex items-center gap-2 pt-6 pb-2 text-md font-medium text-fg-dim"
       >
         <Chevron size={15} className="text-fg-mute" />
         Done and not mine

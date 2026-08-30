@@ -137,19 +137,24 @@ export function Settings() {
       </header>
 
       {/*
-        A real grid, one tile per subject. It used to be `lg:columns-2`, which
-        distributes by HEIGHT rather than by meaning and can split a card across
-        two columns — and it sat in a ~1150px band inside a 1440px viewport with
-        250px dead left and 270px dead right.
+        Three explicit columns, filled by meaning.
+
+        Not `lg:columns-2`, which distributes by HEIGHT and can split a card
+        across two columns; and not one grid either, because a CSS grid sizes
+        every row by its tallest tile, so a five-row Sources card leaves a
+        hand's width of dead space beside a two-row You card. Assigning the
+        tiles to columns keeps the reading order — down each column, in the order
+        he needs them at 7am — and leaves no holes.
       */}
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
+      <div className="grid gap-4 content-start">
 
         <Section title="You">
           <Row label="Email" value={over?.identity.emails[0] ?? '—'} mono />
           <Row label="GitHub" value={over?.identity.github ?? '—'} mono />
         </Section>
 
-        <Section title="Sources" wide>
+        <Section title="Sources">
           {sources.map(s => (
             <div key={s.name} className="flex items-center gap-3 h-11 border-b border-rule last:border-0">
               <SourceDot source={s.name} size={6} />
@@ -185,6 +190,9 @@ export function Settings() {
             </details>
           )}
         </Section>
+
+        </div>
+        <div className="grid gap-4 content-start">
 
         <Section title="Mail">
           <div className="flex items-center gap-3 h-11">
@@ -236,6 +244,9 @@ export function Settings() {
           <Row label="Templates" value={over ? String(over.handoff.templates) : '—'} />
           <Row label="Sessions seen" value={over ? `${over.handoff.recentSessions} · last 30 days` : '—'} />
         </Section>
+
+        </div>
+        <div className="grid gap-4 content-start">
 
         <Section title="Skills and workspace">
           <Row
@@ -298,6 +309,7 @@ export function Settings() {
             <ChevronRight size={14} className="ml-auto text-fg-mute" />
           </button>
         </Section>
+        </div>
       </div>
 
       <AuditSheet open={audit} onClose={() => setAudit(false)} />
@@ -336,9 +348,9 @@ function stateTone(s: SourceStatus): string {
   return 'text-ok'
 }
 
-function Section({ title, children, wide }: { title: string; children: React.ReactNode; wide?: boolean }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className={`rounded-panel bg-ink-850 border border-edge p-4 ${wide ? 'lg:col-span-2' : ''}`}>
+    <section className="rounded-panel bg-ink-850 border border-edge p-4">
       <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{title}</h2>
       {children}
     </section>

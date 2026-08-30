@@ -48,14 +48,23 @@ analytics.get('/', c => {
   const done = ev('task_done')
   const created = ev('task_created')
   const appeared = ev('card_appeared')
-  const acked = ev('card_acked')
+  /**
+   * What actually takes a card off the list.
+   *
+   * This counted `card_acked`, which nothing in the product emits any more — so
+   * "Cleared" was an empty chart at every range, and "The pile" was permanently
+   * half a panel. Done and Not-mine are the two events that remove a card, and
+   * an acknowledgement still counts because it is also a card he dealt with.
+   */
+  const cleared = [...ev('card_done'), ...ev('card_not_mine'), ...ev('card_acked')]
+    .sort((a, b) => a.at - b.at)
 
   /* --- throughput ------------------------------------------------------- */
   const throughput = {
     done: seriesOf(done, days, off),
     created: seriesOf(created, days, off),
     appeared: seriesOf(appeared, days, off),
-    cleared: seriesOf(acked, days, off),
+    cleared: seriesOf(cleared, days, off),
   }
 
   /* --- response time: how long a thing waits before I touch it ---------- */
@@ -89,16 +98,29 @@ analytics.get('/', c => {
     })(),
   }
 
-  /* --- rate of work: this week against the one before ------------------- */
+  /* --- rate of work: this period against the one before ----------------- */
+  //
+  // Against the SELECTED period, not a fixed week. The range control moved only
+  // the x-axis before this: every tile and panel was character-identical across
+  // 7d, 30d and 90d, which reads as a control that does nothing.
+  //
+  // `delta` is null rather than 1 when the previous period was empty. Zero to
+  // three is not a hundred per cent increase, and printing one on a page that
+  // ends "nothing is estimated" is the page contradicting itself.
   const countIn = (rows: Array<{ at: number }>, from: number, to: number) =>
     rows.filter(r => r.at >= from && r.at < to).length
-  const w = 7 * DAY
+  const span = days * DAY
   const t = Date.now()
-  const thisWeek = countIn(done, t - w, t)
-  const lastWeek = countIn(done, t - 2 * w, t - w)
+  const allDoneEvents = db.query<{ at: number }, []>(
+    `SELECT at FROM events WHERE kind = 'task_done'`,
+  ).all()
+  const period = countIn(done, t - span, t)
+  const previous = countIn(allDoneEvents, t - 2 * span, t - span)
   const pace = {
-    thisWeek, lastWeek,
-    delta: lastWeek === 0 ? (thisWeek > 0 ? 1 : 0) : (thisWeek - lastWeek) / lastWeek,
+    days,
+    period,
+    previous,
+    delta: previous === 0 ? null : (period - previous) / previous,
   }
 
   /* --- rhythm: when I actually work ------------------------------------- */

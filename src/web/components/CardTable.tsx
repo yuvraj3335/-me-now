@@ -33,11 +33,17 @@ export type RowAction = {
 }
 
 /**
- * Which columns exist at this width, with this pane state.
+ * Which columns exist, decided by how much room the list actually has.
  *
- * They disappear from the middle out, and Title and When always survive. With
- * the detail pane open, Who and Where go first — both are in the pane, three
- * inches to the right, and repeating them costs the Title column its room.
+ * Not by the viewport: the rail and the detail pane are both fixed columns of
+ * the shell, so a 1440px screen gives the table about 790px, and the eight
+ * columns at their nominal widths want more than that. Deciding on the viewport
+ * instead of on the list is how the table came out 992px wide inside a 792px
+ * container and slid underneath the pane.
+ *
+ * Columns disappear from the middle out — Who, then Where, then Why — and Title
+ * never drops below 280px, because a title cut to forty characters is a title
+ * that has to be opened to be read.
  */
 export type Columns = {
   why: boolean
@@ -45,11 +51,37 @@ export type Columns = {
   where: boolean
 }
 
-export function columnsFor(width: number, paneOpen: boolean): Columns {
-  if (width < 1100) return { why: false, who: false, where: false }
-  if (width < 1280) return { why: true, who: false, where: true }
-  if (paneOpen) return { why: true, who: false, where: false }
-  return { why: true, who: true, where: true }
+/** The shell's own fixed columns, which the table never gets to use. */
+const RAIL = 200
+const PAGE_PAD = 32
+
+/** The pane is narrower on a small laptop, where 400px is a third of the screen. */
+export const paneWidth = (w: number) => (w >= 1440 ? 400 : 352)
+
+/**
+ * Column widths, in the order they appear.
+ *
+ * Sized to their content rather than to a round number: `Session` plus a 16px
+ * glyph is 88px, `trutohq/truto` in mono is 112px, and two 26px row actions plus
+ * their gap is 72px. `Source` and `When` are wider than their *content* needs
+ * because their column headings are wider than they are — 60px of dots under a
+ * 44px column made `SOURCE` and `WHEN` collide into `SOURCEWHEN`.
+ */
+const W = { kind: 88, why: 120, who: 88, where: 108, source: 68, when: 56, actions: 72 }
+const TITLE_MIN = 280
+
+export function columnsFor(width: number): Columns {
+  const list = width - RAIL - paneWidth(width) - PAGE_PAD
+  const cols: Columns = { why: true, who: true, where: true }
+  const spend = () =>
+    W.kind + W.source + W.when + W.actions +
+    (cols.why ? W.why : 0) + (cols.who ? W.who : 0) + (cols.where ? W.where : 0)
+
+  for (const drop of ['who', 'where', 'why'] as const) {
+    if (list - spend() >= TITLE_MIN) break
+    cols[drop] = false
+  }
+  return cols
 }
 
 /** The viewport width, as a number the column rules can read. */
@@ -66,7 +98,7 @@ export function useViewport(): number {
 
 /* --------------------------------- header --------------------------------- */
 
-const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle px-2 py-2'
+const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle px-2 py-2 truncate'
 
 export function TableHead({ cols }: { cols: Columns }) {
   return (
@@ -95,14 +127,18 @@ export function TableHead({ cols }: { cols: Columns }) {
 export function TableCols({ cols }: { cols: Columns }) {
   return (
     <colgroup>
-      <col style={{ width: 104 }} />
-      <col style={{ minWidth: 280 }} />
-      {cols.why && <col style={{ width: 176 }} />}
-      {cols.who && <col style={{ width: 112 }} />}
-      {cols.where && <col style={{ width: 128 }} />}
-      <col style={{ width: 56 }} />
-      <col style={{ width: 48 }} />
-      <col style={{ width: 88 }} />
+      <col style={{ width: W.kind }} />
+      {/* No width: under `table-fixed` the one unsized column absorbs whatever
+          the others leave, which is what makes Title elastic and every other
+          column hold its x-position. A `min-width` here is what overflowed the
+          table out from under its own container. */}
+      <col />
+      {cols.why && <col style={{ width: W.why }} />}
+      {cols.who && <col style={{ width: W.who }} />}
+      {cols.where && <col style={{ width: W.where }} />}
+      <col style={{ width: W.source }} />
+      <col style={{ width: W.when }} />
+      <col style={{ width: W.actions }} />
     </colgroup>
   )
 }
@@ -125,13 +161,18 @@ export const colSpanOf = (cols: Columns) =>
  * entire urgency signal, and it is enough.
  */
 export function GroupHead({
-  title, shown, total, cols, right,
-}: { title: string; shown: number; total: number; cols: Columns; right?: React.ReactNode }) {
+  title, shown, total, cols, right, first,
+}: {
+  title: string; shown: number; total: number; cols: Columns
+  right?: React.ReactNode
+  /** The first group sits under the header row, so it needs less air above it. */
+  first?: boolean
+}) {
   const filtered = shown !== total
   const urgent = title === 'Now' && shown > 0
   return (
     <tr>
-      <td colSpan={colSpanOf(cols)} className="px-2 pt-8 pb-3">
+      <td colSpan={colSpanOf(cols)} className={`px-2 pb-2 ${first ? 'pt-4' : 'pt-6'}`}>
         <div className="flex items-baseline gap-2">
           <h2 className="text-md font-medium tracking-[-0.01em]">{title}</h2>
           <span className={`tnum text-md ${urgent ? 'text-accent-ink' : 'text-fg-mute'}`}>
@@ -148,7 +189,7 @@ export function GroupHead({
 export function EmptyRow({ cols, children }: { cols: Columns; children: React.ReactNode }) {
   return (
     <tr>
-      <td className="w-[104px]" />
+      <td />
       <td colSpan={colSpanOf(cols) - 1} className="px-2 h-11 text-sm text-fg-mute align-middle">
         {children}
       </td>
@@ -259,7 +300,10 @@ export function CardLine({
   const kind = cardKind(card)
   const where = whereOf(card.sources[0], card)
   const parked = card.pile === 'parked'
-  const meta = [kind.word, card.why, card.who, where, ago(card.ts)].filter(Boolean).join(' · ')
+  // The age is pinned to the title line rather than left at the end of the meta
+  // run: `why` is the longest of these by far, and putting `when` behind it
+  // meant the one fact he scans for was the first one truncated away.
+  const meta = [kind.word, card.who, where, card.why].filter(Boolean).join(' · ')
 
   return (
     <li
@@ -268,9 +312,10 @@ export function CardLine({
       style={{ boxShadow: `inset 2px 0 0 ${edgeFor(card)}` }}
     >
       <button onClick={() => actions.onOpen(card)} className="min-w-0 grow text-left py-2">
-        <span className="flex items-center gap-2">
+        <span className="flex items-baseline gap-2">
           <KindGlyph kind={kind} size={14} />
-          <span className="text-base font-medium text-fg truncate">{card.title}</span>
+          <span className="text-base font-medium text-fg truncate grow">{card.title}</span>
+          <span className="text-sm text-fg-mute tnum shrink-0">{ago(card.ts)}</span>
         </span>
         <span className="mt-0.5 block text-sm text-fg-mute truncate">{meta}</span>
       </button>
