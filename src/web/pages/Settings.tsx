@@ -147,7 +147,7 @@ export function Settings() {
         he needs them at 7am — and leaves no holes.
       */}
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
-      <div className="grid gap-4 content-start">
+      <div className="grid grid-cols-1 gap-4 content-start min-w-0">
 
         <Section title="You">
           <Row label="Email" value={over?.identity.emails[0] ?? '—'} mono />
@@ -156,14 +156,19 @@ export function Settings() {
 
         <Section title="Sources">
           {sources.map(s => (
-            <div key={s.name} className="flex items-center gap-3 h-11 border-b border-rule last:border-0">
+            <div key={s.name} className="flex items-center gap-3 h-11 border-b border-rule last:border-0 min-w-0">
               <SourceDot source={s.name} size={6} />
-              <span className="text-base w-28 shrink-0 truncate">{SOURCE_LABEL[s.name]}</span>
-              <span className={`text-sm w-32 shrink-0 ${stateTone(s)}`}>{stateWord(s)}</span>
+              <span className="text-base w-24 shrink-0 truncate">{SOURCE_LABEL[s.name]}</span>
+              <span className={`text-sm w-28 shrink-0 truncate ${stateTone(s)}`}>{stateWord(s)}</span>
               {/* The API's real `detail` — `signed in as yuvraj3335`, `7 projects
                   on this machine` — not a generic `via`. Those are the facts
-                  that confirm the connection is the right one. */}
-              <span className="text-sm text-fg-mute truncate grow" title={s.detail}>
+                  that confirm the connection is the right one.
+
+                  `min-w-0` is what makes `truncate` work here: a flex child's
+                  default minimum is its content width, so without it this span
+                  pushed the whole row wider than the column and the Connect
+                  buttons landed on top of the tile next door. */}
+              <span className="text-sm text-fg-mute truncate grow min-w-0" title={s.detail}>
                 {s.ok ? s.detail : ''}
               </span>
               {s.oauthable && (
@@ -192,11 +197,11 @@ export function Settings() {
         </Section>
 
         </div>
-        <div className="grid gap-4 content-start">
+        <div className="grid grid-cols-1 gap-4 content-start min-w-0">
 
         <Section title="Mail">
-          <div className="flex items-center gap-3 h-11">
-            <span className="text-base font-mono truncate grow">{mailAccount?.address ?? '—'}</span>
+          <div className="flex items-center gap-3 h-11 min-w-0">
+            <span className="text-base font-mono truncate grow min-w-0">{mailAccount?.address ?? '—'}</span>
             <span className={`text-sm shrink-0 ${over?.mail.connected ? 'text-ok' : 'text-fg-mute'}`}>
               {over
                 ? over.mail.connected
@@ -246,7 +251,7 @@ export function Settings() {
         </Section>
 
         </div>
-        <div className="grid gap-4 content-start">
+        <div className="grid grid-cols-1 gap-4 content-start min-w-0">
 
         <Section title="Skills and workspace">
           <Row
@@ -262,13 +267,20 @@ export function Settings() {
             every CLI invocation threw on its audit write and `settings.ts`
             swallowed the throw with `.catch(() => [])`.
           */}
+          {/*
+            `—` while the answer is still coming is indistinguishable from `—`
+            meaning none, and this row in particular spent a release saying "no
+            profiles on this machine" about a machine with 35 of them. Resolving
+            it shells out to the CLI, which takes a second or two, so the wait
+            says so.
+          */}
           <Row
             label="Truto CLI"
             value={truto
               ? truto.profiles.length
                 ? `${truto.profiles.length} profile${truto.profiles.length === 1 ? '' : 's'}${truto.active?.team ? ` · ${truto.active.team}` : ''}`
                 : (truto.error ?? 'none on this machine')
-              : '—'}
+              : 'asking the CLI…'}
             tone={truto && !truto.profiles.length ? 'warn' : undefined}
           />
           {!!truto?.profiles.length && (
@@ -350,7 +362,7 @@ function stateTone(s: SourceStatus): string {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-panel bg-ink-850 border border-edge p-4">
+    <section className="rounded-panel bg-ink-850 border border-edge p-4 min-w-0 overflow-hidden">
       <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{title}</h2>
       {children}
     </section>
@@ -362,9 +374,9 @@ function Row({
 }: { label: string; value: string; tone?: 'ok' | 'bad' | 'warn'; mono?: boolean }) {
   const colour = tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-fg-dim'
   return (
-    <div className="flex items-center gap-3 h-11 border-b border-rule last:border-0">
+    <div className="flex items-center gap-3 h-11 border-b border-rule last:border-0 min-w-0">
       <span className="text-sm text-fg-mute w-28 shrink-0">{label}</span>
-      <span className={`text-base truncate ${colour} ${mono ? 'font-mono text-sm' : ''}`} title={value}>
+      <span className={`text-base truncate min-w-0 ${colour} ${mono ? 'font-mono text-sm' : ''}`} title={value}>
         {value}
       </span>
     </div>
