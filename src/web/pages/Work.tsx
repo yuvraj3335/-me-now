@@ -1,7 +1,7 @@
 /**
  * Work — his own list, beside his own notes.
  *
- * On the same grid as Now and Mail: a padded list column and a pane of the same
+ * On the same grid as the desk and Mail: a padded list column and a pane of the same
  * width token with the same left hairline, so the second column's left edge sits
  * on the one vertical the product uses. It used to be a `[1fr_360px]` grid
  * inside the shell's own pad, which put its right column at x=1056 — a vertical
@@ -25,12 +25,13 @@
 import { Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, Terminal, X } from 'lucide-react'
+import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, X } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
-import { Button, Empty, Field, Sheet, inputClass, spring } from '../components/primitives'
+import { Button, Empty, Field, Pager, Sheet, inputClass, pageCount, pageSlice, spring } from '../components/primitives'
 import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
+import { WakeMark } from '../components/WakeMark'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
@@ -46,6 +47,7 @@ export function Work() {
   const [creating, setCreating] = useState(false)
   const [goalEditing, setGoalEditing] = useState<Goal | null | 'new'>(null)
   const [showDone, setShowDone] = useState(false)
+  const donePage = Math.max(1, Number(useParam('page')) || 1)
 
   /** Any of the three sheets this page owns. While one is up it holds the
    *  surface, and with it the single primary. */
@@ -78,10 +80,10 @@ export function Work() {
    * name of the source it came from. Cards churn; the task does not, so a task
    * whose card is gone simply loses the line rather than breaking.
    */
-  const cardByGroup = useMemo(() => {
-    const all = [...(state?.now ?? []), ...(state?.open ?? []), ...(state?.parked ?? [])]
-    return new Map(all.map(c => [c.group_key, c]))
-  }, [state?.now, state?.open, state?.parked])
+  const cardByGroup = useMemo(
+    () => new Map((state?.cards ?? []).map(c => [c.group_key, c])),
+    [state?.cards],
+  )
 
   const doing = useMemo(() => tasks.filter(t => t.status === 'doing'), [tasks])
   const todo = useMemo(() => tasks.filter(t => t.status === 'todo'), [tasks])
@@ -126,6 +128,7 @@ export function Work() {
 
   const header = (
     <header className="flex items-center gap-3 pt-4 pb-2">
+      <WakeMark size={16} className="text-accent shrink-0 sm:hidden" />
       <h1 className="text-lg font-medium">Work</h1>
       <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
       <span className="ml-auto flex items-center gap-4">
@@ -189,7 +192,7 @@ export function Work() {
 
   return (
     /* The shell's own grid: a padded list column, then a pane on the same width
-       token with the same left hairline Now's detail and Mail's list use. Below
+       token with the same left hairline the desk's detail and Mail's list use. Below
        the pane width the two simply stack, which is what they did anyway. */
     <div className="xl:flex xl:items-stretch xl:min-h-dvh">
       <div className="min-w-0 grow pad-x pb-8">
@@ -197,7 +200,7 @@ export function Work() {
         {tab === 'tasks' ? (
           <>
             {doing.length > 0 && (
-              <Group label="In flight">
+              <Group label="In progress">
                 <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
                   {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                 </Reorder.Group>
@@ -205,7 +208,7 @@ export function Work() {
             )}
 
             {todo.length > 0 && (
-              <Group label="Up next">
+              <Group label="Not started">
                 <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
                   {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                 </Reorder.Group>
@@ -214,12 +217,29 @@ export function Work() {
             {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
             {!todo.length && !doing.length && !done.length && <Empty />}
 
+            {/*
+              Done is the only list here that pages.
+
+              It is also the only one that grows without limit — it used to be
+              cut at a hard `slice(0, 40)`, which is not a page, it is a silent
+              floor under everything finished more than a few weeks ago. The two
+              live lists above are drag-ordered and `commitOrder` writes their
+              sort keys from the array index it is handed, so slicing them into
+              pages would rewrite page two's order as if it were page one's.
+              They are bounded by what he is actually working on anyway.
+            */}
             {done.length > 0 && (
               <Group label={`Done — ${done.length}`}>
                 <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
                   {showDone ? 'Hide' : 'Show'}
                 </Button>
-                {showDone && done.slice(0, 40).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+                {showDone && (
+                  <>
+                    {pageSlice(done, donePage).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
+                    <Pager page={donePage} pages={pageCount(done.length)} total={done.length}
+                      onPage={n => setParam('page', n === 1 ? null : String(n))} />
+                  </>
+                )}
               </Group>
             )}
           </>
@@ -332,7 +352,7 @@ function TaskRow({
             title: task.title,
             repoHint: taskRepoHint(task.origin_meta),
           })}>
-          <Terminal size={14} />
+          <SquareTerminal size={14} />
         </Button>
       </span>
 

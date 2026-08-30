@@ -1,85 +1,83 @@
 /**
- * The detail: a glance, not a document.
+ * The detail: a glance, not a document — and now the only home for everything
+ * the table dropped.
  *
- * What it renders, top to bottom, and nothing else: the title, one line of
- * `why · who · when`, ONE fact table of at most four rows, the excerpt clipped
- * to three lines with an expand, one mono line to resume, one line of where it
- * was seen, and one row of actions.
+ * Top to bottom: the title, one line of `why · who · when`, the three controls
+ * that change what the card *is* (status, priority, due), the facts, the
+ * excerpt, one mono line to resume, where it was seen, and one row of actions.
  *
- * What it replaced, measured on the live page: a five-row PULL REQUEST table
- * *and* a three-row SESSION table — one `Block` per source, so the dedup
- * engine's success was what made the pane worst — with `Why` printed twice, a
- * bordered filled box around the resume command, and under it a 224px scrolling
- * `<pre>` holding 1,776 characters of Wake's own handoff pack — its instruction
- * heading and its own timestamped footer included. Wake was printing its own
- * paperwork back to itself in a 400px pane. The transcript block is gone; the
- * cut happens on the server's read path now, where the card's excerpt is built.
+ * Two things changed here and both were reported.
  *
- * `Open` is not amber. The file's own docblock used to claim it had fixed that,
- * 175 lines above the hand-rolled `bg-accent` anchor that had not.
+ * **The overflow menu is gone.** One 32px glyph in the footer held every
+ * deferral control in the product, and it appended its contents to the bottom
+ * of a scrolling body while its trigger stayed pinned — so on a card with a
+ * transcript you pressed it and four controls appeared about 1400px below the
+ * viewport. Nothing appeared to happen. A control worth hiding in a menu was
+ * worth a button; a control not worth a button was not worth shipping. Status,
+ * priority and due are visible without pressing anything now, and pin is a
+ * plain toggle.
+ *
+ * **The action bar is four solid buttons.** They used to be four ghost labels
+ * of identical weight, on the theory that they were the same kind of decision —
+ * which made the row read as a caption rather than as controls. They are
+ * `secondary` now, with exactly one `primary` among them, so the pane still
+ * spends the accent once.
+ *
+ * `Open` prefers the native application. See `lib/appLinks.ts` for why the
+ * browser link beside it is a visible link rather than a fallback timer.
  */
 
 import { useEffect, useState } from 'react'
 import {
-  ArrowUpRight, Check, ChevronDown, Copy, ListPlus, MoreHorizontal, Pin, PinOff,
-  Sunrise, Terminal, UserMinus, X,
+  ArrowUpRight, Check, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
-import type { Card, Pile } from '../lib/types'
+import type { Card, CardPriority, CardStatus } from '../lib/types'
+import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { actions, reload } from '../lib/api'
-import { ago, atHour, timeOfDay, wallClock } from '../lib/time'
+import { ago, wallClock } from '../lib/time'
 import { SOURCE_LABEL, SourceDot } from './sources'
-import { Button, Segmented } from './primitives'
-import { cardKind, KindGlyph, whereOf } from './kinds'
+import { Button, DateField, Select } from './primitives'
+import { cardKind, cleanChannel, KindGlyph } from './kinds'
+import { PriorityGlyph, StatusGlyph, isSettled } from './status'
+import { openTarget } from '../lib/appLinks'
+import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
 import { openLaunch } from '../lib/launch'
 import { cardContext, cardTitle, repoHintFor, templatesFor } from '../lib/cardContext'
 import { toast } from '../lib/toast'
 
-/**
- * Deferral, as one control rather than four lozenges.
- *
- * These are *arrival* times — when should this come back — so they are offered
- * only to a card that has not already been set aside. A Parked card gets
- * `Parked until …` and `Wake now` instead.
- */
-const SNOOZE = [
-  { id: 'today', label: 'Later today', at: () => Date.now() + 4 * 3.6e6 },
-  { id: 'tonight', label: 'Tonight', at: () => atHour(0, 20) },
-  { id: 'tomorrow', label: 'Tomorrow', at: () => atHour(1, 9) },
-  { id: 'week', label: 'Next week', at: () => atHour(7, 9) },
-] as const
-
-const PILES: Array<{ id: Pile; label: string }> = [
-  { id: 'now', label: 'Now' },
-  { id: 'open', label: 'Open' },
-  { id: 'parked', label: 'Parked' },
-]
-
 export function CardDetail({
   card, onClose, onMakeTask,
 }: { card: Card; onClose: () => void; onMakeTask: (c: Card) => void }) {
-  const [more, setMore] = useState(false)
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
 
-  useEffect(() => { setMore(false); setCopied(false); setExpanded(false) }, [card.group_key])
+  useEffect(() => { setCopied(false); setExpanded(false) }, [card.group_key])
 
-  const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
+  const run = async (fn: () => Promise<unknown>) => { await fn(); await reload() }
 
-  const runUndoable = async (
-    fn: () => Promise<unknown>, text: string, undo: 'done' | 'not_mine' | 'snoozed' | 'moved',
-  ) => {
-    await run(fn)
-    toast(text, {
+  const kind = cardKind(card)
+  const claude = card.sources.find(s => s.source === 'claude')
+  const resume = claude?.meta?.resume_cmd as string | undefined
+  const { href, app } = openTarget(card)
+  const external = href.startsWith('http')
+
+  /**
+   * The undo names the field it is putting back.
+   *
+   * `actions.restore(g)` with no second argument clears everything keeping a
+   * card off the list, which is right for "bring this back" and wrong for an
+   * undo: it also drops a due date or a pin that had nothing to do with the
+   * action being reversed.
+   */
+  const setStatus = async (next: CardStatus, undo: 'status' = 'status') => {
+    await actions.setStatus(card.group_key, next)
+    await reload()
+    if (isSettled(next)) onClose()
+    toast(next === 'done' ? 'Done.' : `${STATUS_LABEL[next]}.`, {
       label: 'Undo',
       run: async () => { await actions.restore(card.group_key, undo); await reload() },
     })
   }
-
-  const kind = cardKind(card)
-  const parked = card.pile === 'parked'
-  const external = card.url.startsWith('http')
-  const claude = card.sources.find(s => s.source === 'claude')
-  const resume = claude?.meta?.resume_cmd as string | undefined
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -90,7 +88,10 @@ export function CardDetail({
             400px pane. The glyph moves onto the metadata line, where it is one
             more fact rather than an indent. */}
         <div className="flex items-start gap-2">
-          <h2 className="grow text-md font-medium tracking-[-0.01em] line-clamp-3">{card.title}</h2>
+          <h2 className={`grow ${DETAIL_TITLE} line-clamp-3
+                          ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
+            {card.title}
+          </h2>
           <Button variant="ghost" size="sm" onClick={onClose} title="Close" ariaLabel="Close">
             <X size={14} />
           </Button>
@@ -104,11 +105,50 @@ export function CardDetail({
       </div>
 
       <div className="grow min-h-0 overflow-y-auto pad-x pb-4">
+        {/*
+          The three controls, in the order the questions get asked: where does
+          this stand, how much does it matter, when is it wanted. Each is one
+          labelled row on the fact grid the panel already uses, so they read as
+          properties of the card rather than as a toolbar bolted to it.
+        */}
+        <div className="mt-2 border-b border-rule">
+          <Row label="Status" mark={<StatusGlyph status={card.status} />}>
+            <Select
+              value={card.status}
+              options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
+              onChange={s => void setStatus(s)}
+              ariaLabel="Status"
+            />
+          </Row>
+          <Row label="Priority" mark={<PriorityGlyph priority={card.priority} />}>
+            <Select
+              value={String(card.priority)}
+              options={PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))}
+              onChange={v => void run(() =>
+                actions.setPriority(card.group_key, Number(v) as CardPriority))}
+              ariaLabel="Priority"
+            />
+          </Row>
+          <Row label="Due">
+            <DateField
+              value={card.due_at}
+              onChange={at => void run(() => actions.setDue(card.group_key, at))}
+              ariaLabel="Due date"
+            />
+          </Row>
+          <Row label="Pin">
+            <Button size="sm" variant={card.state?.pinned ? 'secondary' : 'ghost'}
+              onClick={() => void run(() => actions.pin(card.group_key, !card.state?.pinned))}>
+              {card.state?.pinned ? <><PinOff size={14} /> Pinned</> : <><Pin size={14} /> Pin</>}
+            </Button>
+          </Row>
+        </div>
+
         <Facts card={card} />
 
         {card.excerpt && (
           <div className="mt-6">
-            <p className={`text-sm text-fg-dim whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
+            <p className={`${DETAIL_BODY} whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
               {card.excerpt}
             </p>
             {/* Three lines, then a way to see the rest. `line-clamp-6` with no
@@ -116,7 +156,7 @@ export function CardDetail({
             {card.excerpt.length > 160 && (
               <button onClick={() => setExpanded(v => !v)}
                 className="mt-1 text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
-                {expanded ? 'Less' : 'More'}
+                {expanded ? 'Less' : 'Show all'}
               </button>
             )}
           </div>
@@ -137,117 +177,58 @@ export function CardDetail({
         )}
 
         <SeenIn card={card} />
-
-        {parked && <ParkedNote card={card} run={run} />}
-
-        {/*
-          `⋯` reveals its content next to itself.
-          It used to append to the bottom of the scrolling body while its trigger
-          sat in the pinned action bar, so on a card with a transcript the reader
-          pressed it and four controls appeared ~1400px below the viewport.
-          Nothing appeared to happen — and every deferral control in the product
-          is behind that button.
-        */}
-        {more && (
-          <div className="mt-6 space-y-4">
-            {!parked && (
-              <Block label="Later">
-                <Segmented
-                  options={SNOOZE.map(s => ({ id: s.id, label: s.label }))}
-                  onChange={id => {
-                    const s = SNOOZE.find(x => x.id === id)!
-                    void runUndoable(
-                      () => actions.snooze(card.group_key, s.at()),
-                      `Back ${s.label.toLowerCase()}.`,
-                      'snoozed',
-                    )
-                  }}
-                  ariaLabel="Come back"
-                />
-              </Block>
-            )}
-
-            {/*
-              Only the piles it is not in. Offering "Move to Open" on an Open
-              card was not a no-op: it silently wrote `pile_override:'open'` and
-              nulled the snooze, freezing the card against Wake's own
-              classification forever.
-            */}
-            <Block label="Move to">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Segmented
-                  options={PILES.filter(p => p.id !== card.pile)}
-                  onChange={id => void runUndoable(
-                    () => actions.move(card.group_key, id),
-                    `Moved to ${PILES.find(p => p.id === id)!.label}.`,
-                    'moved',
-                  )}
-                  ariaLabel="Move to"
-                />
-                {card.state?.pile_override && (
-                  <Button size="sm" variant="ghost"
-                    onClick={() => void runUndoable(
-                      () => actions.move(card.group_key, null), 'Back to what Wake decides.', 'moved',
-                    )}>
-                    Let Wake decide
-                  </Button>
-                )}
-              </div>
-            </Block>
-
-            <Block label="This card">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button size="sm" variant="ghost"
-                  onClick={() => void run(() => actions.pin(card.group_key, !card.state?.pinned))}>
-                  {card.state?.pinned ? <><PinOff size={14} /> Unpin</> : <><Pin size={14} /> Pin</>}
-                </Button>
-                <Button size="sm" variant="ghost"
-                  onClick={() => void runUndoable(
-                    () => actions.notMine(card.group_key), 'Taken off your list.', 'not_mine',
-                  )}>
-                  <UserMinus size={14} /> Not mine
-                </Button>
-              </div>
-            </Block>
-          </div>
-        )}
       </div>
 
       {/*
-        The action bar. Every control is ghost text of the same weight, because
-        they are the same kind of decision — and because `Open`, the least
-        consequential of them, was the one amber slab on the panel. It wraps, so
-        370px of `whitespace-nowrap` cannot overflow a 360px pane.
+        Four buttons, two columns on a narrow pane so four labels cannot overflow
+        320px, one row wherever they fit. `Done` is the only primary: it is the
+        only one of the four that commits anything.
       */}
-      <div className="shrink-0 border-t border-rule pad-x py-2 flex items-center gap-1 flex-wrap">
-        {external && (
-          <Button size="sm" variant="ghost"
-            onClick={() => window.open(card.url, '_blank', 'noopener,noreferrer')}>
-            Open <ArrowUpRight size={14} />
+      <div className="shrink-0 border-t border-rule pad-x py-3">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+          {external && (
+            <a
+              href={app ?? href}
+              target="_blank"
+              rel="noreferrer"
+              className="relative inline-flex items-center justify-center rounded-control
+                         whitespace-nowrap transition-colors duration-100 hit h-8 px-3 text-sm gap-2
+                         bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700"
+            >
+              Open <ArrowUpRight size={14} />
+            </a>
+          )}
+          <Button size="md" variant="secondary" onClick={() => {
+            onClose()
+            openLaunch(cardContext(card), {
+              templates: templatesFor(card),
+              repoHint: repoHintFor(card),
+              title: cardTitle(card),
+            })
+          }}>
+            <SquareTerminal size={14} /> Claude
           </Button>
+          <Button size="md" variant="secondary" onClick={() => onMakeTask(card)}>
+            <ListPlus size={14} /> Task
+          </Button>
+          <Button size="md" variant="primary" onClick={() => void setStatus('done')}>
+            <Check size={14} /> Done
+          </Button>
+        </div>
+        {/*
+          The escape hatch, and the reason it is a visible link rather than a
+          timer: a custom scheme with no handler does not throw, does not fire an
+          error and does not navigate, so there is no honest way to detect that
+          `slack://` went nowhere. One quiet line costs a person with the app
+          nothing and saves the one without it.
+        */}
+        {app && (
+          <a href={href} target="_blank" rel="noreferrer"
+            className="mt-2 inline-block text-sm text-fg-mute hover:text-fg-dim
+                       transition-colors duration-100">
+            Open in browser
+          </a>
         )}
-        <Button size="sm" variant="ghost" onClick={() => {
-          onClose()
-          openLaunch(cardContext(card), {
-            templates: templatesFor(card),
-            repoHint: repoHintFor(card),
-            title: cardTitle(card),
-          })
-        }}>
-          <Terminal size={14} /> Claude
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => onMakeTask(card)}>
-          <ListPlus size={14} /> Task
-        </Button>
-        <Button size="sm" variant="ghost"
-          onClick={() => void runUndoable(() => actions.doneCard(card.group_key), 'Marked done.', 'done')}>
-          <Check size={14} /> Done
-        </Button>
-        <Button size="sm" variant="ghost" className="ml-auto"
-          title="More actions" ariaLabel="More actions"
-          onClick={() => setMore(o => !o)}>
-          <MoreHorizontal size={14} />
-        </Button>
       </div>
     </div>
   )
@@ -255,10 +236,22 @@ export function CardDetail({
 
 /* --------------------------------- facts ---------------------------------- */
 
-const Block = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div>
-    <div className="text-eyebrow uppercase text-fg-mute mb-2">{label}</div>
-    {children}
+/**
+ * One labelled row, with a fixed slot for its mark.
+ *
+ * The slot is always rendered, even when the mark is null. Normal priority
+ * draws nothing at all — which is right on a table row and wrong here, where an
+ * absent 20px glyph pulled the Priority control 20px left of the Status control
+ * directly above it. Four controls on four verticals in a 360px pane is what
+ * this whole file spent its last rewrite removing.
+ */
+const Row = ({
+  label, mark, children,
+}: { label: string; mark?: React.ReactNode; children: React.ReactNode }) => (
+  <div className="flex items-center gap-3 h-11 border-t border-rule first:border-t-0">
+    <span className="w-24 shrink-0 text-sm text-fg-mute">{label}</span>
+    <span className="w-5 shrink-0 flex items-center">{mark}</span>
+    <span className="min-w-0 grow">{children}</span>
   </div>
 )
 
@@ -267,16 +260,19 @@ const Mono = ({ children }: { children: React.ReactNode }) => (
 )
 
 /**
- * One table, at most four rows, merged across sources.
+ * The facts, merged across sources, in one fixed order.
  *
  * It used to render one `Block` and one `FactTable` per source, so a card seen
  * in GitHub and Claude Code got a five-row table and a three-row table — eight
  * rows and two headings for a glance — and the more successfully the dedup
- * engine merged, the worse the pane got. The facts are a union now, in one
- * order, capped: the four a person acts on.
+ * engine merged, the worse the pane got. So the facts became a union, in one
+ * order, capped at four.
  *
- * `Why` is not among them. It is the second line of the header, and printing it
- * again here was the same sentence twice in 200 pixels.
+ * The cap is gone. This is the only surface that carries `why`, `who`, `when`,
+ * the channel and the repository at all now that the table is four columns
+ * wide, and a cap here would silently drop the one a person opened the card to
+ * read. Order does the work the cap used to: the five that are true of every
+ * card come first, then whatever the sources themselves know.
  */
 function Facts({ card }: { card: Card }) {
   const by = (s: string) => card.sources.find(x => x.source === s)
@@ -288,18 +284,25 @@ function Facts({ card }: { card: Card }) {
 
   const rows: Array<[string, React.ReactNode]> = []
   const add = (k: string, v: React.ReactNode) => {
-    if (v === null || v === undefined || v === '' || rows.length >= 4) return
+    if (v === null || v === undefined || v === '') return
     rows.push([k, v])
   }
 
+  add('Why', card.why)
+  add('Who', card.who ?? card.actor)
+  add('When', wallClock(card.ts))
+  if (slack) {
+    const channel = slack.meta?.channel ?? card.meta?.channel
+    add('Channel', channel ? <Mono>{cleanChannel(String(channel))}</Mono> : null)
+    add('From', slack.who ?? slack.actor)
+    if (slack.meta?.paged) add('Paged', 'your group was named')
+    add('Alert', slack.meta?.short_id ? <Mono>{slack.meta.short_id}</Mono> : null)
+    add('Monitor', slack.meta?.monitor ? <Mono>{slack.meta.monitor}</Mono> : null)
+  }
   if (gh) {
     add('Repository', gh.meta?.repo ? <Mono>{gh.meta.repo}</Mono> : null)
     add('Number', gh.meta?.number ? <Mono>#{gh.meta.number}</Mono> : null)
     add('State', gh.meta?.is_pr ? (gh.meta?.draft ? 'draft' : 'ready for review') : 'open')
-  }
-  if (slack) {
-    add('Channel', <Mono>{whereOf(slack, card)}</Mono>)
-    add('From', slack.who ?? slack.actor)
   }
   if (sentry) {
     add('Project', sentry.meta?.project ? <Mono>{sentry.meta.project}</Mono> : null)
@@ -315,20 +318,19 @@ function Facts({ card }: { card: Card }) {
     add('Directory', claude.meta?.cwd ? <Mono>{claude.meta.cwd}</Mono> : null)
     add('Exchanges', typeof claude.meta?.turns === 'number' ? String(claude.meta.turns) : null)
   }
-
   if (!rows.length) return null
 
+  // The same `Row` the controls above use, so a fact and a control that mean
+  // the same thing about the same card start on the same x. It was a table with
+  // its own label width, which put the two columns 28px apart.
   return (
-    <table className="w-full table-fixed mt-4">
-      <tbody>
-        {rows.map(([k, v]) => (
-          <tr key={k} className="h-11 align-middle border-b border-rule">
-            <td className="w-24 text-sm text-fg-mute pr-4">{k}</td>
-            <td className="text-sm text-fg-dim truncate">{v}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="mt-6 border-b border-rule">
+      {rows.map(([k, v]) => (
+        <Row key={k} label={k}>
+          <span className="block text-sm text-fg-dim truncate">{v}</span>
+        </Row>
+      ))}
+    </div>
   )
 }
 
@@ -345,71 +347,32 @@ function SeenIn({ card }: { card: Card }) {
   if (!rows.length) return null
 
   return (
-    <div className="mt-6 flex items-center gap-3 h-11 text-sm text-fg-mute flex-wrap">
-      {rows.map(s => {
-        const where = s.meta?.channel ?? s.account ?? s.meta?.repo ?? s.meta?.project ?? s.kind
-        const external = s.url.startsWith('http')
-        const body = (
-          <>
-            <SourceDot source={s.source} />
-            <span className="text-fg-dim">{SOURCE_LABEL[s.source]}</span>
-            <span className="font-mono truncate max-w-40">{where}</span>
-            <span className="tnum">{ago(s.ts)}</span>
-          </>
-        )
-        return external ? (
-          <a key={`${s.source}:${s.url}`} href={s.url} target="_blank" rel="noreferrer"
-            className="inline-flex items-center gap-2 hover:text-fg-dim transition-colors duration-100">
-            {body}
-          </a>
-        ) : (
-          <span key={`${s.source}:${s.url}`} className="inline-flex items-center gap-2">{body}</span>
-        )
-      })}
-    </div>
-  )
-}
-
-/**
- * A parked card says when it comes back and offers the two things that can
- * change that. It is never offered the arrival presets: it has already arrived
- * somewhere, and "Later" on it means sooner.
- */
-function ParkedNote({
-  card, run,
-}: { card: Card; run: (fn: () => Promise<unknown>) => Promise<void> }) {
-  const until = card.state?.snoozed_until
-  const [changing, setChanging] = useState(false)
-
-  return (
     <div className="mt-6">
-      <div className="text-eyebrow uppercase text-fg-mute mb-2">Parked</div>
-      <p className="text-sm text-fg-dim">
-        {until ? `Until ${wallClock(until)}` : 'Indefinitely'}
-      </p>
-      <div className="mt-2 flex items-center gap-2 flex-wrap">
-        <Button size="sm" variant="ghost" onClick={() => void run(() => actions.move(card.group_key, null))}>
-          <Sunrise size={14} /> Wake now
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setChanging(o => !o)}>
-          Change <ChevronDown size={14} />
-        </Button>
+      <div className={`${EYEBROW} mb-2`}>Seen in</div>
+      <div className="flex items-center gap-3 text-sm text-fg-mute flex-wrap">
+        {rows.map(s => {
+          const where = s.meta?.channel
+            ? cleanChannel(String(s.meta.channel))
+            : s.account ?? s.meta?.repo ?? s.meta?.project ?? s.kind
+          const external = s.url.startsWith('http')
+          const body = (
+            <>
+              <SourceDot source={s.source} />
+              <span className="text-fg-dim">{SOURCE_LABEL[s.source]}</span>
+              <span className="font-mono truncate max-w-40">{where}</span>
+              <span className="tnum">{ago(s.ts)}</span>
+            </>
+          )
+          return external ? (
+            <a key={`${s.source}:${s.url}`} href={s.url} target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-2 h-11 hover:text-fg-dim transition-colors duration-100">
+              {body}
+            </a>
+          ) : (
+            <span key={`${s.source}:${s.url}`} className="inline-flex items-center gap-2 h-11">{body}</span>
+          )
+        })}
       </div>
-      {changing && (
-        <div className="mt-2">
-          <Segmented
-            options={SNOOZE.map(s => ({ id: s.id, label: s.label }))}
-            onChange={id => {
-              const s = SNOOZE.find(x => x.id === id)!
-              void run(() => actions.snooze(card.group_key, s.at()))
-            }}
-            ariaLabel="Come back"
-          />
-        </div>
-      )}
     </div>
   )
 }
-
-/** Kept for the one caller that still asks for a wall clock in this file. */
-export const detailTime = timeOfDay

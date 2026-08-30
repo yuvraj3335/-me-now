@@ -141,12 +141,12 @@ describe('a card that leaves the list can come back', () => {
   })
 
   test('the undo names what it is undoing', () => {
-    // `actions.restore(g)` with no argument clears EVERYTHING keeping a card off
-    // a pile. That is right for "bring this back" out of the restore list, and
-    // wrong for an undo: it also drops a park or a manual pile that had nothing
-    // to do with the action being undone, which is how one Undo click destroyed
-    // a park the product could not re-create. Every toast that offers an Undo
-    // has to restore a named target.
+    // `actions.restore(g)` with no second argument clears EVERYTHING keeping a
+    // card off the desk. That is right for "bring this back", and wrong for an
+    // undo: it also drops a due date and a manual placement that had nothing to
+    // do with the action being reversed, which is how one Undo click destroyed
+    // a deferral the product could not re-create. Every toast that offers an
+    // Undo has to restore a named target.
     for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardDetail.tsx']) {
       const src = read(f)
       const offers = [...src.matchAll(/label:\s*'Undo'([\s\S]{0,240})/g)]
@@ -158,38 +158,42 @@ describe('a card that leaves the list can come back', () => {
     }
   })
 
-  test('the restore list is reachable without a card to open', () => {
-    // The detail is unreachable once a card is off every pile, so the route back
-    // cannot start from the card. It is a collapsed group at the foot of Now
-    // rather than a modal — a pile of his cards belongs on the page that holds
-    // his piles — and a palette command opens Now with that group expanded.
+  test('what he finished is reachable without a card to open', () => {
+    // The detail is unreachable once a card is off the desk, so the route back
+    // cannot start from the card. It used to be a collapsed fourth chapter at
+    // the foot of the page with its own row shape and its own restore button;
+    // it is the same table with its Status filter set now, so every other
+    // filter still applies and the control that put a card away is the control
+    // that takes it back out.
     const app = read('src/web/App.tsx')
-    expect(app, 'no palette command opens the restore list').toMatch(/cards:done/)
-    expect(app, 'the restore command does not open the group it names')
-      .toMatch(/cards:done[\s\S]{0,400}setParam\('done'/)
+    expect(app, 'no palette command reaches what he finished').toMatch(/cards:status-done/)
+    expect(app, 'the command does not set the filter it names')
+      .toMatch(/cards:status-done[\s\S]{0,400}setParam\('status'/)
+    expect(app, 'the filter it sets is not Done').toMatch(/setParam\('status', ?'done'\)/)
 
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'Now no longer renders the restore group').toMatch(/Done and not mine/)
-    expect(home, 'the restore group cannot fetch what it lists').toContain('actions.doneCards')
-    expect(home, 'nothing in the group brings a card back').toContain('actions.restore')
+    expect(home, 'the fourth chapter came back').not.toMatch(/Done and not mine/)
+    expect(home, 'the settled list cannot fetch what it shows').toContain('actions.doneCards')
+    expect(home, 'nothing brings a card back').toContain('actions.restore')
   })
 })
 
 describe('the console does not become a feed again', () => {
   const tsx = web.filter(f => f.endsWith('.tsx'))
 
-  test('Now is a table with a shared colgroup', () => {
-    // Three `<tbody>` groups sharing one `<colgroup>` is the whole trick: it is
-    // what lets grouping and column alignment coexist without either becoming a
-    // mode. A list of divs cannot hold an x-position down the page.
+  test('the desk is one table with a shared colgroup', () => {
+    // One `<colgroup>` is what holds an x-position down the page; a list of divs
+    // cannot. And there is exactly ONE `<tbody>` now — the three chaptered
+    // groups are gone, because where a card stands is a value he sets rather
+    // than a heading the machine writes above it.
     const table = read('src/web/components/CardTable.tsx')
     expect(table).toContain('<colgroup>')
     expect(table).toMatch(/<thead/)
     const home = read('src/web/pages/Home.tsx')
     expect(home).toContain('<table')
     expect(home).toContain('TableCols')
-    expect((home.match(/<tbody>/g) ?? []).length, 'the piles stopped being separate tbody groups')
-      .toBeGreaterThanOrEqual(1)
+    expect((home.match(/<tbody>/g) ?? []).length, 'the desk went back to chaptered groups')
+      .toBe(1)
   })
 
   test('no row action is invisible', () => {
@@ -282,11 +286,10 @@ describe('the console does not become a feed again', () => {
     const field = primitives.slice(primitives.indexOf('export function Field('))
     expect(field.slice(0, 300), 'Field grew a hint again').not.toMatch(/\bhint\b/)
 
-    // The Now page's own section header had the same prop. It is `GroupHead`
-    // now, and it takes a count, not a sentence.
-    const table = read('src/web/components/CardTable.tsx')
-    const head = table.slice(table.indexOf('export function GroupHead('))
-    expect(head.slice(0, 400), 'the group header grew a hint').not.toMatch(/\bhint\b/)
+    // The desk's own group header carried the same prop. Both the prop and the
+    // component are gone: there are no groups to head.
+    expect(read('src/web/components/CardTable.tsx'), 'the chaptered group header came back')
+      .not.toMatch(/export function GroupHead\(/)
 
     // And Pulse's chart panel, which carried six of them: `tasks finished each
     // day` under `Throughput`, `what is piling up, and how stale it is` under
@@ -309,7 +312,9 @@ describe('the shell reaches everywhere from both places', () => {
     // dismissal at exactly the moment something is broken.
     expect(app, 'the phone bar filters the destination list again')
       .not.toMatch(/TABS\.filter\([^)]*mobile/)
-    expect(app, 'the More sheet came back').not.toMatch(/\bsetMore\b/)
+    for (const f of web) {
+      expect(read(f), `${f}: a hidden overflow menu came back`).not.toMatch(/\bsetMore\b/)
+    }
   })
 
   test('navigating keeps the harness flag and drops the page-local filter', () => {
@@ -320,7 +325,10 @@ describe('the shell reaches everywhere from both places', () => {
 
   test('the filter and the open row both live in the URL', () => {
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'the source filter went back into useState').toMatch(/useParam\('src'\)/)
+    // Either subscription shape. The desk reads six params at once now, so it
+    // takes the plural — what is being pinned is that `src` comes out of the
+    // address bar and not out of component state.
+    expect(home, 'the source filter went back into useState').toMatch(/useParams?\(\[?[^)]*'src'/)
     expect(home, 'the open row went back into useState').toContain('useDetailKey')
     const route = read('src/web/lib/route.ts')
     // Opening a row is a push so Back closes it; a filter is a replace so twenty
@@ -637,13 +645,13 @@ describe('a page has no panels on it', () => {
     }
   })
 
-  test('a pile with no rows is not rendered', () => {
-    // `Now 0` plus the sentence under it cost 109px of the fold to report a
-    // zero, and three of them stacked cost 331px of an 844px phone to say
-    // nothing at all. The groups are filtered before they are mapped.
+  test('a filter that matches nothing is one line', () => {
+    // Three headings with zeroes beside them and an apology under each cost
+    // 331px of an 844px phone to say nothing at all. There is one list now, so
+    // there is one empty state, and it is one word on the row grid.
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'Now went back to rendering every pile whatever is in it')
-      .toMatch(/groups\.filter\(g => g\.shown\.length > 0\)/)
+    expect(home, 'the desk went back to rendering a chapter per pile')
+      .toMatch(/rows\.length === 0/)
     expect(home, 'the per-group empty phrase came back').not.toMatch(/emptyWord/)
     const table = read('src/web/components/CardTable.tsx')
     expect(table, 'EmptyRow came back').not.toMatch(/export function EmptyRow/)
@@ -710,15 +718,15 @@ describe('a page never scrolls sideways', () => {
     expect(css, '`.hit` left its coarse-pointer scope').toMatch(hit)
   })
 
-  test('the phone bar keeps five destinations and its target', () => {
+  test('the phone bar keeps six destinations and its target', () => {
     // The offender scan named this bar, because it is what visibly widened.
     // It was the symptom. It must not be "fixed" by dropping a destination or
     // shrinking the target, which is what a scroll report usually buys.
     const app = read('src/web/App.tsx')
     const tabs = app.match(/^\s*\{ path: '/gm) ?? []
-    expect(tabs.length, 'a destination left the tab bar').toBe(5)
+    expect(tabs.length, 'a destination left the tab bar').toBe(6)
     expect(app, 'the tab target dropped below 44px').toMatch(/min-h-12/)
-    expect(app, 'the Now badge lost its accent').toMatch(/bg-accent text-on-accent/)
+    expect(app, 'the waiting badge lost its accent').toMatch(/bg-accent text-on-accent/)
   })
 })
 
@@ -730,7 +738,8 @@ describe('a chart is drawn only when there is a chart to draw', () => {
     // it beside, so it takes the same one-line row an empty series takes.
     const pulse = read('src/web/pages/Pulse.tsx')
     expect(pulse, 'the sparse test is gone').toMatch(/marked\.length < 2/)
-    for (const series of ['done', 'appeared', 'clearedShape']) {
+    // `appeared` is not in this list any more: Arrived folded into Flow.
+    for (const series of ['done', 'clearedShape']) {
       expect(pulse, `${series} stopped asking whether it has a shape`)
         .toMatch(new RegExp(`empty: ${series}\\.thin`))
     }
@@ -765,5 +774,201 @@ describe('one surface spends the accent once', () => {
     // The commit keeps it.
     expect(read('src/web/components/TaskSheet.tsx'), 'the commit lost its fill')
       .toMatch(/variant="primary"/)
+  })
+})
+
+
+/**
+ * The vocabulary, made irreversible.
+ *
+ * Seven words left this product in one wave — `Now` as a place, `Open` as a
+ * pile, `Parked`, `Later`, `Not mine`, `Wake now`, `DM` — and a rename that is
+ * only in the diff comes back one plausible edit at a time. These are the
+ * assertions that make it stick. Where the work stands is exactly five words:
+ * Not started, In progress, In review, Done, Won't do. The first destination is
+ * Desk. `Open` survives only as the verb on a button.
+ */
+describe('the dead words stay dead', () => {
+  const tsx = web.filter(f => f.endsWith('.tsx'))
+
+  /** Source with every comment removed, so a note about history is not a label. */
+  const speech = (f: string) =>
+    read(f)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter(l => !l.trim().startsWith('//'))
+      .join('\n')
+
+  test('no component says a word the product no longer has', () => {
+    const BANNED = [
+      'Parked', 'Not mine', 'Wake now', 'Later today', 'Move to',
+      'Bring it back', 'Done and not mine', 'Let Wake decide',
+    ]
+    for (const f of tsx) {
+      const src = speech(f)
+      for (const word of BANNED) {
+        expect(src, `${f}: the product says "${word}" again`).not.toContain(word)
+      }
+    }
+  })
+
+  test('a pile is never a label', () => {
+    // The machine's own classification is still on the wire and still sorts the
+    // list. It is not a heading, a chip or a sentence: reading it as one made a
+    // guess about urgency look like a decision he had made.
+    for (const f of tsx) {
+      const src = speech(f)
+      for (const m of src.matchAll(/'[^'\n]*\bpiles?\b[^'\n]*'|>[^<>{}\n]*\bpiles?\b[^<>{}\n]*</gi)) {
+        throw new Error(`${f}: a pile is being shown to a person\n  ${m[0].trim()}`)
+      }
+    }
+    expect(true).toBe(true)
+  })
+
+  test('there is no direct-message concept left anywhere', () => {
+    // DMs are not collected at all now. The field name and the literal both go,
+    // because a dead branch that still parses is a branch somebody re-enables.
+    for (const f of [...walk('src/server'), ...web]) {
+      const src = read(f)
+      expect(src, `${f}: is_dm came back`).not.toContain('is_dm')
+      expect(src, `${f}: a 'dm' kind came back`).not.toContain("'dm'")
+    }
+  })
+
+  test('nothing in the product is an emoji', () => {
+    // Push notification bodies are the one exception, and they are the one
+    // surface the operating system renders rather than this design does.
+    for (const f of web) {
+      const m = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.exec(read(f))
+      if (m) throw new Error(`${f}: an emoji reached the DOM — ${m[0]}`)
+    }
+    expect(true).toBe(true)
+  })
+})
+
+/**
+ * Everything is in one visible view.
+ *
+ * A menu behind a glyph is where controls go to be forgotten: the overflow menu
+ * this replaces held every deferral control in the product, opened them 1400px
+ * below the viewport, and was the reason nobody could find them. A control
+ * worth hiding was worth a button; one not worth a button was not worth
+ * shipping.
+ */
+describe('nothing hides behind a glyph', () => {
+  test('there is no overflow menu, anywhere, for any reason', () => {
+    for (const f of web) {
+      const src = read(f)
+      expect(src, `${f}: an overflow menu came back`)
+        .not.toMatch(/MoreHorizontal|MoreVertical|EllipsisVertical/)
+      expect(src, `${f}: an overflow trigger came back`).not.toContain('More actions')
+      expect(src, `${f}: an ellipsis trigger came back`).not.toContain('⋯')
+    }
+  })
+
+  test('the detail pane shows status, priority and due without being asked', () => {
+    // All three used to be behind the menu. They are the three facts a person
+    // opens a card to change, so they are the three that are never hidden.
+    const detail = read('src/web/components/CardDetail.tsx')
+    for (const label of ['Status', 'Priority', 'Due']) {
+      expect(detail, `the ${label} control went back behind a menu`)
+        .toMatch(new RegExp(`<Row label="${label}"`))
+    }
+  })
+})
+
+/**
+ * Every repeating list pages, and pages the same way.
+ *
+ * `slice(0, 40)` is not pagination — it is a silent floor under everything past
+ * the fortieth row, and the reader is never told. One `Pager`, one `PAGE_SIZE`,
+ * and the page in the URL so a reload and the Back button both work.
+ */
+describe('a long list is paged, not truncated', () => {
+  const PAGED = [
+    'src/web/pages/Home.tsx',
+    'src/web/pages/Settings.tsx',
+    'src/web/components/sessions.tsx',
+  ]
+
+  test('every repeating row list reaches for the one pager', () => {
+    for (const f of PAGED) {
+      // A file that has not landed yet cannot be asserted about; App.tsx
+      // imports each of these, so a missing one fails the build rather than
+      // slipping through here.
+      let src: string
+      try { src = read(f) } catch { continue }
+      expect(src, `${f}: a repeating list that does not page`).toContain('Pager')
+    }
+  })
+
+  test('the page lives in the URL', () => {
+    // A page held in `useState` cannot be bookmarked and does not survive the
+    // reload that happens mid-triage — the same reason the filter is a param.
+    expect(read('src/web/pages/Home.tsx'), 'the desk page went back into useState')
+      .toMatch(/setParam\('page'/)
+  })
+
+  test('one page size, shared by the pager and everything it counts', () => {
+    // A caller that sliced by 25 under a pager counting by 50 prints a range
+    // that does not describe the rows beneath it.
+    const primitives = read('src/web/components/primitives.tsx')
+    expect(primitives).toMatch(/export const PAGE_SIZE = \d+/)
+    expect((primitives.match(/PAGE_SIZE/g) ?? []).length, 'the pager stopped using its own constant')
+      .toBeGreaterThan(1)
+  })
+})
+
+/**
+ * The desk's own four columns, and the ingestion rules the alert channels need.
+ *
+ * The column count is a design decision one plausible line undoes; the Slack
+ * rules are the difference between reading a bot channel and reading nothing.
+ */
+describe('the desk shows four columns and the alert channels are really read', () => {
+  test('four headings, four cols', () => {
+    const table = read('src/web/components/CardTable.tsx')
+    const head = table.slice(table.indexOf('export function TableHead('), table.indexOf('export function TableCols('))
+    expect((head.match(/<th\b/g) ?? []).length, 'the desk grew or lost a column').toBe(4)
+    const cols = table.slice(table.indexOf('export function TableCols('))
+    expect((cols.slice(0, 600).match(/<col\b/g) ?? []).length).toBe(4)
+  })
+
+  test('a missing Slack tool is an error, not an empty desk', () => {
+    // The whole failure this wave exists to fix: a source that cannot answer
+    // reporting `ok: 1, count: 0`, which is indistinguishable from a healthy
+    // sync of a quiet morning.
+    const slack = read('src/server/sources/slack.ts')
+    const fetchFn = slack.slice(slack.indexOf('async fetch()'))
+    expect(fetchFn, 'the Slack poll swallows a failure as an empty list')
+      .not.toMatch(/\breturn \[\]/)
+  })
+
+  test('bots are included on a channel read and never on a search', () => {
+    // `include_bots` belongs to the search API. Passing it beside a
+    // `channel_id` is the shape that reads as "we asked for bot messages" while
+    // asking a call that does not take the parameter.
+    const slack = read('src/server/sources/slack.ts')
+    expect(slack, 'the alert channels stopped asking for bot messages').toContain('include_bots: true')
+    for (const m of slack.matchAll(/include_bots/g)) {
+      const around = slack.slice(Math.max(0, m.index! - 200), m.index! + 200)
+      expect(around, 'include_bots is being passed to a channel read')
+        .not.toContain('channel_id:')
+    }
+  })
+
+  test('a drawn path animates only when frames are being produced', () => {
+    // The generic gate above covers every `initial=` in `src/web`; this names
+    // the one component whose marks are drawn rather than laid out, because a
+    // path stuck at `pathLength: 0` is an invisible chart rather than a chart
+    // that has not finished moving.
+    const charts = read('src/web/components/charts.tsx')
+    for (const m of charts.matchAll(/<motion\.path\b([\s\S]{0,400}?)\/>/g)) {
+      const el = m[1]!
+      if (!/initial=/.test(el)) continue
+      expect(el, 'a drawn path animates in a document that is not being painted')
+        .toMatch(/\b(still|reduce|STATIC_MODE)\b/)
+    }
+    expect(true).toBe(true)
   })
 })

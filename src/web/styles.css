@@ -74,6 +74,7 @@
   --color-ok:   #6bd39a;
   --color-warn: #ee8b45;
   --color-bad:  #e08282;
+  --color-on-bad: #14141a;
 
   /*
     Seven sizes, replacing nineteen.
@@ -196,10 +197,16 @@
     --color-ok:   #6bd39a;      /* 10.8:1 */
     /* Visibly not the accent. `warn` and `accent-ink` were byte-identical in
        both themes, so the one place the product reports a broken source painted
-       it in the colour reserved for "this one". A redder orange, and it is used
-       in exactly one place: the Slack entitlement line in Settings. */
+       it in the colour reserved for "this one". A redder orange. It carries two
+       things and only two: the Slack entitlement line in Settings, and the
+       `In review` status glyph — the one status that is a claim about somebody
+       else's attention rather than about his own. */
     --color-warn: #ee8b45;      /*  7.9:1 */
     --color-bad:  #ef9494;      /*  8.7:1 */
+    /* Ink on a filled `bad` surface — the danger button. `bad` is a text colour
+       everywhere else, and a destructive control that is only red *text* is
+       indistinguishable from a disabled one. */
+    --color-on-bad: #14141a;    /*  7.6:1 on bad */
   }
 
   /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
@@ -239,6 +246,7 @@
     --color-ok:   #0d6038;      /* 7.1:1 — was #157f4d at 4.7:1, under this file's own floor */
     --color-warn: #8f3300;      /* 7.4:1 — and a different hue from accent-ink #8a5300 */
     --color-bad:  #b3261e;      /* 6.5:1 */
+    --color-on-bad: #ffffff;    /* 6.7:1 on bad */
   }
 
   /* No explicit choice: follow the system. Identical to the block above by
@@ -277,6 +285,7 @@
       --color-ok:   #0d6038;
       --color-warn: #8f3300;
       --color-bad:  #b3261e;
+      --color-on-bad: #ffffff;
     }
   }
 }
@@ -349,7 +358,7 @@
 
     Measured before this existed: four horizontal page pads in use on the laptop
     (12, 16, 20, 24) plus the table's own `px-2` on top, so the page title sat at
-    x=216 on Now and x=224 on Settings, Now's `<th>`s at 225, Settings' section
+    x=216 on the desk and x=224 on Settings, the desk's `<th>`s at 225, Settings'
     titles at 241 and its value column at 365 against the Sources column's 367 —
     two columns two pixels apart, which is one column drawn twice. Switching tabs
     moved every heading eight pixels.
@@ -363,6 +372,23 @@
 
   /* The single separator style used app-wide, instead of borders on cards. */
   .hairline { border-bottom: 1px solid var(--color-rule); }
+
+  /*
+    The two structural edges a resizable pane needs, and the grip that moves it.
+
+    They exist as classes rather than as Tailwind's `border-l border-edge`
+    because the pane's edge has to be paintable at a width the utility classes
+    cannot express — an inline `style.width` on the aside, with the divider
+    drawn on the element and the grab target sitting over it.
+
+    `touch-action: none` is the load-bearing half of `.grabber`: without it the
+    browser claims the drag for a scroll gesture and the pointermove events stop
+    arriving after the first few pixels, so a phone drag moves the sheet about
+    8px and then abandons it.
+  */
+  .edge-t  { border-top: 1px solid var(--color-edge); }
+  .edge-l  { border-left: 1px solid var(--color-edge); }
+  .grabber { cursor: col-resize; touch-action: none; }
 
   /* Respect the notch and the home indicator on iOS. */
   .pad-top    { padding-top: max(env(safe-area-inset-top), 0px); }

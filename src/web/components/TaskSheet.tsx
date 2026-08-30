@@ -2,29 +2,12 @@ import { useEffect, useState } from 'react'
 import { Bell, BellOff, Plus, Trash2 } from 'lucide-react'
 import type { Card as CardT, Goal, Task } from '../lib/types'
 import { actions, reload, useStore } from '../lib/api'
-import { atHour, deadlineWords, until, wallClock } from '../lib/time'
+import { atHour, deadlineWords, fromLocalInput, toLocalInput, until, wallClock } from '../lib/time'
 import { actions as api } from '../lib/api'
 import { Button, Chip, Field, Sheet, inputClass } from './primitives'
 
 /** Sticky-note palette: muted enough to sit on the dark ground without shouting. */
 export const NOTE_COLORS = ['#e9a23b', '#b58ee0', '#6bd39a', '#d98a86', '#8fa4c4', '#d0a07a']
-
-/**
- * `<input type="datetime-local">` wants local wall-clock, not an ISO instant.
- *
- * Built from the parts rather than by subtracting an offset. The old version
- * used `new Date().getTimezoneOffset()` — *today's* offset, applied to an
- * instant that might sit on the other side of a daylight-saving boundary, which
- * is an hour wrong wherever the clocks move. It is harmless in IST and wrong
- * everywhere else, which is the worst kind of harmless.
- */
-const pad = (n: number) => String(n).padStart(2, '0')
-const toLocalInput = (ts: number | null) => {
-  if (!ts) return ''
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-const fromLocalInput = (v: string) => (v ? new Date(v).getTime() : null)
 
 /** What the reminder field says: the time he chose, and where it will land. */
 function reminderWords(ts: number, devices: number | null, error: string | null): string {
