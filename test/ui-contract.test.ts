@@ -648,4 +648,28 @@ describe('a page has no panels on it', () => {
     const table = read('src/web/components/CardTable.tsx')
     expect(table, 'EmptyRow came back').not.toMatch(/export function EmptyRow/)
   })
+
+  test('a count is not asserted before it is known', () => {
+    // `GET /api/mail/threads` measured 2834-4742ms on the box, and `threads`
+    // starts as `[]` — so the header counted it and said zero, and the column
+    // mapped it and painted nothing, for four seconds before either knew. Both
+    // claims wait for an answer now, and the column carries the row shape in the
+    // meantime so an inbox that has not replied does not read as an empty one.
+    //
+    // This is asserted by reading the source because it cannot be observed on
+    // the deployed box: Gmail resolves no token there, so Mail renders its
+    // two-line down state and the list never loads at all.
+    const mail = read('src/web/pages/Mail.tsx')
+    expect(mail, 'the thread list stopped tracking whether it has an answer')
+      .toMatch(/const \[answered, setAnswered\] = useState\(false\)/)
+    expect(mail, 'the header went back to counting an array it has not filled')
+      .toMatch(/list\.answered && <span[^>]*>\{list\.threads\.length\}/)
+    expect(mail, 'the empty state is claimed before the list has answered')
+      .toMatch(/list\.answered && !list\.threads\.length && <Empty \/>/)
+    expect(mail, 'the first load paints an empty column again')
+      .toMatch(/!list\.answered && !list\.threads\.length && <ArrivingRows \/>/)
+    // And a new box or a new search is a new question, so the count goes back to
+    // saying nothing rather than reporting the previous box's total.
+    expect(mail, 'switching box keeps the old answer').toMatch(/setAnswered\(false\)\n\s*void load/)
+  })
 })
