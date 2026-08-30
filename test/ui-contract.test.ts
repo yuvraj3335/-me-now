@@ -673,3 +673,51 @@ describe('a page has no panels on it', () => {
     expect(mail, 'switching box keeps the old answer').toMatch(/setAnswered\(false\)\n\s*void load/)
   })
 })
+
+describe('a page never scrolls sideways', () => {
+  /*
+   * These read the source, not a viewport.
+   *
+   * The real assertion — `documentElement.scrollWidth <= clientWidth` at 360,
+   * 390, 414 and 640 — needs a layout engine, and a layout engine is a browser
+   * dependency this suite does not have and should not grow for one rule. So
+   * the mechanism is pinned structurally instead: the measurement lives in the
+   * screenshot harness, and these keep the two pieces of CSS that make it come
+   * out clean from being edited away by a plausible-looking change.
+   */
+
+  test('the page column clips its own horizontal overflow', () => {
+    // `.hit` hangs a touch target 6px past a control's box on a coarse pointer,
+    // and an absolutely positioned box is scrollable overflow whatever it is
+    // for. On `/work` the amber `+ Task` is the rightmost thing in the column,
+    // so the phone's layout viewport widened to 396 on a 390 screen, the fixed
+    // tab bar followed it out, and every width scrolled by exactly 6px.
+    const app = read('src/web/App.tsx')
+    expect(app, 'the page column stopped clipping and `.hit` can push it wide again')
+      .toMatch(/<main className=\{`[^`]*\boverflow-x-clip\b/)
+    // `hidden` would make `main` a scroll container; `clip` does not.
+    expect(app, 'the page column became a scroll container').not.toMatch(
+      /<main className=\{`[^`]*\boverflow-x-hidden\b/,
+    )
+  })
+
+  test('the touch target is still scoped to fingers', () => {
+    // The outset is the thing that overflows. It is worth having, and it is
+    // only worth having where there is no mouse — this is what keeps the
+    // laptop out of the blast radius entirely.
+    const css = read('src/web/styles.css')
+    const hit = /@media \(any-pointer: coarse\) \{\s*\.hit::after \{/
+    expect(css, '`.hit` left its coarse-pointer scope').toMatch(hit)
+  })
+
+  test('the phone bar keeps five destinations and its target', () => {
+    // The offender scan named this bar, because it is what visibly widened.
+    // It was the symptom. It must not be "fixed" by dropping a destination or
+    // shrinking the target, which is what a scroll report usually buys.
+    const app = read('src/web/App.tsx')
+    const tabs = app.match(/^\s*\{ path: '/gm) ?? []
+    expect(tabs.length, 'a destination left the tab bar').toBe(5)
+    expect(app, 'the tab target dropped below 44px').toMatch(/min-h-12/)
+    expect(app, 'the Now badge lost its accent').toMatch(/bg-accent text-on-accent/)
+  })
+})

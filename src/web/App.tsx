@@ -126,8 +126,23 @@ export default function App() {
 
       {/* One page pad, applied once, by the class that owns it. A flush page
           lays out its own columns and pads each of them with the same `.pad-x`,
-          so a table header, a section title and a page title all land on x=224. */}
-      <main className={`relative z-10 min-w-0 sm:flex-1 pad-top ${active.flush ? '' : 'pad-x'}`}>
+          so a table header, a section title and a page title all land on x=224.
+
+          `overflow-x-clip` says a page column never scrolls sideways, and it is
+          load-bearing. `.hit` gives every small control a touch target reaching
+          6px past its own box on a coarse pointer, and an absolutely positioned
+          box IS scrollable overflow — Chrome folds the column's end padding into
+          it and hands the document 6px it cannot show. On `/work` the amber
+          `+ Task` is the rightmost thing in the column, so a phone's layout
+          viewport widened to 396 on a 390 screen, the fixed tab bar followed it
+          out to 396, and every width scrolled. Clipping at the button was
+          measured and does not work: `overflow: clip` leaves the box in the
+          overflow region, `overflow-clip-margin` with it, and `contain: paint`
+          removes it by killing the target it exists for. Clipping here removes
+          the overflow and leaves the target hittable, because the target never
+          reaches this edge — only its claim on the scroll region did. `clip`,
+          not `hidden`: this must not become a scroll container. */}
+      <main className={`relative z-10 min-w-0 sm:flex-1 pad-top overflow-x-clip ${active.flush ? '' : 'pad-x'}`}>
         {error && !store.state && (
           <p className="mt-24 pad-x text-sm text-bad">{error}</p>
         )}
