@@ -1,18 +1,21 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { actions, optimistic, refresh, reload, useStore } from '../lib/api'
-import type { Card as CardT } from '../lib/types'
+import type { Card as CardT, SourceName } from '../lib/types'
 import { atHour, ago, greeting } from '../lib/time'
 import { Card } from '../components/Card'
 import { CardSheet } from '../components/CardSheet'
 import { TaskSheet } from '../components/TaskSheet'
-import { Empty, spring } from '../components/primitives'
+import { Chip, Empty, spring } from '../components/primitives'
 import { useStill } from '../lib/motion'
-import { SOURCE_LABEL } from '../components/sources'
+import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
 import { openLaunch } from '../lib/launch'
 import { cardContext, cardTitle, repoHintFor, templateFor } from '../lib/cardContext'
 import { registerPaletteActions } from '../components/palette'
+
+/** Every kind Now can hold, in the order the filter row offers them. */
+const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
 
 /**
  * Stable empty arrays.
@@ -30,7 +33,7 @@ export function Home() {
   const { state, syncing } = useStore()
   const [openCard, setOpenCard] = useState<CardT | null>(null)
   const [taskFrom, setTaskFrom] = useState<CardT | null>(null)
-  const [showParked, setShowParked] = useState(false)
+  const [filter, setFilter] = useState<SourceName | 'all'>('all')
   /**
    * `null` until someone actually navigates.
    *
@@ -44,6 +47,13 @@ export function Home() {
   const now = state?.now ?? NO_CARDS
   const open = state?.open ?? NO_CARDS
   const parked = state?.parked ?? NO_CARDS
+
+  // One filter, three piles: which kind, not which pile — piles already answer
+  // "does this need me now", the filter answers "which of my sources is this".
+  const matches = (c: CardT) => filter === 'all' || c.sources.some(s => s.source === filter)
+  const fNow = useMemo(() => now.filter(matches), [now, filter])
+  const fOpen = useMemo(() => open.filter(matches), [open, filter])
+  const fParked = useMemo(() => parked.filter(matches), [parked, filter])
 
   const today = useMemo(
     () => new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }),
@@ -77,7 +87,7 @@ export function Home() {
    * Scoped to keydown on the document but ignored while a field has focus, so
    * typing "j" in the composer on another page cannot move a selection here.
    */
-  const rows = useMemo(() => [...now, ...open], [now, open])
+  const rows = useMemo(() => [...fNow, ...fOpen], [fNow, fOpen])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement
@@ -155,9 +165,23 @@ export function Home() {
         </div>
       </header>
 
+      {/* One filter, applied to every pile below: which of my sources, not
+          which pile — a pile already means something (nobody's waiting on
+          Open, someone is on Now), and the filter must not blur that. */}
+      <div className="flex items-center gap-1.5 flex-wrap pb-4 hairline">
+        <Chip active={filter === 'all'} onClick={() => setFilter('all')}>All</Chip>
+        {FILTERS.map(s => (
+          <Chip key={s} active={filter === s} onClick={() => setFilter(s)} dot={SOURCE_COLOR[s]}>
+            {SOURCE_LABEL[s]}
+          </Chip>
+        ))}
+      </div>
+
       {/* The hero. The count is the only place a large number appears, and the
           only routine use of the accent — that is what makes it read as urgent
-          without any red, badges or alarm styling. */}
+          without any red, badges or alarm styling. It is always the true,
+          unfiltered count: a filter narrows which rows are shown, never what
+          the number claims. */}
       <section className="pt-1 pb-1">
         <div className="flex items-baseline gap-3 mb-1">
           <motion.span
@@ -172,61 +196,48 @@ export function Home() {
             <h2 className="text-[15px] font-medium tracking-[-0.01em]">Now</h2>
             <p className="text-[12.5px] text-fg-mute">
               {now.length ? 'someone is waiting on you' : 'nobody is waiting on you'}
+              {filter !== 'all' && fNow.length !== now.length && ` · showing ${fNow.length} of ${now.length}`}
             </p>
           </div>
         </div>
 
         <div className={now.length ? 'mt-4' : 'mt-1'}>
           <AnimatePresence initial={false} mode="popLayout">
-            {now.map(c => <Card key={c.group_key} {...cardProps(c)} />)}
+            {fNow.map(c => <Card key={c.group_key} {...cardProps(c)} />)}
           </AnimatePresence>
           {!now.length && (
             <p className="text-[13px] text-fg-mute py-5 leading-relaxed">
               Clear. Nothing is waiting on a reply from you.
             </p>
           )}
+          {now.length > 0 && !fNow.length && (
+            <p className="text-[13px] text-fg-mute py-5 leading-relaxed">
+              Nothing on Now matches this filter.
+            </p>
+          )}
         </div>
       </section>
 
-      <Section title="Open" count={open.length} hint="you started these">
+      <Section title="Open" count={fOpen.length} hint="you started these">
         <AnimatePresence initial={false} mode="popLayout">
-          {open.map(c => <Card key={c.group_key} {...cardProps(c)} />)}
+          {fOpen.map(c => <Card key={c.group_key} {...cardProps(c)} />)}
         </AnimatePresence>
         {!open.length && <Empty>Nothing in flight.</Empty>}
+        {open.length > 0 && !fOpen.length && <Empty>Nothing open matches this filter.</Empty>}
       </Section>
 
-      {parked.length > 0 && (
-        <section className="mt-10">
-          <button
-            onClick={() => setShowParked(v => !v)}
-            className="flex items-center gap-1.5 text-[13px] text-fg-mute hover:text-fg-dim
-                       transition-colors py-1 min-h-9"
-          >
-            <motion.span animate={{ rotate: showParked ? 90 : 0 }} transition={spring}>
-              <ChevronRight size={14} />
-            </motion.span>
-            Parked
-            <span className="tnum text-fg-mute/70">{parked.length}</span>
-          </button>
-          <AnimatePresence initial={false}>
-            {showParked && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                className="overflow-hidden"
-              >
-                <div className="pt-3">
-                  {parked.map(c => (
-                    <Card key={c.group_key} card={c} onOpen={setOpenCard} onDone={done} onSnooze={snooze}
-                      onTask={setTaskFrom} onLaunch={launch} />
-                  ))}
-                </div>
-              </motion.div>
-            )}
+      {/* Parked is a pile someone deliberately set aside, not a footnote — it
+          gets the same standing section as Open, not a collapsed toggle
+          someone has to know to click. */}
+      {fParked.length > 0 && (
+        <Section title="Parked" count={fParked.length} hint="comes back on its own">
+          <AnimatePresence initial={false} mode="popLayout">
+            {fParked.map(c => (
+              <Card key={c.group_key} card={c} onOpen={setOpenCard} onDone={done} onSnooze={snooze}
+                onTask={setTaskFrom} onLaunch={launch} />
+            ))}
           </AnimatePresence>
-        </section>
+        </Section>
       )}
 
       <SyncLine />

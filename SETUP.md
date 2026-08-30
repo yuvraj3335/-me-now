@@ -110,10 +110,12 @@ environment instead:
 WAKE_GMAIL_TOKEN=ya29....
 ```
 
-Both `yuvraj@redroot.one` and `engineering@redroot.one` are configured as
-separate accounts (`WAKE_EMAILS`). Per-account tokens use the key
-`gmail:<address>`; a single `WAKE_GMAIL_TOKEN` covers whichever inbox it belongs
-to, so one working inbox does not have to wait for the second.
+The address in `WAKE_EMAILS` is the account Wake connects (`yuvraj@truto.one`
+by default). Add a second, comma-separated address only if you actually own a
+second inbox — `WAKE_EMAILS` is Wake's identity, not a place to list every
+address that ever emailed you. Per-account tokens use the key
+`gmail:<address>`; with one address configured, a single `WAKE_GMAIL_TOKEN`
+covers it.
 
 **What Wake pulls:** unread threads from the last two weeks, excluding
 promotions and social. A thread with you in `To:` lands in Now; one you are

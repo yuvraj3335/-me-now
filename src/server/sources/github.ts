@@ -6,6 +6,15 @@ import { ME, LOOKBACK_DAYS } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
 import type { RawCard, SourceAdapter } from './types'
 
+/** Cut on a word boundary, and say so — never silently mid-word. */
+function clip(s: string | undefined, max: number): string | undefined {
+  if (!s) return undefined
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
+}
+
 let cachedToken: { value: string | null; at: number } | null = null
 
 async function ghToken(): Promise<string | null> {
@@ -116,7 +125,10 @@ export const github: SourceAdapter = {
           why: g.why,
           actor: it.user?.login,
           actor_id: it.user?.login,
-          excerpt: it.body?.slice(0, 240) || undefined,
+          // Cut on a word boundary and say so, rather than stopping mid-word —
+          // the card sheet has no "read more", so a silent clip reads as the
+          // whole description.
+          excerpt: clip(it.body, 400) || undefined,
           url: it.html_url,
           ts: Date.parse(it.updated_at) || Date.now(),
           pile: g.pile,

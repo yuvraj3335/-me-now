@@ -30,7 +30,10 @@ export const claudeCredentialsPath = () =>
 /** Who I am, so "is this addressed to me?" is answerable without a model. */
 export const ME = {
   githubLogin: str('WAKE_GITHUB_LOGIN', 'yuvraj3335'),
-  emails: str('WAKE_EMAILS', 'yuvraj@redroot.one,engineering@redroot.one')
+  // The one real identity: the Truto work address mail is actually sent to.
+  // A second, unowned address here is not a second inbox to design around —
+  // it is Wake claiming to be someone it is not.
+  emails: str('WAKE_EMAILS', 'yuvraj@truto.one')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   slackUserId: str('WAKE_SLACK_USER_ID'), // discovered at runtime if unset
 }
@@ -45,7 +48,7 @@ export const REMINDER_TICK_MS = num('WAKE_REMINDER_TICK_MS', 30_000)
 /** How far back a source looks on each poll. */
 export const LOOKBACK_DAYS = num('WAKE_LOOKBACK_DAYS', 14)
 
-export const VAPID_SUBJECT = str('WAKE_VAPID_SUBJECT', 'mailto:yuvraj@redroot.one')
+export const VAPID_SUBJECT = str('WAKE_VAPID_SUBJECT', 'mailto:yuvraj@truto.one')
 
 /** Static token escape hatch — credential-chain step 3. */
 export const STATIC_TOKENS: Record<string, string> = {

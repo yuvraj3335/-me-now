@@ -124,6 +124,15 @@ function titleFromPrompt(prompt: string, limit = 72): string {
   return (lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
 }
 
+/** Cut on a word boundary, and say so — never silently mid-word. */
+function clip(s: string | null | undefined, max: number): string | undefined {
+  if (!s) return undefined
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const lastSpace = cut.lastIndexOf(' ')
+  return (lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:–—-]+$/, '') + '…'
+}
+
 /* --------------------------- shared session scan -------------------------- */
 
 export type SessionFile = { path: string; id: string; project: string; mtime: number }
@@ -264,7 +273,7 @@ export const claudeSessions: SourceAdapter = {
         title,
         // Nobody else is blocked on a session, so these are never "now".
         why: ageDays < 1 ? 'you were just working on this' : `you left this ${Math.round(ageDays)}d ago`,
-        excerpt: prompt?.slice(0, 240),
+        excerpt: clip(prompt, 400),
         // A local session has no web URL; the card offers the command that
         // rejoins it on the machine it is actually on.
         url: s.pr?.url ?? `wake:claude/${s.id}`,

@@ -36,6 +36,16 @@ export function Card({
   const acked = !!card.state?.acked_at
   const pinned = !!card.state?.pinned
 
+  // The one fact that tells this kind of thing apart from every other kind at a
+  // glance — a session's project, a PR's repo — pulled from data every adapter
+  // already attaches to its card and that the row otherwise never shows.
+  const kindFact = card.kind === 'session'
+    ? card.meta?.project as string | undefined
+    : (card.meta?.repo as string | undefined)
+  const isDraft = card.kind !== 'session' && card.meta?.draft === true
+  const turns = card.kind === 'session' ? (card.meta?.turns as number | undefined) : undefined
+  const comments = card.kind !== 'session' ? (card.meta?.comments as number | undefined) : undefined
+
   // Keyboard focus scrolls the row into view; without this, j past the fold
   // moves a selection nobody can see.
   useEffect(() => {
@@ -102,6 +112,15 @@ export function Card({
                   <span className="truncate max-w-[14ch]">{card.actor}</span>
                 </>
               )}
+              {kindFact && (
+                <>
+                  <Dot />
+                  <span className="truncate max-w-[18ch] font-mono text-[11.5px]">{kindFact}</span>
+                </>
+              )}
+              {isDraft && <><Dot /><span>draft</span></>}
+              {!!turns && <><Dot /><span className="tnum">{turns} turn{turns > 1 ? 's' : ''}</span></>}
+              {!!comments && <><Dot /><span className="tnum">{comments} comment{comments > 1 ? 's' : ''}</span></>}
               <Dot />
               <time className="tnum">{ago(card.ts)}</time>
               {card.tasks.length > 0 && (

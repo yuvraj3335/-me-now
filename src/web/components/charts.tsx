@@ -31,7 +31,18 @@ export function Bars({
   // bars of zero height, which is worse than no animation.
   const reduce = useStill()
   const w = 720, padB = 18
-  const max = Math.max(1, ...data.map(d => d.value))
+  const rawMax = Math.max(0, ...data.map(d => d.value))
+
+  // A window with nothing in it renders as a full-width canvas of invisible
+  // 2px slivers — which looks broken, not early. Say so instead, the same way
+  // `Trend` already does when it has too few points to draw a line.
+  if (rawMax === 0) {
+    return <div style={{ height }} className="grid place-items-center text-[12.5px] text-fg-mute">
+      Nothing here yet
+    </div>
+  }
+
+  const max = Math.max(1, rawMax)
   const x = scaleBand<string>().domain(data.map(d => d.day)).range([0, w]).padding(0.34)
   const y = scaleLinear().domain([0, max]).range([height - padB, 2])
   const bw = Math.max(2, x.bandwidth())

@@ -166,7 +166,14 @@ export function Settings() {
 
       {/* ------------------------------- mail -------------------------------- */}
       {over && (
-        <Section title="Mail accounts" hint="Both inboxes are separate connections, not one with a filter.">
+        <Section
+          title="Mail accounts"
+          hint={
+            over.mail.accounts.length > 1
+              ? 'Separate connections, not one inbox with a filter.'
+              : 'The one address mail is actually addressed to.'
+          }
+        >
           {over.mail.accounts.map(a => (
             <div key={a.address} className="flex items-start gap-3 py-3 hairline last:border-0">
               <div className="grow min-w-0">
