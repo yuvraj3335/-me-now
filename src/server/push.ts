@@ -145,8 +145,14 @@ function describeTarget(r: any): { title: string; body?: string; url?: string } 
  * Nudge once when a deadline comes into view, and once when it passes. The
  * deadline value is part of the dedup key, so moving a due date legitimately
  * re-arms the warning while leaving it alone never re-fires.
+ *
+ * Ordered nearest-first, and that order is load-bearing: each entry's test is
+ * "the deadline is within `lead` of now", which an overdue task satisfies for
+ * every lead. Checking the hour-out window first would match an overdue task
+ * too, and the `break` below would then mean the overdue nudge never fired at
+ * all — the earlier "Due soon" had already spent its dedup key.
  */
-const HORIZONS: Array<[number, string]> = [[3600_000, 'due within the hour'], [0, 'overdue']]
+const HORIZONS: Array<[number, string]> = [[0, 'overdue'], [3600_000, 'due within the hour']]
 
 async function warnDeadlines() {
   const t = now()

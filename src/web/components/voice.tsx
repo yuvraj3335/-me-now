@@ -29,13 +29,9 @@ export function Mic({
   onText, title = 'Dictate',
 }: { onText: (text: string) => void; title?: string }) {
   const [note, setNote] = useState<string | null>(null)
-  const committed = useRef('')
 
   const { listening, error, start, stop, supported } = useDictation((text, final) => {
-    if (final) {
-      committed.current = text
-      onText(text.trim())
-    }
+    if (final) onText(text.trim())
   })
 
   useEffect(() => { if (error) setNote(error) }, [error])

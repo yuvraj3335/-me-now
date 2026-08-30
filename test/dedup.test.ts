@@ -1,4 +1,6 @@
 import { expect, test, describe } from 'bun:test'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cardId, extractRefs, groupCards, normalizeSubject, pile, subjectRef } from '../src/server/dedup'
 import type { RawCard } from '../src/server/sources/types'
 
@@ -135,5 +137,30 @@ describe('titles built from raw prompts', () => {
   test('a prompt pasting a PR URL yields that PR as a hard reference', () => {
     const prompt = 'Riya can you please approve - * Backend: github.com/trutohq/truto/pull/2008 * Frontend next'
     expect(extractRefs(prompt)).toContainEqual({ t: 'gh', v: 'trutohq/truto#2008' })
+  })
+})
+
+/**
+ * Every producer must go through `subjectRef`.
+ *
+ * A subject is the weakest thing Wake will merge on, and `subjectRef` is the
+ * only place its guards live — a minimum length, a generic-title denylist, and
+ * "one token is an id, not a subject". A source that builds `{ t: 'subject' }`
+ * from `normalizeSubject` directly bypasses all three, which is how every
+ * "(no subject)" email in two inboxes collapsed into one card.
+ */
+describe('no source hand-rolls a subject ref', () => {
+  test('subject refs are only ever produced by subjectRef', () => {
+    const dir = 'src/server/sources'
+    // types.ts declares the Ref union itself; every other file constructs one.
+    for (const f of readdirSync(dir).filter(n => n.endsWith('.ts') && n !== 'types.ts')) {
+      const src = readFileSync(join(dir, f), 'utf8')
+      for (const m of src.matchAll(/\{\s*t:\s*'subject'/g)) {
+        throw new Error(
+          `${dir}/${f}: ${m[0]}… builds a subject ref by hand — use subjectRef(), which fences weak ones out`,
+        )
+      }
+    }
+    expect(true).toBe(true)
   })
 })

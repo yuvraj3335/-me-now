@@ -133,19 +133,13 @@ export function routeSkills(opts: {
   const repoRules: string[] = []
 
   const modeCfg = MODE_BASELINE[mode] ?? { baseline: null, catalog: null }
-  let baseline = modeCfg.baseline
+  const baseline = modeCfg.baseline
   if (baseline) {
     rules.push(
       baseline === 'B/truto-cli-toolbelt'
         ? 'Truto CLI work always loads truto-cli-toolbelt first'
         : `${mode} mode loads ${baseline} as its baseline`,
     )
-  }
-
-  // A general platform incident starts at truto-operator, per the brief.
-  if (mode === 'incident' && !baseline) {
-    baseline = 'A/truto-operator'
-    rules.push('platform incident starts from truto-operator')
   }
 
   /* specialist */

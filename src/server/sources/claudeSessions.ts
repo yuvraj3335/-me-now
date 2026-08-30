@@ -22,6 +22,8 @@ const MAX_SESSIONS = 24
 const SESSION_WINDOW_DAYS = 7
 /** One prompt and no follow-up is a question, not work in progress. */
 const MIN_TURNS = 2
+/** "However far back this machine goes" — used when a session is named by id. */
+const ALL_HISTORY_DAYS = 3650
 
 function readTail(path: string, bytes: number): string {
   const size = statSync(path).size
@@ -133,11 +135,20 @@ export type SessionFile = { path: string; id: string; project: string; mtime: nu
  * list that disagreed with the Open pile would be a second answer to the same
  * question.
  */
-export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_DAYS): Array<{ file: SessionFile; info: SessionInfo }> {
+/**
+ * Transcript files in the window, newest first. Nothing is opened here — a
+ * readdir and a stat each — which is what lets `sessionExcerpt` look one up by
+ * id over all of history without parsing two hundred transcripts to find it.
+ */
+export function sessionFiles(windowDays: number): SessionFile[] {
   let projects: string[]
   try { projects = readdirSync(CLAUDE_PROJECTS_DIR) } catch { return [] }
 
-  const cutoff = Date.now() - Math.min(LOOKBACK_DAYS, windowDays) * 864e5
+  // The caller's window is honoured as given. Clamping it to LOOKBACK_DAYS here
+  // meant `sessionExcerpt`'s "all history" and the launcher's 30 both silently
+  // became 14, so a three-week-old session the user could see on disk came back
+  // as "no such session on this machine".
+  const cutoff = Date.now() - windowDays * 864e5
   const files: SessionFile[] = []
 
   for (const p of projects) {
@@ -154,7 +165,13 @@ export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_D
   }
 
   files.sort((a, b) => b.mtime - a.mtime)
-  return files.slice(0, limit).map(file => ({ file, info: parseSession(file.path, file.id, file.project, file.mtime) }))
+  return files
+}
+
+export function scanSessions(limit = MAX_SESSIONS, windowDays = SESSION_WINDOW_DAYS): Array<{ file: SessionFile; info: SessionInfo }> {
+  return sessionFiles(windowDays)
+    .slice(0, limit)
+    .map(file => ({ file, info: parseSession(file.path, file.id, file.project, file.mtime) }))
 }
 
 /** Session metadata in the shape the launcher's picker and tools want. */
@@ -184,18 +201,25 @@ export function listSessions(limit = 30, windowDays = 30) {
  * the `claude_session_excerpt` tool.
  */
 export function sessionExcerpt(id: string, maxChars = 12_000): { found: boolean; cwd?: string; text?: string } {
-  const hit = scanSessions(200, 3650).find(s => s.info.id === id)
+  // A session named by id is looked up over all of history, by filename. The
+  // window exists to keep the *list* short, not to decide what the user is
+  // allowed to open once they have named it.
+  const hit = sessionFiles(ALL_HISTORY_DAYS).find(f => f.id === id)
   if (!hit) return { found: false }
 
   let raw: string
-  try { raw = readTail(hit.file.path, TAIL_BYTES) } catch { return { found: false } }
+  try { raw = readTail(hit.path, TAIL_BYTES) } catch { return { found: false } }
 
+  let cwd: string | undefined
   const lines: string[] = []
   for (const line of raw.split('\n')) {
     if (line.charCodeAt(0) !== 123) continue
     let d: any
     try { d = JSON.parse(line) } catch { continue }
     if (d.type !== 'user' && d.type !== 'assistant') continue
+    // The transcript carries its own working directory, so this one file is all
+    // that has to be read.
+    if (d.cwd) cwd = d.cwd
     const content = d.message?.content
     const text = Array.isArray(content)
       ? content.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n')
@@ -207,7 +231,7 @@ export function sessionExcerpt(id: string, maxChars = 12_000): { found: boolean;
   const text = lines.join('\n\n')
   return {
     found: true,
-    cwd: hit.info.cwd ?? undefined,
+    cwd,
     text: text.length > maxChars ? text.slice(-maxChars) : text,
   }
 }
@@ -227,7 +251,9 @@ export const claudeSessions: SourceAdapter = {
 
   async fetch() {
     const cards: RawCard[] = []
-    for (const { file: f, info: s } of scanSessions(MAX_SESSIONS, SESSION_WINDOW_DAYS)) {
+    // The card pile is the one caller that wants the poll lookback applied.
+    const window = Math.min(LOOKBACK_DAYS, SESSION_WINDOW_DAYS)
+    for (const { file: f, info: s } of scanSessions(MAX_SESSIONS, window)) {
 
       // A stub or a one-shot question is not work you are in the middle of.
       if (s.userTurns < MIN_TURNS && !s.title) continue
@@ -238,6 +264,7 @@ export const claudeSessions: SourceAdapter = {
       const title = s.title ?? (prompt ? titleFromPrompt(prompt) : null) ?? `Session in ${projectName}`
 
       const ageDays = (Date.now() - s.lastTs) / 864e5
+      const subjectOfTitle = subjectRef(title)
       cards.push({
         source: 'claude',
         source_id: s.id,
@@ -258,7 +285,7 @@ export const claudeSessions: SourceAdapter = {
           ...(s.pr?.repo && s.pr.number
             ? [{ t: 'gh' as const, v: `${s.pr.repo}#${s.pr.number}`.toLowerCase() }]
             : []),
-          ...(subjectRef(title) ? [subjectRef(title)!] : []),
+          ...(subjectOfTitle ? [subjectOfTitle] : []),
           // Prompts routinely paste the PR they are about
           // ("approve — Backend: github.com/trutohq/truto/pull/2008"), which is
           // a hard reference to that PR whether or not the session recorded a

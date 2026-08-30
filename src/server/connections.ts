@@ -133,8 +133,22 @@ connections.get('/:server/probe', async c => {
   return c.json({ connected: !!token, via })
 })
 
-/** Tiny self-contained page for the OAuth round-trip's landing. */
-const page = (title: string, detail: string, ok = false) => `<!doctype html>
+/**
+ * Tiny self-contained page for the OAuth round-trip's landing.
+ *
+ * Every interpolated value is escaped. `detail` carries `?error=` straight off
+ * the query string and provider error text — this page is a GET the identity
+ * provider redirects to, so it is exempt from the origin guard by construction
+ * and anyone can make a browser load it with an argument they chose.
+ */
+const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+   .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+const page = (rawTitle: string, rawDetail: string, ok = false) => {
+  const title = esc(rawTitle)
+  const detail = esc(rawDetail.slice(0, 500))
+  return `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <style>
@@ -149,3 +163,4 @@ const page = (title: string, detail: string, ok = false) => `<!doctype html>
 </style>
 <div class="c"><div class="d"></div><h1>${title}</h1><p>${detail}</p></div>
 <script>setTimeout(()=>window.close(),${ok ? 1500 : 8000})</script>`
+}

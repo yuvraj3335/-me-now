@@ -129,6 +129,9 @@ export function Agent() {
               {s.active?.repo_path?.split('/').pop() ?? 'no repo'}
             </Chip>
           )}
+          <Chip icon={<BookOpen size={12} />} onClick={() => setPicker('skills')}>
+            {s.meta?.skills.length ?? 0} skills
+          </Chip>
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
             {s.connection === 'reconnecting' && <WifiOff size={13} className="text-warn" />}
             {s.connection === 'open' && s.running && <Wifi size={13} className="text-ok" />}

@@ -122,7 +122,11 @@ export function foldSegments(turnId: string): Array<Record<string, unknown>> {
           id: e.payload.id,
           name: e.payload.name,
           input: e.payload.input,
-          cls: e.payload.cls ?? null,
+          // `mutates` is what the engine actually emits and what the tool card
+          // reads. The old `cls` was never emitted by anything, so a reopened
+          // conversation lost the write marker and fell back to a hard-coded
+          // list of tool names.
+          mutates: e.payload.mutates ?? false,
         })
         break
       case 'tool_result': {

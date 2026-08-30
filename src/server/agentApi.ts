@@ -282,13 +282,14 @@ agentApi.get('/audit', c => {
         `SELECT id, resource, ref, profile, applied_at, at FROM admin_backups ORDER BY at DESC LIMIT ?`,
       )
       .all(limit),
-    engineering: db
+    // Sessions Wake starts are launch packs now; `eng_sessions` was dropped by
+    // migration 2 and reading it here threw on the boot that applied it.
+    launches: db
       .query<Record<string, any>, [number]>(
-        `SELECT id, repo_path, branch, state, task, files, started_at, finished_at
-         FROM eng_sessions ORDER BY started_at DESC LIMIT ?`,
+        `SELECT id, template, title, cwd, repo_name, session_id, status, error, created_at, launched_at, finished_at
+         FROM launch_packs ORDER BY created_at DESC LIMIT ?`,
       )
-      .all(limit)
-      .map(r => ({ ...r, files: safeJson(r.files, []) })),
+      .all(limit),
   })
 })
 

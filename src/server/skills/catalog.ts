@@ -19,14 +19,6 @@ import { SKILL_PATHS, ENABLE_META_SKILLS } from '../env'
 
 export type Catalog = 'A' | 'B' | 'C' | 'D' | 'E'
 
-export const CATALOG_LABEL: Record<Catalog, string> = {
-  A: 'Truto platform operations',
-  B: 'Truto CLI operator',
-  C: 'Truto repository engineering',
-  D: 'Truto monitoring',
-  E: 'Cursor meta',
-}
-
 /** Which tool surface a catalog's advice is written for. */
 export const CATALOG_SURFACE: Record<Catalog, string> = {
   A: 'platform_mcp',

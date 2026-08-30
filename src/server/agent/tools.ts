@@ -29,7 +29,6 @@ import { TEMPLATES } from '../claudecode/templates'
 import { listSessions, sessionExcerpt } from '../sources/claudeSessions'
 import { fenceThread, getThread, listThreads, sendFingerprintPayload, validateDraft, type Box } from '../mail/service'
 import { probeMail } from '../mail/gmail'
-import { issueConfirmation } from '../security'
 import { getRepo } from '../registry/scan'
 import { platformTools, platformCall, monitoringTools, monitoringCall } from './remote'
 
@@ -676,7 +675,7 @@ export const TOOLS: Record<string, Tool> = {
   mail_draft: {
     name: 'mail_draft',
     description:
-      'Prepare an email and put it in front of the user for approval. This does NOT send. It returns a confirmation the user must accept in the Mail composer, where they can edit the body first — and any edit invalidates the approval.',
+      'Write an email and put it in front of the user for approval. This does NOT send, and nothing here can send. What comes back is the approved text; the user still has to paste it into the Mail composer and press Send themselves.',
     inputSchema: obj(
       {
         account: str('Which configured address to send from.'),
@@ -733,15 +732,18 @@ export const TOOLS: Record<string, Tool> = {
         }
       }
 
-      // Approval here means "this text is right", not "it is gone". The send
-      // itself happens from the Mail composer, against a token bound to exactly
-      // this text — so a later edit cannot ride on this approval.
-      const { token, expiresAt } = issueConfirmation('mail.send', payload, `${draft.account} → ${payload.to.join(', ')}`)
+      // Approval here means "this text reads right", not "it is queued". Wake
+      // has no channel that hands a drafted message to the Mail composer, and
+      // the composer mints its own confirmation against whatever is in its
+      // fields at the moment Send is pressed — so a token issued here would be
+      // one nothing can spend. Return the draft itself and say plainly where it
+      // stands, rather than reporting a handoff that did not happen.
       return {
         prepared: true,
-        confirmationToken: token,
-        expiresAt,
-        note: 'Approved. It is now waiting in the Mail composer for the user to press Send. Nothing has been sent yet — say so.',
+        draft: payload,
+        note:
+          'Approved as written. NOTHING HAS BEEN SENT and nothing is queued. ' +
+          'Give the user the draft, and tell them to paste it into Mail → Write if they want it to go out.',
       }
     },
   },

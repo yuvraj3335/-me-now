@@ -45,7 +45,6 @@ export type Resolution =
 type Waiter = {
   resolve: (r: Resolution) => void
   timer: ReturnType<typeof setTimeout>
-  fingerprint: string | null
 }
 
 const waiters = new Map<string, Waiter>()
@@ -108,7 +107,9 @@ export function requestApproval(req: ApprovalRequest): Promise<Resolution> {
     }, APPROVAL_TIMEOUT_MS)
     // A pending approval must not hold the process open on shutdown.
     timer.unref?.()
-    waiters.set(id, { resolve, timer, fingerprint: req.fingerprint ?? null })
+    // The fingerprint lives on the row, not here: the staleness re-check runs
+    // in the tool after the approval resolves, against what it stored.
+    waiters.set(id, { resolve, timer })
   })
 }
 

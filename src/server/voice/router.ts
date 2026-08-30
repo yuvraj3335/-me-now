@@ -64,8 +64,10 @@ voice.get('/:id/audio', async c => {
   const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null
   if (match) {
     const start = match[1] ? Number(match[1]) : 0
-    const end = match[2] ? Number(match[2]) : note.bytes - 1
-    if (start >= note.bytes || start > end) {
+    // Clamped: a client asking for `bytes=0-99999999` would otherwise get a
+    // Content-Length longer than the body, and the response never completes.
+    const end = Math.min(match[2] ? Number(match[2]) : note.bytes - 1, note.bytes - 1)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= note.bytes || start > end) {
       return c.newResponse(null, 416, { 'Content-Range': `bytes */${note.bytes}` })
     }
     return c.newResponse(file.slice(start, end + 1).stream(), 206, {

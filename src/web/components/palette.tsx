@@ -36,7 +36,6 @@ export function score(label: string, q: string): number {
   if (at >= 0) return 800 - at * 4 - l.length
 
   let i = 0
-  let n = 0
   let streak = 0
   let best = 0
   for (const ch of l) {
@@ -44,7 +43,6 @@ export function score(label: string, q: string): number {
       i++
       streak++
       best = Math.max(best, streak)
-      n++
     } else {
       streak = 0
     }

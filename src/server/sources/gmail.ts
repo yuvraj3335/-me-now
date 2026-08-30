@@ -9,7 +9,7 @@
 import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { resolveToken } from '../mcp/creds'
 import { GMAIL_ACCOUNTS, MCP_SERVERS, ME, LOOKBACK_DAYS } from '../env'
-import { extractRefs, normalizeSubject } from '../dedup'
+import { extractRefs, subjectRef } from '../dedup'
 import type { RawCard, Ref, SourceAdapter } from './types'
 
 const sessions = new Map<string, McpSession>()
@@ -118,9 +118,13 @@ export const gmail: SourceAdapter = {
         const to = (last?.toRecipients ?? []).map(addrOf)
         const direct = to.some(t => ME.emails.includes(t))
 
+        // The subject goes through subjectRef, not raw normalizeSubject: that
+        // guard is what stops every "(no subject)" or two-word thread from
+        // sharing one reference and collapsing unrelated mail into one card.
+        const subjectOf = subjectRef(subject)
         const refs: Ref[] = [
           { t: 'gmailthread', v: `${account}:${id}` },
-          { t: 'subject', v: normalizeSubject(subject) },
+          ...(subjectOf ? [subjectOf] : []),
           // A GitHub notification email carries the PR URL, which is what makes
           // it collapse into the PR's card instead of showing up twice.
           ...extractRefs(`${subject}\n${snippet}\n${body}`),

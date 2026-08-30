@@ -142,26 +142,37 @@ const HISTORY_MESSAGES = 24
 const HISTORY_CHARS = 60_000
 
 function historyFor(convId: string) {
-  const rows = db
+  // Newest first, so the character budget is spent on the most recent exchange
+  // and the older tail is what falls off.
+  const newestFirst = db
     .query<{ role: string; body: string }, [string, number]>(
       `SELECT role, body FROM messages WHERE conv_id = ? ORDER BY seq DESC LIMIT ?`,
     )
     .all(convId, HISTORY_MESSAGES)
-    .reverse()
 
   const out: Array<{ role: 'user' | 'assistant'; content: string }> = []
   let chars = 0
-  for (const r of [...rows].reverse()) {
+  for (const r of newestFirst) {
     const body = (r.body ?? '').trim()
     if (!body) continue
     if (chars + body.length > HISTORY_CHARS) break
     chars += body.length
     out.unshift({ role: r.role === 'user' ? 'user' : 'assistant', content: body })
   }
-  // The API rejects a leading assistant message and consecutive same-role pairs
-  // in some shapes; dropping a dangling assistant head is the cheap fix.
-  while (out.length && out[0]!.role === 'assistant') out.shift()
-  return out
+
+  // Roles must alternate. A turn that was cancelled or errored before producing
+  // text still writes an assistant row, with an empty body that the loop above
+  // skips — which leaves two user messages adjacent. Merging beats dropping:
+  // the second message is the one the user actually asked.
+  const merged: typeof out = []
+  for (const m of out) {
+    const last = merged[merged.length - 1]
+    if (last && last.role === m.role) last.content = `${last.content}\n\n${m.content}`
+    else merged.push(m)
+  }
+  // The API also rejects a leading assistant message.
+  while (merged.length && merged[0]!.role === 'assistant') merged.shift()
+  return merged
 }
 
 /* -------------------------------- starting -------------------------------- */

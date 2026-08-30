@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { audit, db, now, uid } from '../db'
 import { CLAUDE_BIN, CLAUDE_HOME, LAUNCH_TIMEOUT_MS, PACK_DIR, WORKSPACE_ROOT } from '../env'
 import { childEnv, redact } from '../agent/redact'
-import { getRepo, listRepos } from '../registry/scan'
+import { getRepo } from '../registry/scan'
 import { getTemplate, TEMPLATES, type SlotKind } from './templates'
 
 export type PackItemInput = {
@@ -153,11 +153,10 @@ function claudeAuth(): boolean | null {
 export function resolveCwd(input: string | null | undefined): { ok: true; path: string; repo: string | null } | { ok: false; error: string } {
   if (!input || input === WORKSPACE_ROOT) return { ok: true, path: WORKSPACE_ROOT, repo: null }
 
+  // getRepo resolves by absolute path first and then by name, so a registry
+  // path always lands here — there is no third spelling left to check.
   const repo = getRepo(input)
   if (repo) return { ok: true, path: repo.path, repo: repo.name }
-
-  const known = listRepos().some(r => r.path === input)
-  if (known) return { ok: true, path: input, repo: null }
 
   return {
     ok: false,
@@ -435,6 +434,12 @@ async function supervise(packId: string, proc: ReturnType<typeof Bun.spawn>) {
   let sawResult = false
   let err: string | null = null
 
+  // stderr is piped, so something has to read it: an unread pipe fills its
+  // buffer and the child blocks forever on its next write. Draining it also
+  // means a session that dies on startup reports why, instead of only
+  // "exited without producing a result".
+  const stderrText = new Response(proc.stderr as ReadableStream).text().catch(() => '')
+
   try {
     const dec = new TextDecoder()
     let buf = ''
@@ -473,9 +478,14 @@ async function supervise(packId: string, proc: ReturnType<typeof Bun.spawn>) {
     // killed. Recording that as "done" would be the false success this system
     // exists to prevent.
     const state = err ? 'error' : sawResult ? 'done' : 'error'
+    const tail = redact((await stderrText).trim()).slice(-1_000)
     db.query(`UPDATE launch_packs SET status = ?, error = ?, finished_at = ? WHERE id = ?`).run(
       state,
-      err ?? (sawResult ? null : `Claude Code exited (code ${proc.exitCode ?? 'unknown'}) without producing a result.`),
+      err ??
+        (sawResult
+          ? null
+          : `Claude Code exited (code ${proc.exitCode ?? 'unknown'}) without producing a result.` +
+            (tail ? `\n${tail}` : '')),
       now(),
       packId,
     )

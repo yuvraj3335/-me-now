@@ -68,10 +68,6 @@ function LaunchBody({ items, preferred }: { items: PackItem[]; preferred: string
     if (repo) setCwd(repo.path)
   }, [chosen?.id, resume, meta])
 
-  useEffect(() => {
-    if (chosen && !instruction.trim()) setInstruction('')
-  }, [chosen?.id])
-
   if (err) return <p className="text-[13px] text-bad py-6">{err}</p>
   if (!meta) return <p className="text-[13px] text-fg-mute py-6">Reading this machine…</p>
 

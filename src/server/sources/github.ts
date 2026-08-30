@@ -106,6 +106,7 @@ export const github: SourceAdapter = {
         const repo = repoOf(it)
         const isPr = !!it.pull_request
         const num = `${repo}#${it.number}`.toLowerCase()
+        const subject = subjectRef(it.title)
 
         cards.push({
           source: 'github',
@@ -125,7 +126,7 @@ export const github: SourceAdapter = {
             { t: 'gh', v: num },
             // The title too: a Claude session opened for this PR copies the PR
             // title, and that is what collapses the two into one card.
-            ...(subjectRef(it.title) ? [subjectRef(it.title)!] : []),
+            ...(subject ? [subject] : []),
             ...extractRefs(`${it.title}\n${it.body ?? ''}`, repo),
           ],
           meta: {

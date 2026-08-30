@@ -380,22 +380,10 @@ CREATE TABLE IF NOT EXISTS admin_backups (
 );
 CREATE INDEX IF NOT EXISTS admin_backups_at ON admin_backups(at DESC);
 
--- Claude Code sessions launched against a repository.
-CREATE TABLE IF NOT EXISTS eng_sessions (
-  id         TEXT PRIMARY KEY,
-  conv_id    TEXT,
-  repo_path  TEXT NOT NULL,
-  branch     TEXT,
-  dirty_at_start INTEGER NOT NULL DEFAULT 0,
-  cc_session TEXT,
-  state      TEXT NOT NULL,                -- running | done | error | cancelled
-  task       TEXT NOT NULL,
-  files      TEXT NOT NULL DEFAULT '[]',
-  error      TEXT,
-  started_at INTEGER NOT NULL,
-  finished_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS eng_sessions_repo ON eng_sessions(repo_path, started_at DESC);
+-- NOTE: eng_sessions used to be created here. Migration 2 drops it, and a
+-- CREATE IF NOT EXISTS in this block runs on every boot -- so leaving it would
+-- resurrect the table on the restart after the migration and make the drop a
+-- lie. A table a migration removes must not also be in the baseline.
 
 `)
 

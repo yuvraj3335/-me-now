@@ -112,8 +112,13 @@ api.get('/state', async c => {
     notifications: db.query<Row, []>(
       `SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30`,
     ).all(),
+    // Finished runs only. A row is inserted when a poll STARTS, with ok = NULL,
+    // so including in-flight runs made every source read as failed for the
+    // duration of each poll — the Home page's sync line said "needs connect"
+    // about a source that was answering fine.
     lastSync: db.query<Row, []>(
-      `SELECT source, MAX(started_at) AS at, ok, count, error FROM sync_runs GROUP BY source`,
+      `SELECT source, MAX(started_at) AS at, ok, count, error
+         FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
     ).all(),
     serverTime: now(),
   })
@@ -327,8 +332,14 @@ api.post('/reminders', async c => {
       `UPDATE reminders SET fire_at = ?, label = ?, repeat_rule = ?
        WHERE target_kind = ? AND target_id = ? AND fired_at IS NULL AND dismissed_at IS NULL`,
     ).run(b.fire_at, b.label ?? null, b.repeat_rule ?? null, b.target_kind, b.target_id)
-    return c.json({ ...db.query(`SELECT * FROM reminders WHERE target_kind = ? AND target_id = ? AND fired_at IS NULL`)
-      .get(b.target_kind, b.target_id) as Row, moved: true })
+    // Same predicate as the UPDATE above: without `dismissed_at IS NULL` this
+    // could read back a dismissed reminder and report it as the live one.
+    const moved = db.query<Row, [string, string]>(
+      `SELECT * FROM reminders
+        WHERE target_kind = ? AND target_id = ? AND fired_at IS NULL AND dismissed_at IS NULL`,
+    ).get(b.target_kind, b.target_id)
+    if (!moved) return c.json(bad('could not create that reminder'), 400)
+    return c.json({ ...moved, moved: true })
   }
   logEvent('reminder_set', { task_id: b.target_kind === 'task' ? b.target_id : null })
   return c.json(db.query(`SELECT * FROM reminders WHERE id = ?`).get(id))
