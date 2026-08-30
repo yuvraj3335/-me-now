@@ -200,10 +200,35 @@ api.post('/cards/:group/pin', async c => {
   return c.json({ ok: true })
 })
 
-api.post('/cards/:group/restore', c => {
+/**
+ * Put a card back on the list.
+ *
+ * With no body this clears everything that could be keeping it off one, which
+ * is what "bring this back" means when someone picks it out of a list of things
+ * they have hidden.
+ *
+ * `{ undo: 'done' | 'snoozed' | 'not_mine' }` clears exactly one, which is what
+ * the undo bar needs: undoing a Done must not also un-park a card that was
+ * parked before the Done, or drop a manual pile someone chose an hour ago. An
+ * undo that does more than the thing it is undoing is its own small surprise.
+ */
+const UNDO_FIELD = { done: 'done_at', snoozed: 'snoozed_until', not_mine: 'not_mine' } as const
+
+api.post('/cards/:group/restore', async c => {
   const g = decodeURIComponent(c.req.param('group'))
-  touchState(g, { not_mine: 0, done_at: null, snoozed_until: null, pile_override: null })
-  logEvent('card_restored', { group_key: g })
+  const body: { undo?: string } =
+    await c.req.json<{ undo?: string }>().catch(() => ({}))
+  const undo = body.undo
+  const field = undo ? UNDO_FIELD[undo as keyof typeof UNDO_FIELD] : undefined
+  if (undo && !field) return c.json(bad('unknown undo target'), 400)
+
+  touchState(
+    g,
+    field
+      ? { [field]: field === 'not_mine' ? 0 : null }
+      : { not_mine: 0, done_at: null, snoozed_until: null, pile_override: null },
+  )
+  logEvent('card_restored', { group_key: g, meta: { undo: undo ?? 'all' } })
   return c.json({ ok: true })
 })
 

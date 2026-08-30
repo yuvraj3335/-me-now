@@ -87,7 +87,12 @@ export const actions = {
   notMine: (g: string) => post(`/cards/${encodeURIComponent(g)}/not-mine`),
   doneCard: (g: string) => post(`/cards/${encodeURIComponent(g)}/done`),
   pin: (g: string, pinned: boolean) => post(`/cards/${encodeURIComponent(g)}/pin`, { pinned }),
-  restore: (g: string) => post(`/cards/${encodeURIComponent(g)}/restore`),
+  /**
+   * With no `undo`, everything keeping this card off a list is cleared. With
+   * one, only that — so undoing a Done leaves a snooze or a manual pile alone.
+   */
+  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine') =>
+    post(`/cards/${encodeURIComponent(g)}/restore`, undo ? { undo } : {}),
   doneCards: () => req<{ cards: import('./types').Card[] }>('/cards/done'),
   thread: (g: string) => req<{ thread: any }>(`/cards/${encodeURIComponent(g)}/thread`),
 

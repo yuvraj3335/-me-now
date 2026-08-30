@@ -37,11 +37,13 @@ export function CardDetail({
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
 
   /** Same as `run`, plus the undo bar — for the two actions that hide a card. */
-  const runUndoable = async (fn: () => Promise<unknown>, text: string) => {
+  const runUndoable = async (
+    fn: () => Promise<unknown>, text: string, undo: 'done' | 'not_mine',
+  ) => {
     await run(fn)
     toast(text, {
       label: 'Undo',
-      run: async () => { await actions.restore(card.group_key); await reload() },
+      run: async () => { await actions.restore(card.group_key, undo); await reload() },
     })
   }
 
@@ -202,7 +204,7 @@ export function CardDetail({
             <ListPlus size={14} /> Make a task
           </Button>
           <Button variant="solid"
-            onClick={() => runUndoable(() => actions.doneCard(card.group_key), 'Marked done.')}>
+            onClick={() => runUndoable(() => actions.doneCard(card.group_key), 'Marked done.', 'done')}>
             <Check size={14} /> Done
           </Button>
           <Button variant="ghost"
@@ -210,7 +212,7 @@ export function CardDetail({
             {card.state?.pinned ? <><PinOff size={14} /> Unpin</> : <><Pin size={14} /> Pin</>}
           </Button>
           <Button variant="ghost"
-            onClick={() => runUndoable(() => actions.notMine(card.group_key), 'Taken off your list.')}>
+            onClick={() => runUndoable(() => actions.notMine(card.group_key), 'Taken off your list.', 'not_mine')}>
             <UserMinus size={14} /> Not mine
           </Button>
         </div>

@@ -99,22 +99,22 @@ export function Home() {
    * The bar offers the undo for the few seconds it is likely to be wanted;
    * "Done and not mine" in the palette covers everything after that.
    */
-  const undoable = (c: CardT, text: string) =>
+  const undoable = (c: CardT, text: string, undo: 'done' | 'snoozed') =>
     toast(text, {
       label: 'Undo',
-      run: async () => { await actions.restore(c.group_key); await reload() },
+      run: async () => { await actions.restore(c.group_key, undo); await reload() },
     })
 
   const done = async (c: CardT) => {
     drop(c.group_key)
     await actions.doneCard(c.group_key)
-    undoable(c, 'Marked done.')
+    undoable(c, 'Marked done.', 'done')
     void reload()
   }
   const snooze = async (c: CardT) => {
     drop(c.group_key)
     await actions.snooze(c.group_key, atHour(1, 9))
-    undoable(c, 'Back tomorrow morning.')
+    undoable(c, 'Back tomorrow morning.', 'snoozed')
     void reload()
   }
 

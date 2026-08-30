@@ -739,3 +739,11 @@ should stay one key; what it needed was to be reversible. So: an undo bar for
 the few seconds it is likely to be wanted, and `GET /cards/done` behind a
 "Done and not mine" palette command for everything after that. Restores are
 logged, like every other state change.
+
+The undo and the restore are deliberately not the same operation. `restore` with
+no body clears everything keeping a card off a list, which is what "bring this
+back" means when you have picked it out of a list of things you hid. The undo
+bar passes `{ undo: 'done' }` and clears only that, because undoing a Done must
+not also un-park a card that was parked before it, or discard a pile someone
+chose an hour ago. An undo that does more than the thing it undid is its own
+small surprise.
