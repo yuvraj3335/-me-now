@@ -10,7 +10,8 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildPack, getPack, openPack, PER_ITEM_QUOTE_CHARS, resolveCwd, stripNestedBrief } from '../src/server/claudecode/launch'
+import { buildPack, getPack, openPack, PER_ITEM_QUOTE_CHARS, renderPack, resolveCwd, stripNestedBrief } from '../src/server/claudecode/launch'
+import { withoutBrief } from '../src/server/claudecode/nestedBrief'
 import { handoffFor } from '../src/server/claudecode/handoff'
 import { HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../src/server/env'
 import { TEMPLATES, getTemplate } from '../src/server/claudecode/templates'
@@ -222,28 +223,62 @@ describe('the hand-off', () => {
  * earlier Wake brief nested inside the quote.
  */
 describe('the brief', () => {
+  /**
+   * The fixture is built by the producer, not typed by hand.
+   *
+   * The previous version of this test asserted against a hand-written copy of a
+   * brief format `renderPack` had not emitted for several releases, so it passed
+   * while the regex it guarded matched nothing the product actually writes.
+   * Measured before the fix: the old marker against today's `renderPack` output
+   * → `stripped? false`. Calling the producer is what makes a format change fail
+   * here instead of silently disarming the defence.
+   */
+  const realBrief = (title = 'fix(mfa): make the login MFA token purpose-strict') =>
+    renderPack({
+      template: 'blank',
+      templates: ['blank'],
+      title,
+      cwd: join(root, 'truto'),
+      repo: 'truto',
+      skills: [],
+      instruction: 'Solve this.',
+      items: [],
+      createdAt: Date.parse('2026-08-30T04:35:28.181Z'),
+    })
+
+  test('the marker still matches what the producer actually writes', () => {
+    const brief = realBrief()
+    expect(brief, 'renderPack stopped writing the header the marker looks for')
+      .toContain('## What this is')
+    expect(stripNestedBrief(brief), 'the defence no longer recognises Wake\'s own brief')
+      .not.toContain('## What this is')
+  })
+
   test('an earlier Wake brief is cut out of a quote rather than nested', () => {
-    const nested = [
-      'you were just working on this',
-      '',
-      '# fix(mfa): make the login MFA token purpose-strict',
-      '',
-      'Packed by Wake at 2026-08-30T04:35:28.181Z · template `blank`',
-      '',
-      '## Instruction',
-      'Solve this.',
-    ].join('\n')
+    const nested = `you were just working on this\n\n${realBrief()}`
 
     const out = stripNestedBrief(nested)
     expect(out).toContain('you were just working on this')
     expect(out, 'the nested brief survived').not.toContain('Packed by Wake at')
-    expect(out, 'the nested brief survived').not.toContain('## Instruction')
+    expect(out, 'the nested brief survived').not.toContain('## What I need')
     expect(out).toContain("this tool's own output")
   })
 
   test('a quote that is nothing but an old brief says so instead of being empty', () => {
-    const out = stripNestedBrief('# Something\n\nPacked by Wake at 2026-08-30T04:35:28.181Z · template `blank`\n')
-    expect(out).toContain('nothing quotable')
+    expect(stripNestedBrief(realBrief())).toContain('nothing quotable')
+    // The format of several releases ago, so an archived transcript still cuts.
+    const old = '# Something\n\nPacked by Wake at 2026-08-30T04:35:28.181Z · template `blank`\n'
+    expect(stripNestedBrief(old)).toContain('nothing quotable')
+  })
+
+  test('a card never carries Wake\'s own brief as its body', () => {
+    // The other half, and the one that was live on screen: `withoutBrief` runs on
+    // the read path, where a Claude session's last prompt IS a brief because the
+    // session was started from one. It returns what the operator typed, or
+    // nothing — never Wake quoting itself.
+    expect(withoutBrief(realBrief())).toBeNull()
+    expect(withoutBrief(`have a look at this\n\n${realBrief()}`)).toBe('have a look at this')
+    expect(withoutBrief('an ordinary prompt')).toBe('an ordinary prompt')
   })
 
   test('ordinary text is left completely alone', () => {

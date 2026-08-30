@@ -396,17 +396,36 @@ api.get('/cards/:group/mail', async c => {
 
 /* -------------------------------- tasks --------------------------------- */
 
+/**
+ * A task freezes its provenance at creation.
+ *
+ * `source_card_group` is a pointer into `cards`, and `ingest.ts` marks a card
+ * gone the moment its source stops returning it — so "from GitHub" disappeared
+ * from a task exactly when the pull request merged, which is when remembering
+ * what the task was about matters most. The `origin_*` columns are a copy, not a
+ * reference, and they are written once and never updated: a task is a durable
+ * object, a card is a view of somebody else's system.
+ */
+const ORIGIN_FIELDS = ['origin_source', 'origin_title', 'origin_why', 'origin_url', 'origin_excerpt', 'origin_meta'] as const
+
 api.post('/tasks', async c => {
   const b = await c.req.json<Row>()
   if (!b.title?.trim()) return c.json(bad('title required'), 400)
   const id = uid()
   db.query(
-    `INSERT INTO tasks (id, title, detail, status, goal_id, source_card_group, due_at, color, sort, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO tasks (id, title, detail, status, goal_id, source_card_group, due_at, color, sort,
+                        created_at, updated_at, ${ORIGIN_FIELDS.join(', ')})
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id, b.title.trim(), b.detail ?? null, b.status ?? 'todo', b.goal_id ?? null,
     b.source_card_group ?? null, b.due_at ?? null, b.color ?? null,
     b.sort ?? -now(), now(), now(),
+    b.origin_source ?? null, b.origin_title ?? null, b.origin_why ?? null,
+    b.origin_url ?? null,
+    // Clipped here rather than trusted: it is provider text on its way into a
+    // row that outlives the card it came from.
+    typeof b.origin_excerpt === 'string' ? b.origin_excerpt.slice(0, 600) : null,
+    b.origin_meta ? JSON.stringify(b.origin_meta).slice(0, 2_000) : null,
   )
   logEvent('task_created', { task_id: id, group_key: b.source_card_group ?? null })
   return c.json(db.query(`SELECT * FROM tasks WHERE id = ?`).get(id))

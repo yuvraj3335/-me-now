@@ -10,6 +10,7 @@ import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
 import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
+import { withoutBrief } from '../claudecode/nestedBrief'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
 const TAIL_BYTES = 512 * 1024
@@ -97,7 +98,15 @@ function parseSession(path: string, id: string, project: string, mtime: number):
 /** Strip the harness noise that leaks into a raw prompt so titles read cleanly. */
 function cleanPrompt(s: string | null): string | null {
   if (!s) return null
-  const cleaned = s
+  // A session started from a Wake brief has that brief as its last prompt, and
+  // this is the one function every card's title and excerpt goes through. Cut it
+  // here and Wake stops printing its own paperwork back to itself in three
+  // places at once: the row title, the detail pane's body, and the next brief
+  // that quotes this session. The nested-brief defence existed and ran only on
+  // the way out; this is the way in.
+  const own = withoutBrief(s)
+  if (!own) return null
+  const cleaned = own
     .replace(/<[^>]+>/g, ' ')
     .replace(/^Caveat:.*?response\.?/is, '')
     .replace(/\s+/g, ' ')

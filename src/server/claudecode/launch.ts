@@ -26,6 +26,10 @@ import { getRepo } from '../registry/scan'
 import { handoffFor, type Handoff } from './handoff'
 import { getTemplate, TEMPLATES, type SlotKind, type Template } from './templates'
 import { formatUntrusted, inspect } from '../untrusted'
+// Re-exported: `stripNestedBrief` is used on the pack path here and on the card
+// read path in `sources/claudeSessions.ts`, so it lives in neither.
+export { stripNestedBrief } from './nestedBrief'
+import { stripNestedBrief } from './nestedBrief'
 
 export type PackItemInput = {
   kind: SlotKind
@@ -100,6 +104,7 @@ const KIND_LABEL: Record<SlotKind, string> = {
   github: 'GitHub',
   session: 'Claude Code session',
   note: 'Note',
+  task: 'Task',
 }
 
 /**
@@ -109,28 +114,6 @@ const KIND_LABEL: Record<SlotKind, string> = {
  * thread out of this file is reading a stranger's words, and the fence is what
  * says so — the same rule the in-app agent works under.
  */
-/**
- * Strip a Wake brief out of quoted text.
- *
- * Wake packs a Claude Code session's last prompt as context. When that session
- * was itself started from a Wake brief, the prompt IS a Wake brief — so packing
- * it again nests one inside the other, and doing it twice nests it twice. The
- * result was a brief whose entire Context section was a stale copy of an older
- * brief, restating the same title three times and carrying no facts at all.
- *
- * The header Wake writes is the marker, and it is one Wake controls, so this is
- * a reliable cut rather than a heuristic.
- */
-const WAKE_BRIEF = /(^|\n)#\s.*\n+Packed by Wake at \d{4}-/
-export function stripNestedBrief(text: string): string {
-  const m = WAKE_BRIEF.exec(text)
-  if (!m) return text
-  const head = text.slice(0, m.index).trim()
-  return head
-    ? `${head}\n\n[Wake removed a copy of an earlier brief from here — it was this tool's own output, not new information.]`
-    : '[This was a copy of an earlier Wake brief, so there is nothing quotable here. Ask me for the underlying thread.]'
-}
-
 /**
  * How much of one attachment's body may travel.
  *
@@ -194,7 +177,7 @@ function renderItem(i: number, it: PackItemInput): string[] {
   return lines
 }
 
-function renderPack(p: {
+export function renderPack(p: {
   template: string
   templates: string[]
   title: string

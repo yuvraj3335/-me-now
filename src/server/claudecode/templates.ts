@@ -11,7 +11,12 @@
  * context instead of typing a prompt.
  */
 
-export type SlotKind = 'card' | 'mail' | 'slack' | 'sentry' | 'notion' | 'github' | 'session' | 'note'
+// `task` is Wake's own object rather than someone else's — the operator's
+// title, his stickies, and the frozen provenance of the row it came from. It was
+// the one missing link in the chain the product exists to serve: row → task →
+// stickies → Open in Claude. `note` was in this union from the first release and
+// nothing ever produced one; the stickies are what fills it.
+export type SlotKind = 'card' | 'mail' | 'slack' | 'sentry' | 'notion' | 'github' | 'session' | 'note' | 'task'
 
 export type Template = {
   id: string
@@ -44,7 +49,7 @@ export const TEMPLATES: Template[] = [
     id: 'customer-incident',
     label: 'Customer incident',
     blurb: 'A customer report, taken to a root cause and a safe reply.',
-    slots: ['slack', 'mail', 'sentry', 'card', 'note'],
+    slots: ['slack', 'mail', 'sentry', 'card', 'task', 'note'],
     defaultRepo: 'truto',
     skills: ['truto-cli-toolbelt', 'truto-safe-admin-operator', 'truto-customer-issue-debugger'],
     instruction: `${NO_REPASTE}
@@ -60,7 +65,7 @@ customer-safe draft reply. Do not send anything.`,
     id: 'sentry-issue',
     label: 'Sentry issue',
     blurb: 'One stack trace to the line that produced it.',
-    slots: ['sentry', 'card', 'note'],
+    slots: ['sentry', 'card', 'task', 'note'],
     defaultRepo: 'truto',
     skills: ['truto-cli-toolbelt'],
     instruction: `${NO_REPASTE}
@@ -80,7 +85,7 @@ with the evidence. Propose the smallest patch; do not commit or push it.`,
     id: 'review-pr',
     label: 'Pull request',
     blurb: 'A pull request or issue that needs a read before it moves.',
-    slots: ['github', 'card', 'note'],
+    slots: ['github', 'card', 'task', 'note'],
     defaultRepo: null,
     skills: ['truto-cli-toolbelt'],
     instruction: `${NO_REPASTE}
@@ -94,7 +99,7 @@ anything — write the review here and I will decide what to do with it.`,
     id: 'slack-thread',
     label: 'Slack thread',
     blurb: 'A thread with a question in it that needs a real answer.',
-    slots: ['slack', 'card', 'note'],
+    slots: ['slack', 'card', 'task', 'note'],
     defaultRepo: null,
     skills: ['truto-cli-toolbelt'],
     instruction: `${NO_REPASTE}
@@ -107,7 +112,7 @@ Answer the actual question, and draft the reply. I will send it.`,
     id: 'mail-thread',
     label: 'Mail thread',
     blurb: 'An email thread that needs work before it can be answered.',
-    slots: ['mail', 'card', 'note'],
+    slots: ['mail', 'card', 'task', 'note'],
     defaultRepo: null,
     skills: ['truto-cli-toolbelt'],
     instruction: `${NO_REPASTE}
@@ -119,7 +124,7 @@ the thread implies, then draft a reply. I will send it.`,
     id: 'mapping',
     label: 'Mapping — unified vs proxy',
     blurb: 'A field is wrong, missing, or shaped differently than expected.',
-    slots: ['card', 'note'],
+    slots: ['card', 'task', 'note'],
     defaultRepo: 'truto',
     skills: ['truto-cli-toolbelt', 'truto-mapping-tester', 'truto-safe-admin-operator'],
     instruction: `${NO_REPASTE}
@@ -134,7 +139,7 @@ finding — show the evaluated output.`,
     id: 'sync-job',
     label: 'Sync job failure',
     blurb: 'A run failed, stalled, or produced the wrong rows.',
-    slots: ['card', 'sentry', 'note'],
+    slots: ['card', 'task', 'sentry', 'note'],
     defaultRepo: 'truto',
     skills: ['truto-cli-toolbelt', 'truto-sync-job-validator'],
     instruction: `${NO_REPASTE}
@@ -148,7 +153,7 @@ before proposing any mutation.`,
     id: 'account-health',
     label: 'Account health',
     blurb: 'Credentials, scopes, capabilities, reauthorization.',
-    slots: ['card', 'note'],
+    slots: ['card', 'task', 'note'],
     defaultRepo: null,
     skills: ['truto-cli-toolbelt', 'truto-account-health-auditor'],
     instruction: `${NO_REPASTE}
@@ -162,7 +167,7 @@ method the customer actually uses needs it — name the method.`,
     id: 'continue-session',
     label: 'Continue earlier work',
     blurb: 'Carry a session already underway on the DevBox into a fresh conversation.',
-    slots: ['session', 'note'],
+    slots: ['session', 'task', 'note'],
     defaultRepo: null,
     skills: [],
     instruction: `Pick up the work below. It comes from a Claude Code session on my DevBox, quoted
@@ -173,7 +178,7 @@ in a new one. Say where you think it got to before you carry on.`,
     id: 'blank',
     label: 'Blank',
     blurb: 'Just the objects and your own instruction.',
-    slots: ['card', 'mail', 'slack', 'sentry', 'notion', 'github', 'session', 'note'],
+    slots: ['card', 'task', 'mail', 'slack', 'sentry', 'notion', 'github', 'session', 'note'],
     defaultRepo: null,
     skills: [],
     instruction: NO_REPASTE,
