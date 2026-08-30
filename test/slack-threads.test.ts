@@ -19,7 +19,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
-  bucketHits, buildThreadCard, parentTs, parseSlackResults, parseThreadRead,
+  bucketHits, buildThreadCard, parentTs, parseSlackResults, parseThreadRead, plain,
 } from '../src/server/sources/slack'
 import { PartialPoll, settle, type RawCard } from '../src/server/sources/types'
 import { ME_ID, SEARCH_ONE_THREAD, SEARCH_ORPHAN_REPLY, SEARCH_WITH_DM, THREAD_READ } from './fixtures/slack'
@@ -233,5 +233,58 @@ describe('honesty about what a poll could not ask', () => {
 
     expect(thrown).toBeInstanceOf(PartialPoll)
     expect((thrown as PartialPoll).cards).toBe(cards)
+  })
+})
+
+/**
+ * The wire format does not reach the desk.
+ *
+ * Both of these were read off the deployed page rather than imagined. A
+ * `#spendflo-truto` row's Who column, its From row and the author of every line
+ * in its thread list all read `Varad (U08HCR8KXQB, external: spendflo)`, because
+ * `parseWho`'s id pattern closed on `)` and a guest from another workspace
+ * carries a comma and a workspace name inside those parentheses. And a `#truto`
+ * row's title read `<!subteam^S06HDT77E1M> Whoever is looking into it`, because
+ * a thread card's text went through `clean` — which knows `<@U…|Name>` and not
+ * the four other tokens Slack writes.
+ */
+describe('a thread card is text, not Slack markup', () => {
+  test('a guest author keeps their name and loses their workspace', () => {
+    const read = parseThreadRead(
+      '=== THREAD PARENT MESSAGE ===\n' +
+      'From: rameshsutaliya (U09038ZHE3H, external: spendflo)\n' +
+      'Time: 2026-08-27 12:04:59 IST\n' +
+      'Message TS: 1784530611.515999\n' +
+      'Hi team, *NetSuite SuiteTax Setup* — we have begun working on it\n' +
+      '\n=== THREAD REPLIES (1 total) ===\n\n' +
+      '--- Reply 1 of 1 ---\n' +
+      'From: ishan (U08J4DL6W1K, external: spendflo)\n' +
+      'Time: 2026-08-27 12:35:33 IST\n' +
+      'Message TS: 1784530700.100000\n' +
+      'could we split this instead\n',
+    )
+    expect(read.parent?.who).toBe('rameshsutaliya')
+    expect(read.parent?.whoId).toBe('U09038ZHE3H')
+    expect(read.replies[0]?.who).toBe('ishan')
+    expect(read.replies[0]?.whoId).toBe('U08J4DL6W1K')
+  })
+
+  test('the name that survives is still the one with an email beside it', () => {
+    const read = parseThreadRead(
+      '=== THREAD PARENT MESSAGE ===\n' +
+      'From: Nidhi <nidhi@truto.one> (U0BBZV4HQHH)\n' +
+      'Time: 2026-08-27 12:04:59 IST\n' +
+      'Message TS: 1787812499.720579\n' +
+      'a question\n',
+    )
+    expect(read.parent?.who).toBe('Nidhi')
+    expect(read.parent?.whoId).toBe('U0BBZV4HQHH')
+  })
+
+  test('a usergroup page and Slack emphasis are words by the time they are a title', () => {
+    expect(plain('<!subteam^S06HDT77E1M> Whoever is looking into it'))
+      .toBe('Whoever is looking into it')
+    expect(plain('Hi team, *NetSuite SuiteTax Setup* — begun'))
+      .toBe('Hi team, NetSuite SuiteTax Setup — begun')
   })
 })

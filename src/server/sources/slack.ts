@@ -765,7 +765,7 @@ const asEntry = (m: SlackMessage, me: string): ThreadEntry => {
     ts: m.ts,
     who: m.who,
     who_id: m.whoId,
-    text: clean(m.text).slice(0, ENTRY_CHARS),
+    text: plain(m.text).slice(0, ENTRY_CHARS),
     /*
      * A message he wrote is never "somebody named you".
      *
@@ -933,7 +933,7 @@ export function buildThreadCard(
    */
   const title = (
     parent?.text ||
-    (first ? clean(first.text) : '') ||
+    (first ? plain(first.text) : '') ||
     entries.filter(e => !e.mine).slice(-1)[0]?.text ||
     entries.slice(-1)[0]?.text ||
     ''
@@ -974,7 +974,7 @@ export function buildThreadCard(
    * the other does not. That is right for a scan and wrong for anything a person
    * reads: the excerpt used to open with the parent's text, twice.
    */
-  const excerpt = clean(
+  const excerpt = plain(
     [...(parentMsg ? [parentMsg.text] : []), ...replies.map(r => r.text)].join('\n'),
   ).slice(0, 400)
 
@@ -996,7 +996,7 @@ export function buildThreadCard(
   // The ask is in the message that named him, not somewhere in a fourteen-reply
   // thread: running the rule table over the whole conversation would find a
   // question mark in almost every thread and call every row a question.
-  const askIn = taggedEntries.filter(e => !e.mine).slice(-1)[0]?.text ?? clean(first?.text ?? '')
+  const askIn = taggedEntries.filter(e => !e.mine).slice(-1)[0]?.text ?? plain(first?.text ?? '')
   const ask = readsLikeAsk(askIn)
 
   return {
