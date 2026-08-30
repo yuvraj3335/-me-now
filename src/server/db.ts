@@ -568,6 +568,16 @@ CREATE INDEX IF NOT EXISTS voice_notes_created ON voice_notes(created_at DESC);
     // path would mean two answers to "where did that session go".
     sql: `DROP TABLE IF EXISTS eng_sessions;`,
   },
+  {
+    id: 3,
+    name: 'drop-eng-sessions-for-real',
+    // Migration 2 dropped the table, and the baseline block above re-created it
+    // on the very next boot — so every database that lived through that release
+    // still carries an empty, unreferenced eng_sessions while a fresh one does
+    // not. The baseline no longer creates it; this converges the two. Safe by
+    // inspection: nothing has written to that table since migration 2 ran.
+    sql: `DROP TABLE IF EXISTS eng_sessions;`,
+  },
 ]
 
 const applied = new Set(
