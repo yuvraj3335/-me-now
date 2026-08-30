@@ -118,4 +118,14 @@ console.log(`hand-off: ${b.handoff}`)
 
 console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${IS_DEV ? '  [dev]' : ''}`)
 
-export default { port: PORT, hostname: HOST, fetch: app.fetch, idleTimeout: 60 }
+/**
+ * 255 is Bun's ceiling and 60 was not enough.
+ *
+ * Measured on the box: a Fetch that asks two connectors through the box's own
+ * `claude` takes 40–60 seconds, and the socket was closed underneath it at
+ * exactly 60 — `curl: (52) Empty reply from server` while the run itself
+ * finished fine and landed its rows. `POST /api/fetch` returns immediately now
+ * and the result is polled, so nothing depends on this; it is raised anyway
+ * because a slow poll of five sources is the same shape of request.
+ */
+export default { port: PORT, hostname: HOST, fetch: app.fetch, idleTimeout: 255 }

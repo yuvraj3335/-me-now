@@ -73,6 +73,7 @@ export type FetchReport = {
 }
 
 let running: Promise<FetchReport> | null = null
+let last: FetchReport | null = null
 
 /**
  * One Fetch at a time; a second press joins the first.
@@ -82,13 +83,48 @@ let running: Promise<FetchReport> | null = null
  */
 export function fetchNow(): Promise<FetchReport> {
   if (running) return running
-  running = doFetch().finally(() => { running = null })
+  running = doFetch()
+    .then(r => { last = r; return r })
+    .finally(() => { running = null })
   return running
 }
 
+/**
+ * Start one, and answer immediately.
+ *
+ * A collection through the box takes 40–60 seconds, and holding an HTTP request
+ * open for that is a way to lose it: measured, the socket was closed at exactly
+ * 60s while the run itself finished fine and landed its rows, so the page
+ * reported a failure that had not happened. The browser starts it and then asks
+ * what happened, which also means a phone that locks its screen mid-run still
+ * sees the result.
+ */
+export function startFetch(): { running: true } {
+  // The report carries the failure; there is nothing for a rejection to reach.
+  void fetchNow().catch(() => {})
+  return { running: true }
+}
+
+/** What the last press did, and whether one is still going. */
+export const fetchStatus = (): { running: boolean; report: FetchReport | null } =>
+  ({ running: !!running, report: last })
+
 async function doFetch(): Promise<FetchReport> {
   const t0 = Date.now()
+  try {
+    return await collectAll(t0)
+  } catch (e) {
+    // A failure is a report, not a rejection: the browser reads the report.
+    return {
+      at: now(), ms: Date.now() - t0, found: 0, fresh: 0,
+      connectors: CONNECTORS.map(name => ({
+        name, via: 'none' as const, ok: false, count: 0, ms: 0, error: (e as Error).message,
+      })),
+    }
+  }
+}
 
+async function collectAll(t0: number): Promise<FetchReport> {
   // Pipe 1 first, so Fetch is never a worse refresh than the button it replaced.
   await ingest().catch(() => {})
 

@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { db, latestFinishedRuns, logEvent, now, uid } from './db'
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
-import { fetchNow } from './fetch'
+import { fetchStatus, startFetch } from './fetch'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { readThread } from './sources/slack'
 import { sessionExcerpt } from './sources/claudeSessions'
@@ -170,7 +170,17 @@ api.post('/refresh', async c => c.json(await ingest()))
  * adds, so nothing on the page is blocked while it runs, and a second press is
  * neither refused nor rate-limited: it re-runs, dedups, and answers `0 new`.
  */
-api.post('/fetch', async c => c.json(await fetchNow()))
+api.post('/fetch', c => c.json(startFetch()))
+
+/**
+ * What the last press did, and whether one is still going.
+ *
+ * Fetch starts and answers; the browser asks again. Holding an HTTP request
+ * open for the 40–60 seconds a collection through the box takes is a way to
+ * lose it — measured, the socket closed at exactly 60s while the run finished
+ * and landed its rows, so the page reported a failure that had not happened.
+ */
+api.get('/fetch', c => c.json(fetchStatus()))
 
 /* -------------------------------- cards --------------------------------- */
 

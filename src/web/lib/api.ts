@@ -63,12 +63,32 @@ export function reload(): Promise<void> {
  * Fetch — pipe 2. Runs pipe 1 first, then asks every connector this machine can
  * reach the two standing questions and lands what comes back on the same desk.
  *
- * It takes no argument, because there is nothing to ask it. Deliberately not
- * routed through `syncing`: Fetch blocks nothing, and a global spinner would
- * make it look like it does.
+ * It takes no argument, because there is nothing to ask it — that is the
+ * property that keeps it a collector rather than a chat box.
+ *
+ * Started, then polled. A collection through the box's own `claude` takes 40–60
+ * seconds, and an HTTP request held open that long dies: measured, the socket
+ * closed at exactly 60s while the run finished and landed its rows, so the page
+ * said `Fetch failed` about a Fetch that had worked. This also means locking the
+ * phone mid-run still shows the result.
+ *
+ * Deliberately not routed through `syncing`: Fetch blocks nothing, and a global
+ * spinner would make it look like it does.
  */
-export const fetchNow = () =>
-  post<import('./types').FetchReport>('/fetch')
+type FetchStatus = { running: boolean; report: import('./types').FetchReport | null }
+
+export async function fetchNow(): Promise<import('./types').FetchReport> {
+  const before = (await req<FetchStatus>('/fetch').catch(() => null))?.report?.at ?? 0
+  await post('/fetch')
+  // Two minutes is past the server's own per-connector wall clock, so a run
+  // that is still going at the end of it is a run that has stopped answering.
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2_000))
+    const s = await req<FetchStatus>('/fetch').catch(() => null)
+    if (s && !s.running && s.report && s.report.at !== before) return s.report
+  }
+  throw new Error('the collection did not finish')
+}
 
 /** Ask the server to poll every source now, then reload. */
 export async function refresh() {
