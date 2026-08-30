@@ -19,13 +19,16 @@ import { useMailBadge } from './lib/mailBadge'
 /**
  * Five destinations on a laptop, three on a phone.
  *
- * `bleed` is the difference between a reading column and a working surface. Now,
- * Work, Pulse and Settings are things you read, so they stay at 760px. Mail is a
- * list beside a thread; squeezing that into a column wastes two thirds of the
- * screen.
+ * `bleed` is the difference between a reading column and a working surface.
+ * Work, Pulse and Settings are things you read, so they stay at 760px. Mail is
+ * a list beside a thread, and Now is a list beside whatever you opened from it
+ * on a screen wide enough for both — squeezing either into a column wastes two
+ * thirds of the screen. Home imposes its own reading width on the list itself
+ * when nothing is open, so the plain, nothing-selected case still looks like a
+ * column rather than a list stretched edge to edge.
  */
 const TABS = [
-  { path: '/', label: 'Now', Icon: Inbox, Page: Home, bleed: false, mobile: true },
+  { path: '/', label: 'Now', Icon: Inbox, Page: Home, bleed: true, mobile: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, bleed: true, mobile: true },
   { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, bleed: false, mobile: true },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, bleed: false, mobile: false },
@@ -108,28 +111,37 @@ export default function App() {
       reducedMotion={staticMode ? 'always' : 'user'}
       transition={staticMode ? { duration: 0 } : undefined}
     >
-    <div className="min-h-dvh">
+    <div className="min-h-dvh sm:flex">
       <div className="dawn-light" aria-hidden />
 
-      {/* Desktop nav: a quiet top rail. */}
-      <nav className="hidden sm:flex sticky top-0 z-30 items-center gap-1 px-6 h-14
+      {/* Desktop nav: a left rail, not a bar riding on top of the page. A
+          horizontal strip scrolls with the document underneath it — its own
+          `sticky` only re-pins it at the top of the *viewport*, which does
+          nothing once the page has scrolled the reader's eye somewhere else
+          on a long one (Pulse). A rail as tall as the viewport has nowhere
+          to scroll away to. */}
+      <nav className="hidden sm:flex sm:flex-col sm:sticky sm:top-0 sm:h-dvh sm:w-56 sm:shrink-0
+                      sm:px-3 sm:py-5 sm:border-r sm:border-white/[0.06] z-30
                       bg-ink-900/85 backdrop-blur-xl">
-        <span className="text-[14px] font-medium tracking-[-0.02em] mr-5 select-none">Wake</span>
-        {TABS.map(t => (
-          <NavItem key={t.path} {...t} active={active.path === t.path}
-            onClick={() => go(t.path)} badge={badgeFor(t.path)} />
-        ))}
+        <span className="text-[14px] font-medium tracking-[-0.02em] px-3 mb-5 select-none">Wake</span>
+        <div className="flex flex-col gap-0.5">
+          {TABS.map(t => (
+            <NavItem key={t.path} {...t} active={active.path === t.path}
+              onClick={() => go(t.path)} badge={badgeFor(t.path)} />
+          ))}
+        </div>
         <button
           onClick={() => setPalette(true)}
-          className="ml-auto inline-flex items-center gap-1.5 h-7 px-2 rounded-lg text-[11.5px]
+          className="mt-auto inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11.5px]
                      text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors"
           title="Command palette"
         >
           <kbd className="font-sans">⌘K</kbd>
+          <span>Search</span>
         </button>
       </nav>
 
-      <main className={`relative z-10 px-4 sm:px-6 pad-top ${active.bleed ? 'bleed' : 'column'}`}>
+      <main className={`relative z-10 min-w-0 sm:flex-1 px-4 sm:px-6 pad-top ${active.bleed ? 'bleed' : 'column'}`}>
         {error && !store.state && (
           <p className="mt-24 text-center text-[13px] text-bad">{error}</p>
         )}
@@ -138,7 +150,7 @@ export default function App() {
         )}
         {/*
           The page fades in; it does not fade out.
-          
+
           An exit animation with `mode="wait"` holds the outgoing page until that
           animation finishes, and it only finishes if frames are being produced.
           A background tab, a headless pane and a reader whose system asks for
@@ -237,15 +249,15 @@ function NavItem({
 }: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
   return (
     <button onClick={onClick}
-      className={`relative inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px]
+      className={`relative w-full flex items-center gap-2.5 h-9 px-3 rounded-lg text-[13px] text-left
         transition-colors ${active ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}>
       {active && (
         <motion.span layoutId="nav-pill" transition={spring}
           className="absolute inset-0 bg-ink-800 rounded-lg -z-10" />
       )}
-      <Icon size={14} />
-      {label}
-      {badge > 0 && <span className="ml-0.5 tnum text-[11px] text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
+      <Icon size={15} />
+      <span className="grow">{label}</span>
+      {badge > 0 && <span className="tnum text-[11px] text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
     </button>
   )
 }

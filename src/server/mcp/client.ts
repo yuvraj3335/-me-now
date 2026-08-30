@@ -105,7 +105,7 @@ export class HttpTransport implements McpTransport {
       throw new McpUnauthorized(`401 from ${this.url}`, res.headers.get('www-authenticate') ?? undefined)
     }
     if (!res.ok) {
-      throw new McpError(`HTTP ${res.status} from ${this.url}: ${(await res.text()).slice(0, 300)}`, undefined, res.status)
+      throw new McpError(`${res.status} from ${this.url}: ${friendlyBody(await res.text())}`, undefined, res.status)
     }
 
     const ctype = res.headers.get('content-type') ?? ''
@@ -348,4 +348,22 @@ export function extractText(result: any): string {
   const content = result?.content
   if (!Array.isArray(content)) return typeof result === 'string' ? result : ''
   return content.filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('\n')
+}
+
+/**
+ * A non-2xx response body is, in practice, the same JSON-RPC envelope a
+ * successful call would have returned — the human sentence is nested inside
+ * `result.content[].text` or `error.message`, and everything around it is
+ * transport wrapper nobody reading a card or a mail row asked to see. Surface
+ * the nested sentence; only fall back to the raw body when it isn't JSON at
+ * all (an HTML error page, a plain-text 502 from a proxy in front of the MCP
+ * server).
+ */
+function friendlyBody(text: string): string {
+  try {
+    const j = JSON.parse(text)
+    const nested = j?.error?.message ?? (extractText(j?.result) || j?.message)
+    if (typeof nested === 'string' && nested) return nested.slice(0, 300)
+  } catch { /* not JSON — the raw text below is the whole message */ }
+  return text.slice(0, 300)
 }

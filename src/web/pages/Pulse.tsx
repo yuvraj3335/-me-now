@@ -76,84 +76,89 @@ export function Pulse() {
         />
       </section>
 
-      <Panel title="Throughput" hint="tasks finished each day">
-        <Bars
-          data={a.throughput.done}
-          label={d => `${d.day.slice(5)} · ${d.value} done`}
-        />
-      </Panel>
-
-      <Panel title="The pile" hint="what arrived vs what you cleared">
-        <div className="grid sm:grid-cols-2 gap-8">
-          <div>
-            <SubLabel>Arrived</SubLabel>
-            <Bars data={a.throughput.appeared} color="var(--color-fg-mute)" height={96} />
-          </div>
-          <div>
-            <SubLabel>Cleared</SubLabel>
-            <Bars data={a.throughput.cleared} color="var(--color-ok)" height={96} />
-          </div>
-        </div>
-      </Panel>
-
-      <Panel title="Response time" hint="how long something waits before you touch it">
-        <Trend data={a.responseTime.daily} format={v => duration(v)} />
-      </Panel>
-
-      <Panel title="Your rhythm" hint="when the work actually happens">
-        <div className="grid sm:grid-cols-2 gap-8 items-center">
-          <DayClock data={a.rhythm.byHour} />
-          <div>
-            <SubLabel>By weekday</SubLabel>
-            <WeekdayBars data={a.rhythm.byWeekday} />
-          </div>
-        </div>
-      </Panel>
-
-      {a.aging.length > 0 && (
-        <Panel title="Ageing" hint="what is piling up, and how stale it is">
-          <StackedAging
-            rows={a.aging}
-            buckets={a.agingBuckets}
-            colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
+      {/* Two columns wide enough to compare, one narrow enough to still read —
+          "did today's ageing spike match today's low throughput" is a question
+          about two numbers at once, not two numbers a scroll apart. */}
+      <div className="lg:grid lg:grid-cols-2 lg:gap-x-12 lg:gap-y-4 lg:items-start">
+        <Panel title="Throughput" hint="tasks finished each day">
+          <Bars
+            data={a.throughput.done}
+            label={d => `${d.day.slice(5)} · ${d.value} done`}
           />
-          <div className="flex gap-3 mt-4 text-[11px] text-fg-mute">
-            {a.agingBuckets.map((b, i) => (
-              <span key={b} className="inline-flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-[2px] bg-fg-mute"
-                      style={{ opacity: 0.28 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.72 }} />
-                {b}
-              </span>
-            ))}
-          </div>
         </Panel>
-      )}
 
-      {a.goals.length > 0 && (
-        <Panel title="Goals" hint="tasks completed against each">
-          <div className="space-y-4">
-            {a.goals.map((g, i) => {
-              const pctDone = g.total ? g.done / g.total : 0
-              return (
-                <div key={g.id}>
-                  <div className="flex items-baseline justify-between mb-1.5">
-                    <span className="text-[13.5px] text-fg-dim">{g.title}</span>
-                    <span className="tnum text-[12.5px] text-fg-mute">
-                      {g.done}/{g.total}
-                    </span>
-                  </div>
-                  <div className="h-[3px] bg-ink-800 rounded-full overflow-hidden">
-                    <motion.div className="h-full rounded-full"
-                      style={{ background: g.color ?? 'var(--color-accent)' }}
-                      initial={reduce ? false : { width: 0 }} animate={{ width: `${pctDone * 100}%` }}
-                      transition={{ delay: 0.1 + i * 0.06, duration: 0.7, ease: [0.22, 1, 0.36, 1] }} />
-                  </div>
-                </div>
-              )
-            })}
+        <Panel title="Response time" hint="how long something waits before you touch it">
+          <Trend data={a.responseTime.daily} format={v => duration(v)} />
+        </Panel>
+
+        <Panel title="The pile" hint="what arrived vs what you cleared">
+          <div className="grid sm:grid-cols-2 gap-8">
+            <div>
+              <SubLabel>Arrived</SubLabel>
+              <Bars data={a.throughput.appeared} color="var(--color-fg-mute)" height={96} />
+            </div>
+            <div>
+              <SubLabel>Cleared</SubLabel>
+              <Bars data={a.throughput.cleared} color="var(--color-ok)" height={96} />
+            </div>
           </div>
         </Panel>
-      )}
+
+        <Panel title="Your rhythm" hint="when the work actually happens">
+          <div className="grid sm:grid-cols-2 gap-8 items-center">
+            <DayClock data={a.rhythm.byHour} />
+            <div>
+              <SubLabel>By weekday</SubLabel>
+              <WeekdayBars data={a.rhythm.byWeekday} />
+            </div>
+          </div>
+        </Panel>
+
+        {a.aging.length > 0 && (
+          <Panel title="Ageing" hint="what is piling up, and how stale it is">
+            <StackedAging
+              rows={a.aging}
+              buckets={a.agingBuckets}
+              colorOf={s => SOURCE_COLOR[s as keyof typeof SOURCE_COLOR] ?? 'var(--color-fg-mute)'}
+            />
+            <div className="flex gap-3 mt-4 text-[11px] text-fg-mute">
+              {a.agingBuckets.map((b, i) => (
+                <span key={b} className="inline-flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-[2px] bg-fg-mute"
+                        style={{ opacity: 0.28 + (i / Math.max(1, a.agingBuckets.length - 1)) * 0.72 }} />
+                  {b}
+                </span>
+              ))}
+            </div>
+          </Panel>
+        )}
+
+        {a.goals.length > 0 && (
+          <Panel title="Goals" hint="tasks completed against each">
+            <div className="space-y-4">
+              {a.goals.map((g, i) => {
+                const pctDone = g.total ? g.done / g.total : 0
+                return (
+                  <div key={g.id}>
+                    <div className="flex items-baseline justify-between mb-1.5">
+                      <span className="text-[13.5px] text-fg-dim">{g.title}</span>
+                      <span className="tnum text-[12.5px] text-fg-mute">
+                        {g.done}/{g.total}
+                      </span>
+                    </div>
+                    <div className="h-[3px] bg-ink-800 rounded-full overflow-hidden">
+                      <motion.div className="h-full rounded-full"
+                        style={{ background: g.color ?? 'var(--color-accent)' }}
+                        initial={reduce ? false : { width: 0 }} animate={{ width: `${pctDone * 100}%` }}
+                        transition={{ delay: 0.1 + i * 0.06, duration: 0.7, ease: [0.22, 1, 0.36, 1] }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+        )}
+      </div>
 
       <p className="mt-12 text-[12px] text-fg-mute leading-relaxed">
         Every number here is counted from your own activity log — nothing is estimated,

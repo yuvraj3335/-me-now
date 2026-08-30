@@ -5,7 +5,7 @@ import { actions, optimistic, refresh, reload, useStore } from '../lib/api'
 import type { Card as CardT, SourceName } from '../lib/types'
 import { atHour, ago, greeting } from '../lib/time'
 import { Card } from '../components/Card'
-import { CardSheet } from '../components/CardSheet'
+import { CardDetail, CardSheet } from '../components/CardSheet'
 import { TaskSheet } from '../components/TaskSheet'
 import { Chip, Empty, spring } from '../components/primitives'
 import { useStill } from '../lib/motion'
@@ -28,8 +28,29 @@ const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
  */
 const NO_CARDS: CardT[] = []
 
+/**
+ * Whether the viewport is wide enough for the list+detail pane layout.
+ *
+ * The pane's own visibility is CSS (`hidden lg:block`), which is enough for
+ * how it *looks* — but the modal `CardSheet` it replaces has a real side
+ * effect (locking body scroll) that CSS alone cannot suppress. Only one of
+ * the two may ever actually receive `openCard`.
+ */
+function useIsPaneWidth(): boolean {
+  const query = '(min-width: 1024px)'
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = () => setWide(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return wide
+}
+
 export function Home() {
   const still = useStill()
+  const wide = useIsPaneWidth()
   const { state, syncing } = useStore()
   const [openCard, setOpenCard] = useState<CardT | null>(null)
   const [taskFrom, setTaskFrom] = useState<CardT | null>(null)
@@ -145,8 +166,19 @@ export function Home() {
     onLaunch: launch,
   })
 
+  // No state yet is not the same fact as "zero cards" — the first is still
+  // loading, the second is a real, checked answer. Rendering "0 / nobody is
+  // waiting on you" before the first `/state` response lands says the second
+  // thing about a question that hasn't actually been asked yet.
+  if (!state) return <div className="pt-24"><Empty>Reading what's on you…</Empty></div>
+
   return (
-    <div className="pb-24">
+    <div className="pb-24 lg:flex lg:gap-10 lg:items-start">
+    {/* The list. Capped at a reading width when nothing is open — the same
+        760px Now always had — but free to give that width up to the detail
+        pane once something is, rather than the pane fighting the column for
+        room neither can spare. */}
+    <div className={`min-w-0 w-full ${openCard ? 'lg:flex-1' : 'lg:max-w-[760px] lg:mx-auto'}`}>
       <header className="pt-8 pb-7">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -241,17 +273,42 @@ export function Home() {
       )}
 
       <SyncLine />
+    </div>
 
-      <CardSheet
-        card={openCard}
-        onClose={() => setOpenCard(null)}
-        onMakeTask={c => { setOpenCard(null); setTaskFrom(c) }}
-      />
-      <TaskSheet
-        open={!!taskFrom}
-        onClose={() => setTaskFrom(null)}
-        fromCard={taskFrom}
-      />
+    {/* The detail pane. On a screen wide enough to hold it beside the list, a
+        card's own content lives here — permanently, no backdrop, no dismissal
+        by clicking elsewhere, because it never covered anything to begin with.
+        Below that width it stays the modal sheet it always was. */}
+    <aside className="hidden lg:block lg:sticky lg:top-6 lg:w-[380px] xl:w-[420px] lg:shrink-0
+                      lg:max-h-[calc(100dvh-3rem)] lg:overflow-y-auto">
+      {openCard ? (
+        <div className="rounded-2xl bg-ink-900/60 border border-white/[0.05] p-5">
+          <CardDetail
+            card={openCard}
+            onClose={() => setOpenCard(null)}
+            onMakeTask={c => { setOpenCard(null); setTaskFrom(c) }}
+          />
+        </div>
+      ) : (
+        <div className="rounded-2xl bg-ink-900/60 border border-white/[0.05] p-6 text-center">
+          <p className="text-[13px] text-fg-mute">Pick something on the left to see it here.</p>
+        </div>
+      )}
+    </aside>
+
+    {/* `wide` decides which of these two actually receives the card — never
+        both, since the modal locks body scroll the moment it is handed one,
+        whether or not `lg:hidden` is also hiding it visually. */}
+    <CardSheet
+      card={wide ? null : openCard}
+      onClose={() => setOpenCard(null)}
+      onMakeTask={c => { setOpenCard(null); setTaskFrom(c) }}
+    />
+    <TaskSheet
+      open={!!taskFrom}
+      onClose={() => setTaskFrom(null)}
+      fromCard={taskFrom}
+    />
     </div>
   )
 }

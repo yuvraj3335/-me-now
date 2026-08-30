@@ -64,6 +64,9 @@ export function Work() {
     await Promise.all(list.map((t, i) => actions.updateTask(t.id, { sort: i })))
   }
 
+  // Same distinction as Now: no state yet is not the same fact as "0 waiting".
+  if (!state) return <div className="pt-24"><Empty>Reading what's queued…</Empty></div>
+
   return (
     <div className="pb-24">
       <header className="pt-8 pb-6 flex items-end justify-between gap-4">

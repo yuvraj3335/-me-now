@@ -63,9 +63,9 @@ export function Mail() {
   if (!state.connected) return <NotConnected state={state} onRetry={() => void reload(true)} />
 
   return (
-    <div className="sm:h-[calc(100dvh-3.5rem)] sm:flex sm:gap-0 -mx-4 sm:-mx-6 pb-20 sm:pb-0">
+    <div className="sm:h-dvh sm:flex sm:gap-0 -mx-4 sm:-mx-6 pb-20 sm:pb-0">
       {/* List */}
-      <section className={`sm:w-[380px] lg:w-[420px] sm:shrink-0 sm:border-r sm:border-white/[0.06]
+      <section className={`sm:w-[360px] lg:w-[400px] xl:w-[440px] sm:shrink-0 sm:border-r sm:border-white/[0.06]
                            sm:overflow-y-auto ${selected ? 'hidden sm:block' : ''}`}>
         <header className="sticky top-0 z-10 bg-ink-900/92 backdrop-blur-xl px-4 sm:px-5 pt-4 pb-2">
           <div className="flex items-center gap-2">

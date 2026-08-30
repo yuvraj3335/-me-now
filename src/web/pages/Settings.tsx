@@ -130,6 +130,11 @@ export function Settings() {
         <p className="mt-2 text-[13px] text-fg-mute">What is connected, and what runs where</p>
       </header>
 
+      {/* Panes, not a column of prose: each section is a scannable card, and on
+          a screen wide enough for two, they flow into two so "is notifications
+          on" doesn't mean scrolling past six unrelated sections to check. */}
+      <div className="lg:columns-2 lg:gap-x-6">
+
       {/* --------------------------- appearance ------------------------------ */}
       <Section title="Appearance" hint="Follows the system unless you say otherwise.">
         <ThemeChoice />
@@ -345,6 +350,8 @@ export function Settings() {
         </button>
       </Section>
 
+      </div>
+
       <AuditSheet open={audit} onClose={() => setAudit(false)} />
       <ClientSheet
         source={clientFor}
@@ -360,7 +367,7 @@ export function Settings() {
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <section className="mt-9 first:mt-4">
+    <section className="mb-5 break-inside-avoid rounded-2xl bg-ink-900/60 border border-white/[0.05] p-5">
       <h2 className="text-[11.5px] uppercase tracking-[0.08em] text-fg-mute">{title}</h2>
       {hint && <p className="text-[12.5px] text-fg-mute mt-1 mb-3 leading-relaxed max-w-[58ch]">{hint}</p>}
       <div className={hint ? '' : 'mt-3'}>{children}</div>

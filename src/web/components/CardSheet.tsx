@@ -18,16 +18,20 @@ const SNOOZE = [
   { label: 'Next week', at: () => atHour(7, 9) },
 ]
 
-export function CardSheet({
+/**
+ * On a laptop wide enough for one, this is also what sits in Now's persistent
+ * detail pane — same content, no modal chrome around it, because opening a
+ * pane and opening a sheet are the same act with a different frame. See
+ * `CardSheet` below for the modal wrapper this is normally used through.
+ */
+export function CardDetail({
   card, onClose, onMakeTask,
-}: { card: CardT | null; onClose: () => void; onMakeTask: (c: CardT) => void }) {
+}: { card: CardT; onClose: () => void; onMakeTask: (c: CardT) => void }) {
   const [thread, setThread] = useState<any>(null)
   const [loadingThread, setLoadingThread] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  useEffect(() => { setThread(null); setCopied(false) }, [card?.group_key])
-
-  if (!card) return null
+  useEffect(() => { setThread(null); setCopied(false) }, [card.group_key])
 
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload(); onClose() }
 
@@ -36,13 +40,12 @@ export function CardSheet({
 
   async function loadThread() {
     setLoadingThread(true)
-    try { setThread(await actions.thread(card!.group_key)) }
+    try { setThread(await actions.thread(card.group_key)) }
     catch (e) { setThread({ error: (e as Error).message }) }
     finally { setLoadingThread(false) }
   }
 
   return (
-    <Sheet open onClose={onClose} title={undefined}>
       <div className="pt-1">
         <h2 className="text-[17px] leading-snug tracking-[-0.015em] font-medium pr-6">{card.title}</h2>
         <p className="mt-1.5 text-[13px] text-fg-dim">
@@ -208,6 +211,17 @@ export function CardSheet({
           </p>
         )}
       </div>
+  )
+}
+
+/** The modal wrapper: a bottom sheet on a phone, a centred panel up to `lg`. */
+export function CardSheet({
+  card, onClose, onMakeTask,
+}: { card: CardT | null; onClose: () => void; onMakeTask: (c: CardT) => void }) {
+  if (!card) return null
+  return (
+    <Sheet open onClose={onClose} title={undefined}>
+      <CardDetail card={card} onClose={onClose} onMakeTask={onMakeTask} />
     </Sheet>
   )
 }
