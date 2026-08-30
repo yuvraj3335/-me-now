@@ -23,6 +23,8 @@ const now = Date.now()
 db.query(`DELETE FROM events`).run()
 db.query(`DELETE FROM tasks`).run()
 db.query(`DELETE FROM goals`).run()
+db.query(`DELETE FROM cards WHERE source_id LIKE 'demo:%'`).run()
+db.query(`DELETE FROM card_state WHERE group_key LIKE 'demo:%'`).run()
 
 const goals = [
   { title: 'Ship the connections widget', color: '#e9a23b' },
@@ -47,10 +49,13 @@ const titles = [
 function volumeFor(daysAgo: number): number {
   const d = new Date(now - daysAgo * DAY).getDay()
   const weekend = d === 0 || d === 6
-  const base = weekend ? 0.5 : 3.1
+  // Denser than it was. The old base put two or three marks on a thirty-day
+  // axis, which is exactly the shape the charts have a special one-line form
+  // for — so every panel reviewed against this data reviewed the empty case.
+  const base = weekend ? 1.6 : 6.4
   // A gentle upward trend, so "pace" has something honest to report.
   const trend = 1 + (30 - daysAgo) / 90
-  return Math.max(0, Math.round((base * trend + (Math.random() * 2.4 - 1.2))))
+  return Math.max(0, Math.round((base * trend + (Math.random() * 3.2 - 1.6))))
 }
 
 let created = 0, done = 0
@@ -95,4 +100,42 @@ for (let daysAgo = 45; daysAgo >= 0; daysAgo--) {
   }
 }
 
-console.log(`seeded ${created} tasks (${done} done) + ${goals.length} goals across 45 days`)
+/**
+ * A live desk, so the donut and the staleness bar have something to draw.
+ *
+ * The events log alone cannot feed them: `aging` and `openNow` read `cards`
+ * joined to `card_state`, so a database seeded only with events rendered the two
+ * panels the page now opens with as empty rows. Ages are spread across all five
+ * buckets on purpose — one bucket collapses the bar to a single colour, which is
+ * the case the page deliberately does not paint.
+ */
+const SOURCES = ['claude', 'slack', 'github', 'gmail', 'sentry'] as const
+// Roughly the real mix: Claude Code dominates, Sentry is a handful.
+const WEIGHTS = [46, 14, 12, 8, 4]
+const AGES = [0.4, 2, 5, 10, 24]
+
+let cards = 0
+SOURCES.forEach((source, si) => {
+  for (let i = 0; i < WEIGHTS[si]!; i++) {
+    const ageDays = AGES[i % AGES.length]! + Math.random() * 0.8
+    const at = now - ageDays * DAY
+    const group = `demo:${source}:${i}`
+    const title = titles[(si * 7 + i) % titles.length]!
+    db.query(
+      `INSERT OR REPLACE INTO cards
+         (id, source, source_id, group_key, kind, title, why, url, ts, pile, first_seen_at, last_seen_at, gone)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+    ).run(`${source}:${group}`, source, group, group, 'thread', title,
+          'seeded for the analytics review', 'https://example.invalid/', at,
+          i % 3 === 0 ? 'now' : 'open', at, now)
+    db.query(
+      `INSERT OR REPLACE INTO card_state (group_key, status, priority, first_seen_at, updated_at)
+       VALUES (?,?,?,?,?)`,
+    ).run(group, i % 9 === 0 ? 'in_progress' : 'not_started', i % 11 === 0 ? 1 : 2, at, now)
+    cards++
+  }
+})
+
+console.log(
+  `seeded ${created} tasks (${done} done) + ${goals.length} goals + ${cards} cards across 45 days`,
+)
