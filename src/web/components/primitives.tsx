@@ -22,7 +22,9 @@ export type ButtonVariant = 'primary' | 'default' | 'ghost' | 'danger'
  * `sm` and `md` carry `.hit`, an `::after { inset: -6px }` that grows the touch
  * target to 38/44px while the painted box stays 26/32px. Small ink, generous
  * target: that is what "feels like a tool" means, and it is what lets a button
- * shrink without becoming unhittable on a phone.
+ * shrink without becoming unhittable on a phone. It applies under
+ * `(any-pointer: coarse)` only — see the note in `styles.css` for why a mouse
+ * does not get it.
  *
  * `primary` is the amber fill, and there is at most one per surface.
  * `default` is bordered and not filled, which is what actually reads as a tool.

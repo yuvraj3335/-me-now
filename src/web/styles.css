@@ -338,17 +338,30 @@
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
   /*
-    Small ink, generous target.
+    Small ink, generous target — where there are fingers.
 
     A 26px row action and a 32px toolbar button are the right *painted* size for
     a tool; they are the wrong touch target. This decouples the two, so a button
     can shrink to where it belongs visually without becoming unhittable on a
-    phone. Applied by `Button` at sizes sm and md.
+    phone. Applied by `Button` at sizes sm and md, and by `Chip`.
+
+    Scoped to coarse pointers, which is the case it was written for: a mouse
+    hits a 26px box without help. It is scoped rather than unconditional because
+    an absolutely positioned box that reaches 6px past its parent's padding edge
+    IS scroll overflow, and Chrome counts it — `Connect` reported clientWidth 64
+    against scrollWidth 70 while its label measured 47.64px inside 16px of
+    padding and was not clipped at all. Every audit for clipped text then read
+    every small button in the product as a sizing bug. `overflow: clip`,
+    `overflow-clip-margin` and `contain: paint` were all measured: none of them
+    take the box back out of the overflow, so the fix is to ask for the bigger
+    target only where it buys something.
   */
-  .hit::after {
-    content: '';
-    position: absolute;
-    inset: -6px;
+  @media (any-pointer: coarse) {
+    .hit::after {
+      content: '';
+      position: absolute;
+      inset: -6px;
+    }
   }
 
   /*

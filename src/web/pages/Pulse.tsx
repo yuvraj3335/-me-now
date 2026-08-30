@@ -100,18 +100,18 @@ export function Pulse() {
           "did today's ageing spike match today's low throughput" is a question
           about two numbers at once, not two numbers a scroll apart. */}
       <div className="lg:grid lg:grid-cols-2 lg:gap-x-12 lg:gap-y-4 lg:items-start">
-        <Panel title="Throughput" hint="tasks finished each day">
+        <Panel title="Throughput">
           <Bars
             data={a.throughput.done}
             label={d => `${d.day.slice(5)} · ${d.value} done`}
           />
         </Panel>
 
-        <Panel title="Response time" hint="how long something waits before you touch it">
+        <Panel title="Response time">
           <Trend data={a.responseTime.daily} format={v => duration(v)} />
         </Panel>
 
-        <Panel title="The pile" hint="what arrived vs what you cleared">
+        <Panel title="The pile">
           <div className="grid sm:grid-cols-2 gap-8">
             <div>
               <SubLabel>Arrived</SubLabel>
@@ -124,7 +124,7 @@ export function Pulse() {
           </div>
         </Panel>
 
-        <Panel title="Your rhythm" hint="when the work actually happens">
+        <Panel title="Your rhythm">
           <div className="grid sm:grid-cols-2 gap-8 items-center">
             <DayClock data={a.rhythm.byHour} />
             <div>
@@ -135,7 +135,7 @@ export function Pulse() {
         </Panel>
 
         {a.aging.length > 0 && (
-          <Panel title="Ageing" hint="what is piling up, and how stale it is">
+          <Panel title="Ageing">
             <StackedAging
               rows={a.aging}
               buckets={a.agingBuckets}
@@ -160,7 +160,7 @@ export function Pulse() {
         )}
 
         {a.goals.length > 0 && (
-          <Panel title="Goals" hint="tasks completed against each">
+          <Panel title="Goals">
             <div className="space-y-4">
               {a.goals.map((g, i) => {
                 const pctDone = g.total ? g.done / g.total : 0
@@ -185,10 +185,6 @@ export function Pulse() {
           </Panel>
         )}
       </div>
-
-      <p className="mt-10 pt-4 border-t border-rule text-sm text-fg-mute">
-        Counted from your own activity log. Nothing is estimated.
-      </p>
     </div>
   )
 }
@@ -212,7 +208,18 @@ function Stat({
   )
 }
 
-function Panel({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
+/**
+ * A heading and a chart.
+ *
+ * `hint` is gone from the signature for the same reason it is gone from `Field`:
+ * six panels each carried a sentence explaining what its own chart was — `tasks
+ * finished each day` under `Throughput`, `what is piling up, and how stale it
+ * is` under `Ageing` — and a chart that needs a sentence is the wrong chart.
+ * Removing the prop is what keeps them from coming back without a code change.
+ * The short labels inside the panels stay: `ARRIVED`, `BY WEEKDAY` and
+ * `4 replies on 1 day — not enough to trend` state facts, they do not instruct.
+ */
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   const still = useStill()
   return (
     <motion.section
@@ -222,10 +229,7 @@ function Panel({ title, hint, children }: { title: string; hint: string; childre
       viewport={{ once: true, margin: '-40px' }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
-      <div className="flex items-baseline gap-2 mb-4">
-        <h2 className="text-md font-medium tracking-[-0.01em]">{title}</h2>
-        <span className="text-sm text-fg-mute">{hint}</span>
-      </div>
+      <h2 className="text-md font-medium tracking-[-0.01em] mb-4">{title}</h2>
       {children}
     </motion.section>
   )

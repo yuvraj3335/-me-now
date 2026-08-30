@@ -156,27 +156,33 @@ export function Settings() {
 
         <Section title="Sources">
           {sources.map(s => (
-            <div key={s.name} className="flex items-center gap-3 h-11 border-b border-rule last:border-0 min-w-0">
-              <SourceDot source={s.name} size={6} />
-              <span className="text-base w-24 shrink-0 truncate">{SOURCE_LABEL[s.name]}</span>
-              <span className={`text-sm w-28 shrink-0 truncate ${stateTone(s)}`}>{stateWord(s)}</span>
+            <div key={s.name} className="py-2 border-b border-rule last:border-0 min-w-0">
+              <div className="flex items-center gap-3 min-h-7 min-w-0">
+                <SourceDot source={s.name} size={6} />
+                <span className="text-base w-24 shrink-0 truncate">{SOURCE_LABEL[s.name]}</span>
+                <span className={`text-sm shrink-0 ${stateTone(s)}`}>{stateWord(s)}</span>
+                {s.oauthable && (
+                  <span className="ml-auto shrink-0">
+                    <Button size="sm" variant={s.ok ? 'ghost' : 'default'} disabled={busy === s.name}
+                      onClick={() => (s.ok ? actions.disconnect(s.name).then(load) : connect(s))}>
+                      {busy === s.name ? <Loader2 size={13} className="animate-spin" /> : null}
+                      {s.ok ? 'Disconnect' : 'Connect'}
+                    </Button>
+                  </span>
+                )}
+              </div>
               {/* The API's real `detail` — `signed in as yuvraj3335`, `7 projects
                   on this machine` — not a generic `via`. Those are the facts
-                  that confirm the connection is the right one.
+                  that confirm the connection is the right one, and they get
+                  their own line because they cannot survive sharing one.
 
-                  `min-w-0` is what makes `truncate` work here: a flex child's
-                  default minimum is its content width, so without it this span
-                  pushed the whole row wider than the column and the Connect
-                  buttons landed on top of the tile next door. */}
-              <span className="text-sm text-fg-mute truncate grow min-w-0" title={s.detail}>
-                {s.ok ? s.detail : ''}
-              </span>
-              {s.oauthable && (
-                <Button size="sm" variant={s.ok ? 'ghost' : 'default'} disabled={busy === s.name}
-                  onClick={() => (s.ok ? actions.disconnect(s.name).then(load) : connect(s))}>
-                  {busy === s.name ? <Loader2 size={13} className="animate-spin" /> : null}
-                  {s.ok ? 'Disconnect' : 'Connect'}
-                </Button>
+                  Beside the state word and a button, this column was 11px wide
+                  in a 392px tile: `connected (search_issues)` rendered as `c.`
+                  — the page fetching the right fact and then truncating it into
+                  nonsense. Indented 18px, the dot's width plus the gap, so it
+                  hangs under the source name it belongs to. */}
+              {s.ok && s.detail && (
+                <p className="mt-0.5 pl-[18px] text-sm text-fg-mute break-words">{s.detail}</p>
               )}
             </div>
           ))}
@@ -184,15 +190,12 @@ export function Settings() {
             <p className="text-sm text-warn pt-2">{connectError.text}</p>
           )}
           {sources.some(s => !s.ok && CLI_FALLBACK[s.name]) && (
-            <details className="pt-2">
-              <summary className="cursor-pointer list-none text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
-                Connect one from a terminal
-              </summary>
-              <pre className="mt-2 p-2 rounded-control bg-ink-850 border border-edge text-xs
+            <Disclosure label="Connect one from a terminal">
+              <pre className="mt-1 p-2 rounded-control bg-ink-850 border border-edge text-xs
                               font-mono text-fg-dim overflow-x-auto">
                 {sources.filter(s => !s.ok && CLI_FALLBACK[s.name]).map(s => CLI_FALLBACK[s.name]).join('\n\n')}
               </pre>
-            </details>
+            </Disclosure>
           )}
         </Section>
 
@@ -284,12 +287,9 @@ export function Settings() {
             tone={truto && !truto.profiles.length ? 'warn' : undefined}
           />
           {!!truto?.profiles.length && (
-            <details>
-              <summary className="cursor-pointer list-none text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
-                Which ones
-              </summary>
-              <p className="mt-1.5 text-sm text-fg-mute font-mono break-words">{truto.profiles.join(' · ')}</p>
-            </details>
+            <Disclosure label="Which ones">
+              <p className="mt-1 pl-[19px] text-sm text-fg-mute font-mono break-words">{truto.profiles.join(' · ')}</p>
+            </Disclosure>
           )}
         </Section>
 
@@ -358,6 +358,29 @@ function stateTone(s: SourceStatus): string {
   if (!s.ok || (s.lastSync && !s.lastSync.connected)) return 'text-fg-mute'
   if (s.lastSync && !s.lastSync.ok) return 'text-warn'
   return 'text-ok'
+}
+
+/**
+ * A row that opens.
+ *
+ * `Which ones` used to be a bare `list-none` summary with no marker and no
+ * hover target — a left-aligned fragment under the Truto CLI row that read as
+ * something left behind rather than as something to click. The chevron is the
+ * whole difference between a control and a stray line of text, and it turns to
+ * say which state it is in.
+ */
+function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <details className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 h-8 text-sm text-fg-mute
+                          hover:text-fg-dim transition-colors duration-100">
+        <ChevronRight size={13}
+          className="shrink-0 text-fg-mute transition-transform duration-100 group-open:rotate-90" />
+        {label}
+      </summary>
+      {children}
+    </details>
+  )
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

@@ -287,6 +287,14 @@ describe('the console does not become a feed again', () => {
     const table = read('src/web/components/CardTable.tsx')
     const head = table.slice(table.indexOf('export function GroupHead('))
     expect(head.slice(0, 400), 'the group header grew a hint').not.toMatch(/\bhint\b/)
+
+    // And Pulse's chart panel, which carried six of them: `tasks finished each
+    // day` under `Throughput`, `what is piling up, and how stale it is` under
+    // `Ageing`. The prop is what let them exist, so the prop is what is gone.
+    const pulse = read('src/web/pages/Pulse.tsx')
+    const panel = pulse.slice(pulse.indexOf('function Panel('))
+    expect(panel.slice(0, 300), 'the Pulse panel grew a hint').not.toMatch(/\bhint\b/)
+    expect(pulse, 'a Pulse panel is being given a hint').not.toMatch(/<Panel[^>]*\shint=/)
     for (const f of tsx) {
       expect(read(f), `${f}: a Field is being given a hint`).not.toMatch(/<Field[^>]*\shint=/)
     }

@@ -41,9 +41,15 @@ export type RowAction = {
  * instead of on the list is how the table came out 992px wide inside a 792px
  * container and slid underneath the pane.
  *
- * Columns disappear from the middle out — Who, then Where, then Why — and Title
- * never drops below 280px, because a title cut to forty characters is a title
- * that has to be opened to be read.
+ * Columns disappear from the middle out, and Who and Where disappear together:
+ * they are the two facts the detail pane already carries in full, and dropping
+ * one while keeping the other is a rule nobody can predict from the header.
+ * Eight columns beside a 400px pane want 668px of fixed width and leave Title
+ * 140px at 1440, which is not a title; six leave it 348px, which is.
+ *
+ * Why is the last thing to go. A clipped Title still has its full text one click
+ * away in the pane; a clipped `why` has nowhere else to be — so Title gives up
+ * its nominal 280px, down to a 220px floor, rather than lose it.
  */
 export type Columns = {
   why: boolean
@@ -66,9 +72,17 @@ export const paneWidth = (w: number) => (w >= 1440 ? 400 : 352)
  * their gap is 72px. `Source` and `When` are wider than their *content* needs
  * because their column headings are wider than they are — 60px of dots under a
  * 44px column made `SOURCE` and `WHEN` collide into `SOURCEWHEN`.
+ *
+ * Why is 176px because that is what its own sentences measure: `your open pull
+ * request` needs 148px with the cell's padding, `you left this open` needs
+ * 118px. At 108px all twelve rows of it rendered `your open pul…`, which
+ * answers nothing — on the one column the screen exists to answer.
  */
-const W = { kind: 88, why: 108, who: 88, where: 120, source: 68, when: 56, actions: 72 }
+const W = { kind: 88, why: 176, who: 88, where: 120, source: 68, when: 56, actions: 72 }
+
+/** What Title wants, and the floor it will take rather than give up Why. */
 const TITLE_MIN = 280
+const TITLE_FLOOR = 220
 
 export function columnsFor(width: number): Columns {
   const list = width - RAIL - paneWidth(width) - PAGE_PAD
@@ -77,10 +91,10 @@ export function columnsFor(width: number): Columns {
     W.kind + W.source + W.when + W.actions +
     (cols.why ? W.why : 0) + (cols.who ? W.who : 0) + (cols.where ? W.where : 0)
 
-  for (const drop of ['who', 'where', 'why'] as const) {
-    if (list - spend() >= TITLE_MIN) break
-    cols[drop] = false
-  }
+  // The pair first — both are in the pane — and Why only if what is left still
+  // cannot give Title a readable line.
+  if (list - spend() < TITLE_MIN) { cols.who = false; cols.where = false }
+  if (list - spend() < TITLE_FLOOR) cols.why = false
   return cols
 }
 
@@ -111,7 +125,11 @@ export function TableHead({ cols }: { cols: Columns }) {
         {cols.where && <th className={HEAD} scope="col">Where</th>}
         <th className={HEAD} scope="col">Source</th>
         <th className={`${HEAD} text-right`} scope="col">When</th>
-        <th className={HEAD} scope="col"><span className="sr-only">Actions</span></th>
+        {/* Named for a screen reader and empty for everyone else. An `sr-only`
+            span carried the word in a 1px `overflow: hidden` box, which is a
+            53px scroll overflow on a header cell — indistinguishable, to
+            anything measuring clipped text, from a column that is too narrow. */}
+        <th className={HEAD} scope="col" aria-label="Actions" />
       </tr>
     </thead>
   )
