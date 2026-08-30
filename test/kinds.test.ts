@@ -79,3 +79,14 @@ describe('truncation keeps the half that differs', () => {
     expect(headTruncate('trutohq/truto', 13)).toBe('trutohq/truto')
   })
 })
+
+test('a Slack channel is prefixed once', () => {
+  // The search result names the channel `#truto` and the poller stores that
+  // verbatim; prefixing again rendered `##truto` in the Where column. It was
+  // invisible for as long as that column was dropped at every laptop width.
+  const card = { meta: {}, sources: [] } as any
+  const src = (channel: string) => ({ source: 'slack', meta: { channel }, kind: 'mention' }) as any
+  expect(whereOf(src('#truto'), card)).toBe('#truto')
+  expect(whereOf(src('truto'), card)).toBe('#truto')
+  expect(whereOf({ source: 'slack', meta: { is_dm: true }, kind: 'dm' } as any, card)).toBe('DM')
+})

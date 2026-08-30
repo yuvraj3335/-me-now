@@ -86,12 +86,17 @@ export const paneWidth = (w: number) => (w >= 1440 ? 400 : 360)
  * Column widths, in the order they appear.
  *
  * Sized to their content, and measured rather than guessed: `Session` behind a
- * 20px glyph slot needs 96, `trutohq/truto` in mono needs 112, two source dots
- * need 20, `22m` under a `WHEN` heading needs 64, and one 32px row action needs
- * 64. `Why` is 168 because that is what its own sentences measure —
- * `your open pull request` needs 148.
+ * 20px glyph slot needs 96, `trutohq/truto` head-truncated in mono needs 112,
+ * two source dots need 20, the `WHEN` heading needs 56, and one 32px row action
+ * needs 64. `Why` is 160 because that is what its own longest sentence measures:
+ * `your open pull request` is 140px with the cell's padding.
+ *
+ * These add up to 396 at 1440, which leaves `Where` its 112 and Title 284 — four
+ * pixels above the floor. That margin is the whole reason `SOURCE` stopped being
+ * a heading: its label was 45px wide to caption a 6px dot, and `columnsFor` was
+ * dropping the repo name at every laptop width to pay for it.
  */
-const W = { kind: 96, why: 168, where: 112, dots: 20, when: 64, actions: 64 }
+const W = { kind: 96, why: 160, where: 112, dots: 20, when: 56, actions: 64 }
 
 /** What Title wants. It is the only elastic column. */
 const TITLE_MIN = 280

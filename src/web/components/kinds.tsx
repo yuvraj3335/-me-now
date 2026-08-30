@@ -96,7 +96,10 @@ export function whereOf(source: CardSource | undefined, card: Card): string | nu
   const m = { ...(source?.meta ?? {}), ...card.meta }
   switch (source?.source) {
     case 'slack':
-      return m.is_dm ? 'DM' : m.channel ? `#${m.channel}` : null
+      // Slack's search result names the channel as `#truto`, and the poller
+      // stores that string verbatim, so prefixing it again rendered `##truto`.
+      // Invisible until now: `Where` was dropped at every laptop width.
+      return m.is_dm ? 'DM' : m.channel ? String(m.channel).replace(/^#*/, '#') : null
     case 'gmail':
       return (source.account ?? m.account) || null
     case 'github':
