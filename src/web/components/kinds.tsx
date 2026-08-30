@@ -121,8 +121,9 @@ export function whereOf(source: CardSource | undefined, card: Card): string | nu
  * the half that differs.
  *
  * The budget is characters, and it has to match the column's real width or CSS
- * truncates the result a second time and cuts it at *both* ends. Mono at 13px
- * advances 0.6em, so a 120px column with 8px of padding either side holds 13.
+ * truncates the result a second time and cuts it at *both* ends — which is
+ * exactly what `…endflo-tru…` on the live page was. Mono at 13px advances 0.6em,
+ * so the 112px column with its 16px trailing pad holds twelve.
  */
 export function headTruncate(v: string, max: number): string {
   return v.length <= max ? v : `…${v.slice(-(max - 1))}`

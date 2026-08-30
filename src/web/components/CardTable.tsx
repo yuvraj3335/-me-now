@@ -261,7 +261,7 @@ export function CardRow({
           the one form that identifies nothing. */}
       {cols.where && (
         <td className={`${CELL} text-sm text-fg-dim font-mono overflow-hidden`} title={where ?? undefined}>
-          {where ? headTruncate(where, 13) : ''}
+          {where ? headTruncate(where, 12) : ''}
         </td>
       )}
 
