@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { db } from '../src/server/db'
 import {
   BOXES, cursorOf, forwardSubject, isBox, listOf, normalizeMessage, normalizeThread,
   parseAddress, parseAddresses, queryFor, quoteFor, replyRecipients, replySubject,
@@ -299,5 +301,39 @@ describe('only what the tool says it takes', () => {
     const args = { query: 'x', maxResults: 20 }
     expect(onlyDeclared(args, undefined)).toBe(args)
     expect(onlyDeclared(args, [])).toBe(args)
+  })
+})
+
+describe('the escapes already in the database are repaired, not left to the next poll', () => {
+  test('migration 8 rewrites stored Gmail text through the same decode', () => {
+    // Gmail on this deployment has no credential Wake can obtain, so a row
+    // written before the normaliser decoded anything would never be written
+    // again — the escapes would have outlived the fix. The migration is scoped
+    // to the one source whose text is escaped HTML by construction.
+    const src = readFileSync('src/server/db.ts', 'utf8')
+    const m = /\{\s*id: 8,[\s\S]*?\n  \},\n/.exec(src)
+    expect(m, 'the stored-text repair left the migration list').toBeTruthy()
+    expect(m![0], 'the repair stopped covering the card fields the desk renders')
+      .toMatch(/repair\('cards', `source = 'gmail'`[\s\S]{0,200}excerpt/)
+    expect(m![0], 'a message body was collapsed like a one-line field')
+      .toContain("['text_body', plainBody]")
+  })
+
+  test('it ran, on a database made by this build', () => {
+    // A migration that throws leaves its id unrecorded and the next boot tries
+    // again — so the presence of the row is the proof that the repair executed
+    // against a real schema rather than merely compiling.
+    const row = db.query<{ name: string }, []>(
+      `SELECT name FROM schema_migrations WHERE id = 8`,
+    ).get()
+    expect(row?.name).toBe('decode-stored-mail-text')
+  })
+
+  test('a row that is already clean is not rewritten', () => {
+    // The repair compares before it writes, so re-running it is free and a
+    // body that never carried an escape keeps its exact bytes.
+    const clean = 'Deploy notes\n\n  indented line'
+    expect(plainBody(clean)).toBe(clean)
+    expect(plainText('Already fine')).toBe('Already fine')
   })
 })

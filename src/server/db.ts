@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DATA_DIR } from './env'
+import { plainBody, plainText } from './mail/sanitize'
 
 const DB_PATH = `${DATA_DIR}/wake.sqlite`
 mkdirSync(dirname(DB_PATH), { recursive: true })
@@ -622,6 +623,56 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
       for (const col of ['origin_source', 'origin_title', 'origin_why', 'origin_url', 'origin_excerpt', 'origin_meta']) {
         if (!hasColumn('tasks', col)) db.exec(`ALTER TABLE tasks ADD COLUMN ${col} TEXT`)
       }
+    },
+  },
+  {
+    id: 8,
+    name: 'decode-stored-mail-text',
+    // Mail text is escaped HTML even when it is sold as plain text, and Wake
+    // stored it exactly as Google sent it: `Jobber let&#39;s you send quotes`
+    // and `Burns &amp; McDonnell India` followed by ten invisible joiners, on
+    // the live board, in a card excerpt and a Now row and a detail pane. The
+    // normaliser decodes it now — but only on the way in, and Gmail on this
+    // deployment has no credential Wake can obtain, so those rows would never be
+    // written again and the escapes would have outlived the bug.
+    //
+    // Rewritten in place rather than left to the next poll, and scoped to the
+    // one source whose text is escaped HTML by construction. Everything else
+    // arrives as API JSON or through Slack's own `clean`.
+    run() {
+      const repair = (
+        table: string,
+        where: string,
+        columns: Array<[name: string, clean: (s: string) => string]>,
+      ) => {
+        const names = columns.map(([n]) => n)
+        const rows = db.query<Record<string, unknown>, []>(
+          `SELECT rowid AS _rowid, ${names.join(', ')} FROM ${table} WHERE ${where}`,
+        ).all()
+        for (const row of rows) {
+          const next: Record<string, string> = {}
+          for (const [name, clean] of columns) {
+            const v = row[name]
+            if (typeof v !== 'string' || !v) continue
+            const out = clean(v)
+            if (out !== v) next[name] = out
+          }
+          const keys = Object.keys(next)
+          if (!keys.length) continue
+          db.query(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE rowid = ?`)
+            .run(...keys.map(k => next[k]!), row._rowid as number)
+        }
+      }
+
+      repair('cards', `source = 'gmail'`, [
+        ['title', plainText], ['excerpt', plainText], ['who', plainText], ['actor', plainText],
+      ])
+      repair('mail_threads', '1 = 1', [
+        ['subject', plainText], ['snippet', plainText], ['from_name', plainText],
+      ])
+      repair('mail_messages', '1 = 1', [
+        ['subject', plainText], ['from_name', plainText], ['text_body', plainBody],
+      ])
     },
   },
 ]
