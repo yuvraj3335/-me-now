@@ -1,5 +1,47 @@
+import type { CardStatus } from '../../shared/status'
+
 export type SourceName = 'slack' | 'gmail' | 'github' | 'sentry' | 'claude'
+
+/**
+ * The three groups, still spelled the way the database spells them.
+ *
+ * The words on the screen changed — `On you`, `Waiting`, `Snoozed` — and the
+ * field names did not. That is deliberate: a rename in the JSON would have been
+ * a migration, a poller change and a set of server tests, to buy nothing a
+ * lookup table does not already buy. `PILE_LABEL` is the only place the two
+ * vocabularies meet, so there is exactly one file to read when they disagree.
+ */
 export type Pile = 'now' | 'open' | 'parked'
+
+export const PILE_LABEL: Record<Pile, string> = {
+  now: 'On you',
+  open: 'Waiting',
+  parked: 'Snoozed',
+}
+
+/**
+ * One message on a thread, as the Slack adapter already cleaned it.
+ *
+ * `tagged` is decided on the raw Slack markup, before the ids became display
+ * names — so it survives somebody changing what they are called.
+ */
+export type ThreadEntry = {
+  /** A Slack ts string, e.g. `1787814333.427979`. Not epoch ms. */
+  ts: string
+  who: string
+  who_id: string
+  text: string
+  tagged: boolean
+  mine: boolean
+}
+
+/** One message in a Gmail thread. `ts` here IS epoch ms — Gmail is not Slack. */
+export type MailEntry = {
+  ts: number
+  who: string | null
+  snippet: string
+  mine: boolean
+}
 
 export type CardSource = {
   source: SourceName
@@ -32,6 +74,25 @@ export type Card = {
   kind: string
   ts: number
   first_seen_at: number
+  /**
+   * How far along this is. Always present, on every card, even one that has
+   * never been touched — so nothing here ever reads `state?.status` and has to
+   * decide what an absent one means.
+   */
+  status: CardStatus
+  /**
+   * What has landed on this since he last looked at it, computed once on the
+   * server. The `+N` renders iff `count > 0` and the amber edge appears iff
+   * `count > 0` — one expression, read twice, so they cannot disagree. Nothing
+   * in the browser recounts it.
+   */
+  activity: {
+    count: number
+    /** He was named in one of the counted messages. Changes the word, never the count. */
+    tagged: boolean
+    /** When the newest of them landed, or null when there were none. */
+    at: number | null
+  }
   meta: Record<string, any>
   sources: CardSource[]
   state: {

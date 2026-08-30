@@ -39,7 +39,7 @@ import { db, logEvent, now } from './../db'
 import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
 import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME } from './../env'
-import { readsLikeAsk } from './../sources/slack'
+import { isDirectMessage, readsLikeAsk } from './../sources/slack'
 import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
 import { inspect } from './../untrusted'
@@ -212,10 +212,10 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
      * fallback it exists to be. It still fires for Gmail today, and it fires
      * for Slack again the moment this token stops being accepted.
      *
-     * The question is not the poller's. The poll asks `to:me` and `<@me>`;
-     * this asks for his *name*, which is how people address someone in a
-     * channel without typing a handle — and is the half of "named on" that
-     * a mention search never sees.
+     * The question is not the poller's. The poll asks `<@me>` and the
+     * usergroups he belongs to; this asks for his *name*, which is how people
+     * address someone in a channel without typing a handle — and is the half of
+     * "named on" that a mention search never sees.
      */
     const hits = await searchSlack(`"${ME.name}" after:${since()}`, FETCH_MAX_ROWS)
     return hits.map(h => slackCard(h)).filter((c): c is RawCard => !!c)
@@ -247,11 +247,15 @@ function slackCard(h: SearchHit): RawCard | null {
   const text = redact(h.excerpt ?? '').replace(/\s+/g, ' ').trim()
   if (!h.ref || !text) return null
   const channel = (h.title ?? '').replace(/^#/, '').replace(/^DM\s+/, '')
-  const isDm = /^DM\b/.test(h.title ?? '')
+  // The DM ban is structural, and that means every pipe. Fetch asks a question
+  // the poller does not ask, and a hit it finds in a direct message is the same
+  // thing the poller now refuses — so it is refused here through the same
+  // function, rather than through a second opinion about what a DM looks like.
+  if (isDirectMessage({ channelId: h.ref.split(':')[0], channelName: h.title })) return null
   return {
     source: 'slack',
     source_id: h.ref,
-    kind: isDm ? 'dm' : 'mention',
+    kind: 'mention',
     title: text.slice(0, 200),
     why: whyFrom(text, 'waiting'),
     who: h.actor || undefined,
@@ -264,7 +268,7 @@ function slackCard(h: SearchHit): RawCard | null {
     meta: {
       found_by: 'fetch',
       channel,
-      is_dm: isDm,
+      is_dm: false,
       channel_id: h.ref.split(':')[0],
       thread_ts: h.ref.split(':')[1],
     },
@@ -286,7 +290,7 @@ function promptFor(name: Connector): string {
   const what: Record<Connector, string> = {
     slack:
       `Search Slack for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
-      `(a) messages addressed to ${who} — direct messages to him, and messages that mention him by name or handle; ` +
+      `(a) channel messages that address ${who} by name or handle — never a direct message, which is not work somebody assigned; ` +
       `(b) threads in ${ME.org} channels where he is named and someone is waiting on an answer.`,
     gmail:
       `Search Gmail for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
@@ -352,12 +356,17 @@ function toCard(name: Connector, f: Found): RawCard | null {
   if (name === 'sentry') refs.push({ t: 'sentry', v: f.id })
   if (url) refs.push({ t: 'url', v: url })
 
+  // A direct message cannot become a card by any route, and the collector is a
+  // route. It is asked for mentions, but it is a model reading somebody else's
+  // search results, so the refusal is enforced here rather than requested there.
+  if (name === 'slack' && isDirectMessage({ channelId: f.id.split(':')[0] })) return null
+
   const suspicious = inspect(`${title}\n${evidence ?? ''}`)
 
   return {
     source: name as SourceName,
     source_id: f.id,
-    kind: name === 'slack' && f.id.startsWith('D') ? 'dm' : KIND[name],
+    kind: KIND[name],
     title,
     why: whyFrom(evidence, f.bucket),
     who: f.who ? redact(f.who).slice(0, 80) : undefined,
@@ -370,7 +379,7 @@ function toCard(name: Connector, f: Found): RawCard | null {
     meta: {
       found_by: 'fetch',
       ...(name === 'slack' && f.id.includes(':')
-        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], is_dm: f.id.startsWith('D') }
+        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], is_dm: false }
         : {}),
       ...(suspicious.suspicious ? { untrusted: suspicious.reasons.join('; ') } : {}),
     },

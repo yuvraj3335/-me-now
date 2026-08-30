@@ -675,7 +675,191 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
       ])
     },
   },
+  {
+    id: 9,
+    name: 'card-status',
+    // How far along a thing is, as one column with five values.
+    //
+    // `done_at` and `not_mine` were the whole vocabulary: a card was either on
+    // the desk or off it, and everything between "I have started this" and "I
+    // have finished it" had nowhere to live. They do not go away — `pile()`
+    // reads them, the restore list reads them, and half the product's undo
+    // machinery is built on them — so the two are kept in step server-side by
+    // exactly one function (`statusPatch` in api.ts) rather than by every route
+    // remembering.
+    //
+    // The backfill is the same fact stated in the new vocabulary: a card that
+    // was completed is `done`, one that was dismissed is `wont_do`, and NOT NULL
+    // DEFAULT covers every other row without a second UPDATE.
+    run() {
+      if (!hasColumn('card_state', 'status')) {
+        db.exec(`ALTER TABLE card_state ADD COLUMN status TEXT NOT NULL DEFAULT 'not_started'`)
+        db.exec(`UPDATE card_state SET status = 'done'    WHERE done_at IS NOT NULL`)
+        db.exec(`UPDATE card_state SET status = 'wont_do' WHERE not_mine = 1`)
+      }
+    },
+  },
+  {
+    id: 10,
+    name: 'slack-thread-identity',
+    /*
+     * A Slack row is a thread now, and his decisions have to follow it there.
+     *
+     * The identity changed under the data: a card was keyed on each message's
+     * own ts and is keyed on the thread's parent from this release on, so one
+     * `#truto` conversation that occupied three rows becomes one. The card rows
+     * self-heal — the poller stops returning the old ids and the sweep marks
+     * them gone — but `card_state` does not, because it is keyed by *group*, and
+     * `slackthread:C05CJ0CUV35:<replyTs>` is a group key nothing will ever
+     * mention again. Every Done, Won't do, snooze and pin he pressed on a row
+     * that turns out to have been a reply would have been stranded there, and
+     * the finished thread would have come back to the desk with no state at all.
+     *
+     * The parent is recoverable from data already in the table: Slack's
+     * permalink carries `?thread_ts=<parent>` on a reply and on a standalone
+     * message alike, and that permalink is the card's `url`. So this reads the
+     * mapping out of the rows rather than guessing at it, moves the state, and
+     * marks the superseded card rows gone directly instead of waiting for a
+     * healthy poll to do it — a partial Slack poll cannot sweep, and until it
+     * does those rows would sit on the desk beside the thread that replaced them.
+     */
+    run() {
+      rekeySlackThreadGroups()
+
+      /*
+       * And the activity counter starts now, for everything already on the desk.
+       *
+       * `activity` is new in this release: until now no card carried its thread,
+       * so there was no `+N` and no amber edge anywhere in the product. The
+       * first poll after this upgrade hands every Slack and Gmail row its whole
+       * conversation at once, and measured against a `first_seen_at` from days
+       * ago every message in it counts — so a desk he has been reading all week
+       * would light up as if it had all landed while he was away. Nothing is
+       * lost by starting the count here, because there was nothing to lose:
+       * moving the baseline to the upgrade only refuses to claim as new the
+       * messages this release is the first thing able to see.
+       */
+      db.query(`UPDATE card_state SET acked_at = ? WHERE acked_at IS NULL OR acked_at < ?`)
+        .run(Date.now(), Date.now())
+    },
+  },
 ]
+
+/**
+ * Move every message-keyed Slack group onto the thread it belongs to.
+ *
+ * Exported so a test can drive it with rows rather than through the migration
+ * runner, which only ever runs once per database. Re-running it is a no-op: the
+ * state it moves is gone from the old key the first time, and a card already
+ * marked gone is marked gone again.
+ */
+export function rekeySlackThreadGroups(): number {
+  const rows = db.query<{ id: string; source_id: string; group_key: string; url: string }, []>(
+    `SELECT id, source_id, group_key, url FROM cards WHERE source = 'slack'`,
+  ).all()
+
+  let moved = 0
+  for (const row of rows) {
+    const parent = threadTsOf(row.url)
+    if (!parent) continue
+    const [channelId, ownTs] = splitSourceId(row.source_id)
+    if (!channelId || !ownTs || ownTs === parent) continue
+
+    // Only a row whose group key is still its own thread id. One that merged
+    // into a pull request or a Sentry issue already holds its state under that
+    // group, which is not moving.
+    if (row.group_key !== `slackthread:${channelId}:${ownTs}`) continue
+
+    rekeyCardState(row.group_key, `slackthread:${channelId}:${parent}`)
+    db.query(`UPDATE cards SET gone = 1 WHERE id = ?`).run(row.id)
+    moved++
+  }
+  return moved
+}
+
+/** The `thread_ts` Slack stamps on every permalink, or null when there is none. */
+function threadTsOf(url: string): string | null {
+  try {
+    const t = new URL(url).searchParams.get('thread_ts')
+    return t && /^\d+\.\d+$/.test(t) ? t : null
+  } catch {
+    return null
+  }
+}
+
+/** `C04D9HKDWAV:1787812499.720579` → the channel and the ts, without splitting the ts. */
+function splitSourceId(sourceId: string): [string, string] {
+  const at = sourceId.indexOf(':')
+  return at === -1 ? [sourceId, ''] : [sourceId.slice(0, at), sourceId.slice(at + 1)]
+}
+
+/**
+ * Move one group's state onto another key, taking the handled side of every
+ * field — the same merge `migrateState` performs when dedup unions two groups.
+ *
+ * It is written out here rather than imported because `migrateState` lives in
+ * `ingest.ts`, and `ingest.ts` imports this module: pulling it in would make the
+ * migration runner depend on the whole adapter graph loading first, at the one
+ * moment in the process when the schema is not yet the shape those modules
+ * expect.
+ */
+function rekeyCardState(from: string, to: string) {
+  const src = db.query<Record<string, any>, [string]>(
+    `SELECT * FROM card_state WHERE group_key = ?`,
+  ).get(from)
+  if (!src) return
+  const dst = db.query<Record<string, any>, [string]>(
+    `SELECT * FROM card_state WHERE group_key = ?`,
+  ).get(to)
+
+  const maxN = (a: number | null, b: number | null) => (a && b ? Math.max(a, b) : (a ?? b))
+  const minN = (a: number | null, b: number | null) => (a && b ? Math.min(a, b) : (a ?? b))
+
+  if (!dst) {
+    db.query(`UPDATE card_state SET group_key = ? WHERE group_key = ?`).run(to, from)
+  } else {
+    const notMine = dst.not_mine || src.not_mine ? 1 : 0
+    const doneAt = maxN(dst.done_at, src.done_at)
+    db.query(
+      `UPDATE card_state SET
+         pile_override = COALESCE(pile_override, ?), snoozed_until = ?, acked_at = ?,
+         notified_at = ?, not_mine = ?, done_at = ?, status = ?, pinned = ?,
+         first_seen_at = ?, updated_at = ?
+       WHERE group_key = ?`,
+    ).run(
+      src.pile_override,
+      maxN(dst.snoozed_until, src.snoozed_until),
+      maxN(dst.acked_at, src.acked_at),
+      minN(dst.notified_at, src.notified_at),
+      notMine,
+      doneAt,
+      // The pair decides; the enum only breaks ties between the three states the
+      // pair cannot express, which is the rule `mergedStatus` holds in ingest.
+      notMine ? 'wont_do' : doneAt ? 'done' : pickStatus(dst.status, src.status),
+      dst.pinned || src.pinned ? 1 : 0,
+      Math.min(dst.first_seen_at, src.first_seen_at),
+      Date.now(), to,
+    )
+    db.query(`DELETE FROM card_state WHERE group_key = ?`).run(from)
+  }
+
+  // Anything pointing at the old key follows it, or a task made from one of
+  // those replies loses the row it came from.
+  db.query(`UPDATE tasks SET source_card_group = ? WHERE source_card_group = ?`).run(to, from)
+  db.query(
+    `UPDATE OR IGNORE reminders SET target_id = ?
+     WHERE target_kind = 'card' AND target_id = ?`,
+  ).run(to, from)
+  db.query(`UPDATE events SET group_key = ? WHERE group_key = ?`).run(to, from)
+}
+
+/** The further-along of two in-flight statuses, with the two terminal ones ruled out. */
+function pickStatus(a: unknown, b: unknown): string {
+  const order = ['not_started', 'in_progress', 'in_review']
+  const rank = (v: unknown) => (typeof v === 'string' ? order.indexOf(v) : -1)
+  const winner = rank(a) >= rank(b) ? a : b
+  return rank(winner) >= 0 ? (winner as string) : 'not_started'
+}
 
 const applied = new Set(
   db.query<{ id: number }, []>(`SELECT id FROM schema_migrations`).all().map(r => r.id),

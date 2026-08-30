@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import type { CardStatus } from '../../shared/status'
 import type { Analytics, SourceStatus, State } from './types'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
@@ -119,10 +120,20 @@ export const actions = {
   doneCard: (g: string) => post(`/cards/${encodeURIComponent(g)}/done`),
   pin: (g: string, pinned: boolean) => post(`/cards/${encodeURIComponent(g)}/pin`, { pinned }),
   /**
+   * How far along this card is.
+   *
+   * The server keeps `status`, `done_at` and `not_mine` in step in one function,
+   * so this is the only call the picker needs — setting `done` here and pressing
+   * `Done` in the action bar land on the same three columns. Its undo label is
+   * `status`, which is why the restore union below has one.
+   */
+  setStatus: (g: string, status: CardStatus) =>
+    post<{ ok: true; status: CardStatus }>(`/cards/${encodeURIComponent(g)}/status`, { status }),
+  /**
    * With no `undo`, everything keeping this card off a list is cleared. With
    * one, only that — so undoing a Done leaves a snooze or a manual pile alone.
    */
-  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine' | 'moved') =>
+  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine' | 'moved' | 'status') =>
     post(`/cards/${encodeURIComponent(g)}/restore`, undo ? { undo } : {}),
   doneCards: () => req<{ cards: import('./types').Card[] }>('/cards/done'),
   thread: (g: string) => req<{ thread: any }>(`/cards/${encodeURIComponent(g)}/thread`),

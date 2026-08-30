@@ -24,6 +24,30 @@ function emptyDays(days: number, offMin: number): Map<string, number> {
   return out
 }
 
+/**
+ * The status writes that are also a clear.
+ *
+ * `POST /cards/:group/status` logs one event kind whatever it was handed, so
+ * "this card was set to Done" and "this card was set to In review" are the same
+ * row of `events` distinguished only by the JSON in `meta`. The two that take a
+ * row off the list belong in the cleared series; the other three are progress,
+ * not throughput. Parsed rather than pattern-matched in SQL: a `LIKE '%done%'`
+ * would also match a card whose group key says `done`.
+ */
+function clearingStatuses(since: number): Array<{ at: number }> {
+  const rows = db.query<{ at: number; meta: string | null }, [number]>(
+    `SELECT at, meta FROM events WHERE kind = 'card_status' AND at >= ?`,
+  ).all(since)
+  return rows.filter(r => {
+    try {
+      const s = (JSON.parse(r.meta ?? '{}') as { status?: string }).status
+      return s === 'done' || s === 'wont_do'
+    } catch {
+      return false
+    }
+  })
+}
+
 function seriesOf(rows: Array<{ at: number }>, days: number, offMin: number) {
   const m = emptyDays(days, offMin)
   const cutoff = Date.now() - days * DAY
@@ -49,14 +73,18 @@ analytics.get('/', c => {
   const created = ev('task_created')
   const appeared = ev('card_appeared')
   /**
-   * What actually takes a card off the list.
+   * What actually takes a card off the list, and nothing that does not.
    *
-   * This counted `card_acked`, which nothing in the product emits any more — so
-   * "Cleared" was an empty chart at every range, and "The pile" was permanently
-   * half a panel. Done and Not-mine are the two events that remove a card, and
-   * an acknowledgement still counts because it is also a card he dealt with.
+   * `card_acked` used to be counted here on the grounds that it was also a card
+   * he dealt with, back when nothing in the product emitted one. The detail pane
+   * emits one now, automatically, the moment a card with unread activity is
+   * opened — so one Slack thread that gets a reply on twelve different days and
+   * is read each time reported twelve clears while still sitting on the desk.
+   * Reading is not clearing. The three events left are the three writes that
+   * actually take a row off the list: Done, Won't do, and the status control
+   * landing on either of those.
    */
-  const cleared = [...ev('card_done'), ...ev('card_not_mine'), ...ev('card_acked')]
+  const cleared = [...ev('card_done'), ...ev('card_not_mine'), ...clearingStatuses(since)]
     .sort((a, b) => a.at - b.at)
 
   /* --- throughput ------------------------------------------------------- */

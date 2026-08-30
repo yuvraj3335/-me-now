@@ -11,6 +11,7 @@
  */
 import { db, logEvent, now } from './db'
 import { cardId, groupCards } from './dedup'
+import { CARD_STATUSES, DEFAULT_STATUS, isCardStatus, type CardStatus } from '../shared/status'
 import { NotConnected, PartialPoll, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
 import { claudeSessions } from './sources/claudeSessions'
@@ -250,15 +251,19 @@ export function migrateState(from: string, to: string) {
   if (!dst) {
     db.query(
       `INSERT INTO card_state (group_key, pile_override, snoozed_until, acked_at, notified_at,
-                               not_mine, done_at, pinned, first_seen_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                               not_mine, done_at, status, pinned, first_seen_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(to, src.pile_override, src.snoozed_until, src.acked_at, src.notified_at,
-          src.not_mine, src.done_at, src.pinned, src.first_seen_at, now())
+          src.not_mine, src.done_at, src.status ?? DEFAULT_STATUS,
+          src.pinned, src.first_seen_at, now())
   } else {
+    const notMine = dst.not_mine || src.not_mine ? 1 : 0
+    const doneAt = maxN(dst.done_at, src.done_at)
     db.query(
       `UPDATE card_state SET
          pile_override = COALESCE(pile_override, ?), snoozed_until = ?, acked_at = ?,
-         notified_at = ?, not_mine = ?, done_at = ?, pinned = ?, first_seen_at = ?, updated_at = ?
+         notified_at = ?, not_mine = ?, done_at = ?, status = ?, pinned = ?,
+         first_seen_at = ?, updated_at = ?
        WHERE group_key = ?`,
     ).run(
       src.pile_override,
@@ -266,8 +271,9 @@ export function migrateState(from: string, to: string) {
       maxN(dst.acked_at, src.acked_at),
       // Earliest notification wins: once notified, always notified.
       minN(dst.notified_at, src.notified_at),
-      dst.not_mine || src.not_mine ? 1 : 0,
-      maxN(dst.done_at, src.done_at),
+      notMine,
+      doneAt,
+      mergedStatus(dst.status, src.status, notMine, doneAt),
       dst.pinned || src.pinned ? 1 : 0,
       Math.min(dst.first_seen_at, src.first_seen_at),
       now(), to,
@@ -283,4 +289,29 @@ export function migrateState(from: string, to: string) {
   ).run(to, from)
   db.query(`UPDATE events SET group_key = ? WHERE group_key = ?`).run(to, from)
   db.query(`DELETE FROM card_state WHERE group_key = ?`).run(from)
+}
+
+/**
+ * The merged group's status, derived rather than picked.
+ *
+ * `status` and the legacy pair are the same fact told two ways, and a merge that
+ * takes the "already handled" side of `done_at` and `not_mine` while copying one
+ * of the two `status` values verbatim can produce a row that is `done_at`-stamped
+ * and `in_progress` at once — the exact thing having one function for this is
+ * meant to prevent. So the pair decides first, and the enum only breaks ties
+ * between the three states the pair cannot express.
+ */
+function mergedStatus(
+  a: unknown,
+  b: unknown,
+  notMine: number,
+  doneAt: number | null,
+): CardStatus {
+  if (notMine) return 'wont_do'
+  if (doneAt) return 'done'
+  const rank = (v: unknown) => (isCardStatus(v) ? CARD_STATUSES.indexOf(v) : 0)
+  const winner = rank(a) >= rank(b) ? a : b
+  const status = isCardStatus(winner) ? winner : DEFAULT_STATUS
+  // `done` and `wont_do` are ruled out above; a stale one must not survive.
+  return status === 'done' || status === 'wont_do' ? DEFAULT_STATUS : status
 }

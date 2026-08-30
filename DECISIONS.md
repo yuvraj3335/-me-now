@@ -868,3 +868,129 @@ silent failures visible immediately, and both are fixed here:
   and reported `ok, 0 rows`, and the sweep then marked every card of that source
   gone. Rate-limiting GitHub's four searches would have wiped the desk and
   reported "synced". A partial poll now keeps its rows and loses its authority.
+
+## 32. A thread is one row, and a swipe is a first-class action
+
+Two halves, one release, because they are the same complaint: the desk was
+showing him *messages* when what is on him is *conversations*, and the only way
+to act on one was to open it.
+
+### The desk was counting replies as work
+
+Measured on the deployed database, not inferred:
+
+| | |
+|---|---|
+| Live Slack cards | 40 |
+| …whose kind was `dm` | 20 |
+| `#truto` thread `1787812499.720579` | **3 rows** |
+| `#truto` thread `1787900782.835249` | **3 rows** |
+| `#spendflo-truto` thread `1784530611.515999` | **2 rows**, parent not on the desk at all |
+
+Half the Slack desk was direct messages, which are somebody talking to him
+rather than work anybody assigned. The other half double-counted: a question and
+the two answers under it were three separate rows, in three separate places in
+the sort, each with its own Done button, and finishing one of them did nothing to
+the other two.
+
+The cause is one line. A Slack permalink carries the parent it belongs to —
+
+```
+…/archives/C04D9HKDWAV/p1787812499720579?thread_ts=1787812499.720579   the parent
+…/archives/C04D9HKDWAV/p1787812964247529?thread_ts=1787812499.720579   a reply
+…/archives/C04D9HKDWAV/p1787814249215859?thread_ts=1787812499.720579   a reply
+```
+
+— and the poller was storing `meta.thread_ts` as the *message's own* ts. Every
+message was therefore its own thread. A standalone message carries a `thread_ts`
+equal to its own ts, so the rule is uniform and there is no second case:
+`parentTs = permalink.thread_ts ?? hit.ts`. Verified against all forty rows.
+
+Cards are now keyed on the parent, so replies land on the row that already
+exists. Old rows keyed on a reply's ts stop being returned and would be swept —
+but the *state* on them would be orphaned, so a card he had marked done a week
+ago would come back the morning this shipped. Migration 10 recovers the parent
+from each stored card's own permalink and merges the state forward under the same
+"already handled wins" rule `migrateState` has always used.
+
+### The parent is read, not guessed
+
+He is usually named in a reply, not in the question, so the search that finds a
+thread frequently does not contain the thing the row has to be titled with. One
+`slack_read_thread` per distinct thread answers all of it at once: the parent's
+text, `=== THREAD REPLIES (10 total) ===` as an authoritative count, and every
+reply's author and timestamp. Capped at twenty threads a poll, spent on the ones
+whose parent we do not already hold, because a thread we can title loses only its
+count while a thread we cannot title loses the row.
+
+A thread read that fails degrades **one row** and says so on it. A failed
+*alert-channel* read is a failed poll, because a channel that did not answer is a
+channel whose alerts are missing.
+
+### `+2`, and the amber edge, are one fact
+
+A row wears a count of the messages that landed since he last opened it —
+excluding his own, because eleven of the twelve messages on that `#truto` thread
+were his and none of them are news. The badge appears when the count is above
+zero and the row's left edge goes amber under exactly the same expression, so
+they can never disagree. Opening the row clears it; the pane's resting state,
+which shows the top row before anything is clicked, deliberately does not — a
+pane that acknowledged what it displayed would clear every count on every load.
+
+The 2px left edge is the one this table's own docblock deleted, and it is back for
+the reason it was deleted: it used to paint every visible row, which encoded
+nothing. It paints two or three.
+
+### Alert channels are read, and most of what they say is not on him
+
+Slack *search* does not index Block Kit, and Sentry's page of `@truto-eng` lives
+there:
+
+```
+notes: <!subteam^S06HDT77E1M|@truto-eng>
+Project: truto    Alert: Notify #sentry-alerts via Slack    Short ID: TRUTO-38
+```
+
+So the four alert channels are read by id rather than searched. What is *not*
+done is turn them into a feed. `#truto-api-alerts` was described as posting
+digests; read live, it posts paired Datadog `Warn:` / `Recovered: Number of
+requests is high` every few minutes, addressed to `@slack-truto-api-alerts`.
+`#truto-grafana-alerts` is Alertmanager and `#intent-alerts` is Koala reporting
+anonymous website visitors. One card per message would have put a metronome on
+the desk and made Wake a worse copy of Slack.
+
+So an alert-channel message becomes a row under the same rule as everything else:
+it names him, it pages a usergroup he is in, or it carries a Sentry reference.
+In practice `#sentry-alerts` lands and the other three answer only the question
+of whether they answered. The Sentry post, Cursor's root-cause reply and the
+Sentry API's own row all carry `TRUTO-38`, so they are one group — which is what
+the short id was taught to `extractRefs` for.
+
+### A swipe, because a thumb has no hover
+
+Every row that has a status now slides left under a finger, a trackpad or a mouse
+drag to reveal three solid, labelled actions: `Done`, `Status`, `Delete`. Not a
+kebab — there is no `⋯` left in the product, and the one that was in the detail
+pane took its contents with it onto the surface.
+
+Two things about the implementation are not incidental. The drawer is a
+right-anchored clip window whose *width* tracks the pointer, rather than a
+translated row: a desk row is a `<tr>`, and translating its cells takes the title
+out from under the table and grows a horizontal scrollbar on a page that is
+required not to have one. And the gesture locks to whichever axis wins first, so
+the page still scrolls under a finger that is not swiping and a task can still be
+dragged up and down to reorder.
+
+Delete removes a task or a goal. On a card it sets `Won't do`, which is how Wake
+already dismisses work — a card he did not want is still in the hidden list and
+still comes back. Inventing a fourth word for it would have been a fourth word.
+
+### The words
+
+`Now`, `Open`, `Parked`, `Later`, `Not mine`, `Wake now` and `pile` are gone from
+everything anyone reads. `Now` was the page, the tab, a group heading and a field
+name, so one word answered four questions; `Open` was a group heading and the verb
+on the button beside it. The desk is `Desk`, its groups are `On you`, `Waiting`
+and `Snoozed`, and a card's own state is a status: `Not started`, `In progress`,
+`In review`, `Done`, `Won't do`. The JSON still says `pile`, because it is not a
+word anybody reads, and what each group computes did not change at all.

@@ -1,31 +1,40 @@
 /**
- * Now.
+ * The desk.
  *
  * A table of everything on him, in one downward glance: what it is, the thing
  * itself, why it is on him, where, which source, when, and the one thing he can
  * do about it without opening anything.
  *
+ * The three groups are `On you`, `Waiting` and `Snoozed`. They were `Now`,
+ * `Open` and `Parked`, and only the words changed — what each group computes,
+ * and what the JSON calls them, is untouched. `Now` was the page, the tab, a
+ * group and a field, so the one word answered four questions; `Open` was a
+ * group heading and the verb on the button beside it. Words that mean one thing
+ * each are worth a lookup table.
+ *
  * Above the first row there is a title and one chrome row, and nothing else.
  * Everything left of that row's spacer narrows what you see; the one thing right
  * of it — Fetch — changes what exists. Piles with nothing in them are not
- * rendered: `Now 0` plus the sentence under it cost 109px of the fold to report
+ * rendered: `On you 0` plus the sentence under it cost 109px of the fold to report
  * a zero, and three of them stacked cost 331px of a 844px phone to say nothing
  * at all.
  *
  * The three piles are `<tbody>` groups of one table sharing one `<colgroup>`, so
- * the columns hold their x-position from the first row of Now to the last row of
- * Parked. `Done and not mine` sits collapsed at the bottom, in the same columns.
+ * the columns hold their x-position from the first row of On you to the last row
+ * of Snoozed. `Done and won't do` sits collapsed at the bottom, in the same columns.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Download, Loader2, RotateCcw } from 'lucide-react'
+import { STATUS_LABEL, type CardStatus } from '../../shared/status'
 import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
-import type { Card as CardT, SourceName } from '../lib/types'
+import { PILE_LABEL, type Card as CardT, type SourceName } from '../lib/types'
 import { ago, atHour, timeOfDay } from '../lib/time'
+import { clampPane, PANE_DEFAULT_W, readPane, writePane } from '../lib/pane'
 import {
-  CardLine, CardRow, columnsFor, colSpanOf, GroupHead, PANE_MIN, TABLE_MIN, TableCols, TableHead,
-  useViewport, sourceWords, type Columns, type RowAction,
+  CardLine, CardRow, columnsFor, colSpanOf, GroupHead, maxPaneFor, PANE_MIN, TABLE_MIN, TableCols,
+  TableHead, useViewport, sourceWords, type Columns, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { TaskSheet } from '../components/TaskSheet'
@@ -35,6 +44,7 @@ import { SourceMark } from '../components/kinds'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { overlayOpen, useOverlay } from '../lib/overlay'
+import { openSwipeKey } from '../lib/swipe'
 import { closeDetail, openDetail, setParam, useDetailKey, useParam } from '../lib/route'
 
 /**
@@ -97,16 +107,35 @@ export function Home() {
    * something is clicked. At 7am there is always a most-likely thing.
    *
    * The keyboard cursor still starts at `null`, so nothing is destructible by
-   * accident: showing a row is not selecting it.
+   * accident: showing a row is not selecting it. Neither is showing it reading
+   * it — `resting` below is what stops the pane acknowledging a row nobody
+   * opened, which would clear its `+N` every time the desk loaded.
    */
   const selected = useMemo(
     () => rows.find(c => c.group_key === selectedKey) ?? null,
     [rows, selectedKey],
   )
-  const shown = selected ?? rows[0] ?? null
-  const cols = columnsFor(width)
+
+  /**
+   * The cross has to actually close the pane.
+   *
+   * `closeDetail()` only clears the fragment, and the pane falls back to the top
+   * row — so pressing X cleared a selection nobody could see and changed nothing
+   * on screen. The dismissal is a fact the page holds, and any row being opened
+   * puts it back: the pane is empty until it is asked for again, not forever.
+   */
+  const [dismissed, setDismissed] = useState(false)
+  useEffect(() => { if (selectedKey) setDismissed(false) }, [selectedKey])
+  const dismiss = useCallback(() => {
+    setDismissed(true)
+    closeDetail()
+  }, [])
+
+  const shown = dismissed ? null : (selected ?? rows[0] ?? null)
+  const pane = usePaneWidth(maxPaneFor(width))
   const isTable = width >= TABLE_MIN
   const hasPane = width >= PANE_MIN
+  const cols = columnsFor(width, hasPane ? pane.width : 0)
 
   /** Remove locally first so the list closes under the thumb immediately. */
   const drop = (g: string) =>
@@ -116,14 +145,14 @@ export function Home() {
     })
 
   /**
-   * Done, Later and Wake now, each with a way back.
+   * Every action on a row, each with a way back.
    *
    * The undo restores every field the action replaced, not the one it is named
-   * after — `Later` writes `snoozed_until` *and* clears `pile_override`, and an
-   * undo that cleared only the first destroyed a park the product could not
+   * after — `Snooze` writes `snoozed_until` *and* clears `pile_override`, and an
+   * undo that cleared only the first destroyed a deferral the product could not
    * re-create.
    */
-  const undoable = (c: CardT, text: string, undo: 'done' | 'snoozed' | 'moved') =>
+  const undoable = (c: CardT, text: string, undo: 'done' | 'snoozed' | 'moved' | 'not_mine' | 'status') =>
     toast(text, {
       label: 'Undo',
       run: async () => { await actions.restore(c.group_key, undo); await reload() },
@@ -136,25 +165,55 @@ export function Home() {
     undoable(c, 'Marked done.', 'done')
     void reload()
   }
-  const later = async (c: CardT) => {
+  const snooze = async (c: CardT) => {
     drop(c.group_key)
     await actions.snooze(c.group_key, atHour(1, 9))
     undoable(c, 'Back tomorrow morning.', 'snoozed')
     void reload()
   }
-  /** The counterpart, and the only second action a Parked card is offered. */
-  const wake = async (c: CardT) => {
+  /** The counterpart, and the only second action a snoozed card is offered. */
+  const back = async (c: CardT) => {
     drop(c.group_key)
     await actions.move(c.group_key, null)
     undoable(c, 'Back on your list.', 'moved')
     void reload()
   }
 
+  /**
+   * The swipe's Delete, which on a card is not a delete.
+   *
+   * Wake already has a word for work that is not his: it takes the card off the
+   * desk, keeps it in the restore list, and is undone by the same toast as
+   * everything else. Inventing a second kind of removal for the sake of the
+   * word on the button would be the one place in the product where a red action
+   * meant something irreversible.
+   */
+  const wontDo = async (c: CardT) => {
+    drop(c.group_key)
+    if (c.group_key === selectedKey) closeDetail()
+    await actions.notMine(c.group_key)
+    undoable(c, `${STATUS_LABEL.wont_do}.`, 'not_mine')
+    void reload()
+  }
+
+  const setStatus = async (c: CardT, s: CardStatus) => {
+    // Only the two that take it off the desk make the row leave under the thumb.
+    if (s === 'done' || s === 'wont_do') {
+      drop(c.group_key)
+      if (c.group_key === selectedKey) closeDetail()
+    }
+    await actions.setStatus(c.group_key, s)
+    undoable(c, `${STATUS_LABEL[s]}.`, 'status')
+    void reload()
+  }
+
   const rowActions: RowAction = {
     onDone: done,
-    onLater: later,
-    onWake: wake,
+    onSnooze: snooze,
+    onBack: back,
     onOpen: c => openDetail(c.group_key),
+    onStatus: setStatus,
+    onWontDo: wontDo,
   }
 
   /**
@@ -169,6 +228,15 @@ export function Home() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (overlayOpen()) return
+      /*
+       * A row with its drawer open owns the keyboard until it is shut.
+       *
+       * Without this, one Escape both closed the drawer and dismissed the pane —
+       * two things on one key, neither of them asked for twice — and `e` would
+       * have completed a card while its own Done sat revealed and unpressed. The
+       * drawer closes itself on Escape; this only has to stay out of the way.
+       */
+      if (openSwipeKey()) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el as HTMLElement).isContentEditable)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
@@ -183,7 +251,7 @@ export function Home() {
         return setCursor(c => (c === null ? 0 : Math.max(c - 1, 0)))
       }
       if (e.key === 'Escape') {
-        if (selectedKey) return closeDetail()
+        if (selectedKey) return dismiss()
         return setCursor(null)
       }
 
@@ -193,12 +261,12 @@ export function Home() {
       else if (e.key === 'e') { e.preventDefault(); void done(card) }
       else if (e.key === 's') {
         e.preventDefault()
-        void (card.pile === 'parked' ? wake(card) : later(card))
+        void (card.pile === 'parked' ? back(card) : snooze(card))
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [rows, cursor, selectedKey])
+  }, [rows, cursor, selectedKey, dismiss])
 
   // A shrinking list must not leave the cursor past the end.
   useEffect(() => {
@@ -228,9 +296,9 @@ export function Home() {
   if (!state) return <div className="pad-x pt-4"><Header /></div>
 
   const groups: Array<{ title: string; shown: CardT[]; total: number }> = [
-    { title: 'Now', shown: fNow, total: now.length },
-    { title: 'Open', shown: fOpen, total: open.length },
-    { title: 'Parked', shown: fParked, total: parked.length },
+    { title: PILE_LABEL.now, shown: fNow, total: now.length },
+    { title: PILE_LABEL.open, shown: fOpen, total: open.length },
+    { title: PILE_LABEL.parked, shown: fParked, total: parked.length },
   ]
   const live = groups.filter(g => g.shown.length > 0)
 
@@ -240,7 +308,7 @@ export function Home() {
    * Not three chapters and a count and a fourth heading. One word, with no
    * source name appended either — the chip above it is already pressed and
    * already names the source, so the suffix restates the question inside the
-   * answer, and the phrase it would make is a banned one. `Done and not mine` is
+   * answer, and the phrase it would make is a banned one. `Done and won't do` is
    * not rendered here either: it is scoped to the same filter, so it opens to
    * either a different population than the filter implies or a second empty
    * state, and both are worse than absence.
@@ -314,18 +382,100 @@ export function Home() {
         The pane column always exists at the pane width, so opening a row never
         re-lays out the list. No fill: `bg-ink-850` is pure white in light mode,
         which put a 400px white panel on a grey page on the product's main
-        screen. A left hairline is the whole edge it needs.
+        screen. A left hairline is the whole edge it needs — and that hairline is
+        also the grab handle, which is the only place a resize control belongs.
       */}
-      <aside className="hidden xl:block xl:w-90 2xl:w-100 xl:shrink-0 xl:border-l xl:border-edge
-                        xl:sticky xl:top-0 xl:h-dvh">
+      <aside
+        style={{ width: pane.width }}
+        className="hidden xl:block xl:shrink-0 xl:border-l xl:border-edge
+                   xl:sticky xl:top-0 xl:h-dvh relative"
+      >
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Pane width"
+          {...pane.handle}
+          /* `touch-none`: at 1280 on a touch screen this is a real grab handle,
+             and without it the page's own scroll claims the drag and cancels the
+             pointer halfway through, leaving the pane wherever the finger was. */
+          className="absolute inset-y-0 -left-1 w-2 z-20 cursor-col-resize touch-none
+                     hover:bg-ink-700 transition-colors duration-100"
+        />
         {shown && (
-          <CardDetail card={shown} onClose={closeDetail}
-            onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
+          <CardDetail
+            card={shown}
+            resting={!selected}
+            onClose={dismiss}
+            onMakeTask={c => { dismiss(); setTaskFrom(c) }}
+          />
         )}
       </aside>
       <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
     </div>
   )
+}
+
+/**
+ * The pane's width, dragged from its own left hairline and remembered.
+ *
+ * The pointer is captured on the handle rather than tracked on the document, so
+ * a drag that leaves the window still ends when the button comes up, and the
+ * write happens once at the end rather than on every frame — `localStorage` is
+ * synchronous, and a synchronous write per pointermove is a stutter you can see.
+ *
+ * `max` is what the list can spare at this viewport, and it is applied to the
+ * remembered width as well as to the drag: the width outlives the window it was
+ * chosen in.
+ */
+function usePaneWidth(max: number) {
+  const [width, setWidth] = useState(readPane)
+  const from = useRef<{ x: number; w: number } | null>(null)
+
+  // A window that narrows takes the room back. Same rule as the drag, so there
+  // is no width the pane can reach by resizing that it could not be dragged to.
+  useEffect(() => { setWidth(w => clampPane(w, max)) }, [max])
+
+  /** Ends a drag, whether the pointer lifted or the browser took it away. */
+  const release = () => {
+    if (!from.current) return
+    from.current = null
+    writePane(width)
+  }
+
+  return {
+    width,
+    handle: {
+      onPointerDown: (e: React.PointerEvent) => {
+        // A right-click is a context menu's business. It used to start a drag
+        // whose `pointerup` was swallowed by the menu that opened over it,
+        // leaving the handle latched: the pane then tracked the bare cursor
+        // every time it crossed the hairline, which is the strip the mouse
+        // travels through on its way between the list and the pane.
+        if (e.button > 0) return
+        from.current = { x: e.clientX, w: width }
+        e.currentTarget.setPointerCapture(e.pointerId)
+        // Otherwise the drag starts a text selection across the whole list.
+        e.preventDefault()
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        const start = from.current
+        if (!start) return
+        // Nothing is pressed, so nothing is being dragged — the same one read
+        // the swipe layer takes, for the same latched-handle failure.
+        if (e.buttons === 0) { from.current = null; return }
+        // Leftward is wider: the pane is on the right, so its left edge moving
+        // left is the pane growing.
+        setWidth(clampPane(start.w + (start.x - e.clientX), max))
+      },
+      onPointerUp: release,
+      onPointerCancel: release,
+      onDoubleClick: () => {
+        const w = clampPane(PANE_DEFAULT_W, max)
+        setWidth(w)
+        writePane(w)
+      },
+    },
+  }
 }
 
 /**
@@ -357,7 +507,7 @@ function PushDetail({
 function Header() {
   return (
     <header className="pt-4 pb-2">
-      <h1 className="text-lg font-medium">Now</h1>
+      <h1 className="text-lg font-medium">Desk</h1>
     </header>
   )
 }
@@ -519,8 +669,17 @@ function useDoneCards(open: boolean) {
   return { cards, restore }
 }
 
+/**
+ * Why a card is not on the desk, read from `status` rather than from the two
+ * legacy columns. The server keeps all three in step, so either answer is
+ * correct — but only one of them is the vocabulary the rest of the product now
+ * uses, and a restore list saying `not mine` beside a picker saying `Won't do`
+ * is two names for one state.
+ */
 const doneWord = (c: CardT) =>
-  c.state?.not_mine ? 'not mine' : `done ${c.state?.done_at ? ago(c.state.done_at) : ''}`.trim()
+  c.status === 'wont_do'
+    ? STATUS_LABEL.wont_do.toLowerCase()
+    : `done ${c.state?.done_at ? ago(c.state.done_at) : ''}`.trim()
 
 function DoneGroup({ cols, open }: { cols: Columns; open: boolean }) {
   const { cards, restore } = useDoneCards(open)
@@ -535,7 +694,7 @@ function DoneGroup({ cols, open }: { cols: Columns; open: boolean }) {
                        text-fg-mute hover:text-fg-dim transition-colors duration-100"
           >
             <Chevron size={13} />
-            Done and not mine
+            Done and won't do
             {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
           </button>
         </td>
@@ -573,7 +732,7 @@ function DoneList({ open }: { open: boolean }) {
         className="inline-flex items-center gap-2 pt-6 pb-2 text-eyebrow uppercase text-fg-mute"
       >
         <Chevron size={13} />
-        Done and not mine
+        Done and won't do
         {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
       </button>
       {open && !!cards?.length && (

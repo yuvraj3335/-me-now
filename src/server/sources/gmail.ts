@@ -120,7 +120,8 @@ export const gmail: SourceAdapter = {
         const id = th.threadId ?? th.id
         if (!id) continue
 
-        const last = th.messages?.[th.messages.length - 1]
+        const msgs = th.messages ?? []
+        const last = msgs[msgs.length - 1]
         // Through the mail normaliser's own decode, not raw. Google returns
         // HTML-escaped text and marketing mail pads it with invisible joiners,
         // and a card's title and excerpt are rendered as text on four surfaces:
@@ -161,11 +162,42 @@ export const gmail: SourceAdapter = {
           // address when there is not — never an empty string.
           who: nameOf(senderRaw) || addrOf(senderRaw) || undefined,
           excerpt: (snippet || body).slice(0, 400),
-          url: `https://mail.google.com/mail/u/${encodeURIComponent(account)}/#inbox/${id}`,
+          /*
+           * `mail/u/<address>` is not a Gmail URL. The `u/` segment is an
+           * *account index* — 0 is whichever account the browser signed in
+           * first — so interpolating an email address there produced a link
+           * that either 404s or lands on a stranger's mailbox. One address is
+           * configured on this deployment and it is the first one signed in,
+           * so 0 is the honest index; a second inbox would need the index
+           * Google assigned it, which is not a fact the API hands over.
+           */
+          url: `https://mail.google.com/mail/u/0/#inbox/${id}`,
           ts,
           pile: direct ? 'now' : 'open',
           refs,
-          meta: { account, thread_id: id, direct, labels: th.labelIds ?? th.labels ?? [] },
+          meta: {
+            account, thread_id: id, direct,
+            labels: th.labelIds ?? th.labels ?? [],
+            /*
+             * A later message in a thread is activity on this card, not a
+             * second card. Gmail's `search_threads` already returns the whole
+             * `messages` array, so the fact was always in hand and simply
+             * thrown away — and `meta.replies` is what the desk's `+N` counts.
+             */
+            replies: Math.max(msgs.length - 1, 0),
+            messages: msgs.slice(-20).map(m => {
+              const from = m.sender ?? m.from ?? ''
+              return {
+                ts: Date.parse(m.date ?? '') || ts,
+                who: plainText(nameOf(from)) || null,
+                snippet: plainText(m.snippet ?? '').slice(0, 280),
+                // Replying to a thread is not the thread demanding something of
+                // him. Carried on the message because the desk computes activity
+                // long after the address that decided this is out of scope.
+                mine: ME.emails.includes(addrOf(from)),
+              }
+            }),
+          },
         })
       }
     }

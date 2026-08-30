@@ -169,7 +169,10 @@ describe('a card that leaves the list can come back', () => {
       .toMatch(/cards:done[\s\S]{0,400}setParam\('done'/)
 
     const home = read('src/web/pages/Home.tsx')
-    expect(home, 'Now no longer renders the restore group').toMatch(/Done and not mine/)
+    // The group's name moved with the rest of the vocabulary: `Not mine` became
+    // `Won't do` when it became a status, and a restore list is the one place
+    // the two names would have sat side by side.
+    expect(home, 'the desk no longer renders the restore group').toMatch(/Done and won't do/)
     expect(home, 'the restore group cannot fetch what it lists').toContain('actions.doneCards')
     expect(home, 'nothing in the group brings a card back').toContain('actions.restore')
   })
@@ -765,5 +768,471 @@ describe('one surface spends the accent once', () => {
     // The commit keeps it.
     expect(read('src/web/components/TaskSheet.tsx'), 'the commit lost its fill')
       .toMatch(/variant="primary"/)
+  })
+})
+
+/* ========================================================================== */
+
+describe('the desk speaks one vocabulary', () => {
+  /*
+   * Eight words were retired at once, and every one of them was retired for the
+   * same reason: it meant more than one thing on the same screen. `Now` was the
+   * page title, the nav tab, a group heading and a field name, so the one word
+   * answered four questions and none of them clearly. `Open` was a group of
+   * cards and the verb on the button beside them. `Later` was a deferral and a
+   * time. `Not mine` was a button that has since become a status, which is
+   * exactly the kind of promotion that leaves two names for one state behind.
+   *
+   * What did NOT change is what the three groups compute or what the JSON calls
+   * them: `pile` is still `now | open | parked` on the wire, because renaming a
+   * field to fix a label is a migration bought with nothing.
+   *
+   * `Open` survives as a verb pointed at another product — `Open in Claude`,
+   * and the detail pane's own `Open`, which hands a URL to whatever owns it.
+   * DESIGN §4.3 keeps that one by name. So this reads labels, not prose: a word
+   * inside a sentence is not a control.
+   */
+  const RETIRED = ['Now', 'Park', 'Parked', 'Later', 'Later today', 'Not mine', 'Wake now']
+
+  const asLabel = (word: string) =>
+    new RegExp(
+      String.raw`label\s*[:=]\s*['"\`]${word}['"\`]` + '|' +
+      String.raw`title\s*[:=]\s*['"\`]${word}['"\`]` + '|' +
+      String.raw`ariaLabel\s*=\s*['"\`{]\s*['"\`]?${word}` + '|' +
+      String.raw`>\s*${word}\s*<`,
+    )
+
+  test('no retired word is used as a label anywhere in the client', () => {
+    for (const f of web) {
+      const src = read(f)
+      for (const word of RETIRED) {
+        expect(src, `${f}: \`${word}\` is still a label — see DESIGN §1`)
+          .not.toMatch(asLabel(word))
+      }
+    }
+  })
+
+  test('`Open` is retired as a name and kept as a verb', () => {
+    // The two halves of the brief have to be read together. §1 retires the
+    // group heading `Open`; §4.3 keeps the detail pane's `Open` control by name
+    // and gives it a `slack://` URL to hand over. So the word may not be
+    // something a card IS, and may still be something you DO to one — which is
+    // also why `Open in Claude` is untouched.
+    for (const f of web) {
+      const src = read(f)
+      expect(src, `${f}: \`Open\` is being used as a name for a group of cards`)
+        .not.toMatch(/(?:label|title)\s*[:=]\s*['"`]Open['"`]/)
+    }
+    const detail = read('src/web/components/CardDetail.tsx')
+    expect(detail, 'the way out to the thing itself is gone').toMatch(/Open <ArrowUpRight/)
+  })
+
+  test('the three groups have exactly one set of names', () => {
+    // Read from the module rather than the rendered heading: the point of the
+    // lookup table is that there is one place the field name and the word meet.
+    const { PILE_LABEL } = require('../src/web/lib/types') as typeof import('../src/web/lib/types')
+    expect(PILE_LABEL).toEqual({ now: 'On you', open: 'Waiting', parked: 'Snoozed' })
+
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the desk went back to spelling its own group names')
+      .toMatch(/title: PILE_LABEL\.now[\s\S]{0,200}title: PILE_LABEL\.parked/)
+  })
+
+  test('the destination is called the desk', () => {
+    const app = read('src/web/App.tsx')
+    expect(app, 'the first tab is not the desk').toMatch(/\{ path: '\/', label: 'Desk'/)
+  })
+
+  test('the piles keep their field names on the wire', () => {
+    // The rename was a vocabulary change, not a schema change. If this ever
+    // fails, something renamed a column to fix a word.
+    const types = read('src/web/lib/types.ts')
+    expect(types).toMatch(/export type Pile = 'now' \| 'open' \| 'parked'/)
+  })
+})
+
+describe('nothing in the product is behind a kebab', () => {
+  test('no component imports a three-dot glyph', () => {
+    // `CardDetail` had one, and everything behind it — every deferral control in
+    // the product — appeared at the bottom of a scrolling body while its trigger
+    // sat in a pinned bar, so on a long card the reader pressed it and nothing
+    // appeared to happen. The contents have real homes now; the way to stop the
+    // menu returning is to ban the glyph.
+    for (const f of web) {
+      expect(read(f), `${f}: a kebab came back`)
+        .not.toMatch(/\b(MoreHorizontal|MoreVertical|EllipsisVertical|Ellipsis)\b/)
+    }
+  })
+
+  test('nothing is labelled with a shrug', () => {
+    for (const f of web) {
+      const src = read(f)
+      expect(src, `${f}: a control is labelled "More"`).not.toMatch(/>\s*More\s*</)
+      expect(src, `${f}: a control is labelled with an ellipsis`)
+        .not.toMatch(/label\s*[:=]\s*['"`](\.\.\.|…|⋯)['"`]/)
+    }
+  })
+
+  test('the detail keeps its controls on the surface', () => {
+    const detail = read('src/web/components/CardDetail.tsx')
+    for (const block of ['Status', 'Snooze', 'Where']) {
+      expect(detail, `the ${block} control left the surface`)
+        .toMatch(new RegExp(String.raw`<Block label="${block}"`))
+    }
+    expect(detail, 'the pin left the action bar').toMatch(/actions\.pin\(/)
+  })
+})
+
+describe('the count and the highlight are one fact', () => {
+  const table = read('src/web/components/CardTable.tsx')
+
+  test('both are keyed on the same expression', () => {
+    // `+2` and the amber edge answer the same question, so they are drawn from
+    // the same predicate. Two predicates is how they come to disagree, and a
+    // row wearing an edge with no number on it is unreadable.
+    const uses = [...table.matchAll(/card\.activity\.count\s*(?:>|<=)\s*0/g)]
+    expect(uses.length, 'the badge and the edge stopped sharing a predicate')
+      .toBeGreaterThanOrEqual(3)
+    expect(table, 'the edge is no longer the 2px inset the docblock reserved')
+      .toMatch(/inset 2px 0 0 var\(--color-accent\)/)
+  })
+
+  test('the browser never recomputes what the server counted', () => {
+    // The whole reason the number is computed server-side is that a second
+    // implementation would drift. Arithmetic on it here is that second
+    // implementation arriving one operator at a time.
+    for (const f of web) {
+      expect(read(f), `${f}: the activity count is being recomputed`)
+        .not.toMatch(/activity\.count\s*[+\-*/]/)
+      expect(read(f), `${f}: the activity count is being assigned`)
+        .not.toMatch(/activity\.count\s*=[^=]/)
+    }
+  })
+
+  test('being named changes the word and not the number', () => {
+    const detail = read('src/web/components/CardDetail.tsx')
+    expect(detail, 'the tagged flag stopped being a word').toMatch(/activity\.tagged/)
+    expect(table, 'the tagged flag started deciding whether the edge is drawn')
+      .not.toMatch(/activity\.tagged[^\n]*inset 2px/)
+  })
+
+  test('the reply total is the source\'s, not the array\'s length', () => {
+    // Only the newest twenty replies are stored and Slack's own header carries
+    // the real total, so counting the array would report a long thread as short.
+    const thread = read('src/web/lib/thread.ts')
+    const total = thread.slice(thread.indexOf('export function replyTotal'))
+    expect(total, 'the reply total went back to counting what was kept')
+      .not.toMatch(/\.length/)
+  })
+})
+
+describe('reading a row is what clears it', () => {
+  const detail = read('src/web/components/CardDetail.tsx')
+  const home = read('src/web/pages/Home.tsx')
+
+  test('the pane acknowledges a card somebody opened', () => {
+    expect(detail, 'the detail stopped acknowledging anything').toContain('actions.ack(')
+  })
+
+  test('the resting pane acknowledges nothing', () => {
+    // This is the subtlety the whole feature turns on. The pane shows the top
+    // row before anything is clicked, every morning — if that counts as reading
+    // it, the `+N` and the edge are cleared by the desk loading, and the feature
+    // silently destroys itself at 7am with nothing to see.
+    const effect = detail.slice(detail.indexOf('if (resting) return'), detail.indexOf('const run ='))
+    expect(effect, 'the resting guard is gone from the acknowledgement').toContain('actions.ack(')
+    expect(detail, 'the pane no longer knows whether it was asked for')
+      .toMatch(/resting\?: boolean/)
+    expect(home, 'the desk stopped telling the pane it is resting')
+      .toMatch(/resting=\{!selected\}/)
+  })
+
+  test('nothing else on the desk acknowledges anything', () => {
+    // A row rendering is not a row being read, and neither is a list scrolling
+    // past one.
+    expect(home, 'the desk page acknowledges cards by itself').not.toContain('actions.ack(')
+    expect(read('src/web/components/CardTable.tsx'), 'a row acknowledges itself')
+      .not.toContain('actions.ack(')
+  })
+})
+
+describe('the cross closes the pane, and the hairline resizes it', () => {
+  const home = read('src/web/pages/Home.tsx')
+
+  test('the dismissal is a fact the page holds', () => {
+    // `closeDetail()` only clears the fragment, and the pane falls back to the
+    // top row — so X cleared a selection nobody could see and changed nothing
+    // visible. It was a dead control on the product's main screen.
+    expect(home, 'the pane went back to having nothing to dismiss')
+      .toMatch(/const \[dismissed, setDismissed\] = useState\(false\)/)
+    expect(home, 'a dismissed pane still shows the top row')
+      .toMatch(/dismissed \? null :/)
+    expect(home, 'the cross no longer dismisses').toMatch(/onClose=\{dismiss\}/)
+  })
+
+  test('opening any row brings it back', () => {
+    // Dismissed has to mean "until asked for again", not "until reload".
+    expect(home, 'the dismissal is permanent')
+      .toMatch(/if \(selectedKey\) setDismissed\(false\)/)
+  })
+
+  test('the pane is actually resizable, and remembers', () => {
+    expect(home, 'the pane went back to a breakpoint width').toMatch(/width: pane\.width/)
+    expect(home, 'the left hairline is no longer a grab handle').toContain('cursor-col-resize')
+    expect(home, 'the width is no longer remembered').toContain('writePane')
+    expect(home, 'a double-click no longer resets it').toMatch(/onDoubleClick/)
+    // And the column budget follows the real pane rather than the old constant,
+    // or `Where` survives at a width where the list no longer has room for it.
+    expect(home, 'the columns stopped following the pane')
+      .toMatch(/columnsFor\(width, hasPane \? pane\.width : 0\)/)
+  })
+
+  test('the drag is bounded by the room there is, not only by itself', () => {
+    // `clampPane` knows the pane's own 320–640; it does not know how wide the
+    // window is, and the width is persisted — so a pane dragged wide on a 1920
+    // monitor came back on a 1280 laptop and drove the elastic Title column to
+    // zero on every row. `maxPaneFor` is what the arithmetic is bounded against.
+    expect(home, 'the pane went back to a bound that ignores the viewport')
+      .toMatch(/usePaneWidth\(maxPaneFor\(width\)\)/)
+    expect(home, 'a window that narrows no longer takes the room back')
+      .toMatch(/setWidth\(w => clampPane\(w, max\)\)/)
+  })
+
+  test('the resize handle cannot be left holding a drag nobody is making', () => {
+    /*
+     * The same latch the swipe layer documents and guards against. A
+     * right-click on the hairline started a drag whose `pointerup` was consumed
+     * by the context menu that opened over it, and the pane then tracked the
+     * bare cursor every time it crossed the strip the mouse travels through on
+     * its way between the list and the pane.
+     */
+    const handle = home.slice(home.indexOf('function usePaneWidth'))
+    expect(handle, 'a secondary button starts a pane drag again')
+      .toMatch(/if \(e\.button > 0\) return/)
+    expect(handle, 'the pane resizes under a cursor nobody is pressing')
+      .toMatch(/if \(e\.buttons === 0\)/)
+    expect(handle, 'a cancelled pointer leaves the handle latched')
+      .toMatch(/onPointerCancel: release/)
+    expect(home, 'the handle gave its drag back to the page scroll on touch')
+      .toContain('touch-none')
+  })
+})
+
+describe('a row can be acted on without being opened', () => {
+  const swipe = read('src/web/components/swipe.tsx')
+
+  test('every row with a status has the same three actions', () => {
+    for (const f of ['src/web/components/CardTable.tsx', 'src/web/pages/Work.tsx']) {
+      expect(read(f), `${f}: rows here have no drawer`).toContain('<SwipeDrawer')
+    }
+    // Words, not glyphs. A thumb-sized box with a picture in it is a guess.
+    expect(swipe).toMatch(/label="Done"/)
+    expect(swipe).toMatch(/label="Status"/)
+    expect(swipe).toMatch(/label="Delete"/)
+  })
+
+  test('the drawer is not rendered while it is shut', () => {
+    // Not at `opacity: 0` and not at `width: 0` with live buttons inside it:
+    // `group-hover` never fires on touch, so that shape is a control which is
+    // permanently invisible and permanently tappable.
+    expect(swipe, 'the drawer renders while the row is closed')
+      .toMatch(/if \(dx === 0\) return null/)
+    for (const f of web) {
+      expect(read(f), `${f}: a swipe action is hidden behind opacity`)
+        .not.toMatch(/opacity-0\s+group-hover:opacity-100/)
+    }
+  })
+
+  test('the gesture works with a trackpad as well as a thumb', () => {
+    // React attaches wheel listeners passively and a passive listener cannot
+    // `preventDefault`, so without the manual binding the same two fingers that
+    // open the drawer also trigger the browser's back gesture and the reader
+    // leaves Wake.
+    expect(swipe, 'the horizontal wheel binding is gone')
+      .toMatch(/addEventListener\('wheel',[^)]*\{ passive: false \}/)
+    expect(swipe, 'the pointer binding stopped being pointer-type agnostic')
+      .toMatch(/onPointerDown/)
+  })
+
+  test('a swipe is not a tap, and the page still scrolls', () => {
+    expect(swipe, 'a gesture no longer suppresses the click it produced')
+      .toMatch(/onClickCapture/)
+    expect(swipe, 'the swipe layer stopped yielding the vertical axis')
+      .toMatch(/touch: SwipeTouch = 'pan-y'/)
+
+    /*
+     * And the declaration has to reach an element that can take it.
+     *
+     * `touch-action` does not apply to a table row — rows, row groups, columns
+     * and column groups are excluded by the property itself — so an inline
+     * `touchAction` on the desk's `<tr>` was dropped by every browser while this
+     * test happily pinned the string. It lives in the stylesheet now, on the
+     * cells, and the rows carry the attribute that selects it.
+     */
+    expect(
+      swipe.slice(swipe.indexOf('const bind: SwipeBind')),
+      'the touch policy went back to an inline style on a <tr>',
+    ).not.toMatch(/touchAction/)
+    const css = read('src/web/styles.css')
+    expect(css, 'the swipe rows lost their touch-action rule')
+      .toMatch(/\[data-swipe='pan-y'\],\s*\n\s*\[data-swipe='pan-y'\] > td \{ touch-action: pan-y; \}/)
+    // Every element that takes the gesture, not one per file: the attribute is
+    // what selects the rule, so an element bound to the pointer handlers without
+    // it is an element whose touch policy is silently `auto`.
+    for (const f of ['src/web/components/CardTable.tsx', 'src/web/pages/Work.tsx']) {
+      const src = read(f)
+      const bound = src.split("data-swipe={swipe.bind['data-swipe']}").length - 1
+      const rows = src.split('swipe.bind.onPointerDown').length - 1
+      expect(bound, `${f}: ${rows - bound} swipeable element(s) declare no touch policy`).toBe(rows)
+    }
+
+    /*
+     * The Work page's rows are the exception, and it has to stay deliberate.
+     *
+     * framer owns their vertical axis for drag-to-reorder and writes `pan-x`
+     * inline to get it, so writing `pan-y` over that would kill reordering while
+     * still looking like it works. But `pan-x` also hands the browser the
+     * horizontal axis — the one the swipe is made of — so the row asks for
+     * `none`, and the rule needs `!important` to outrank an inline style.
+     */
+    expect(read('src/web/pages/Work.tsx'), 'the task row gave an axis back to the browser')
+      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3, 'none'\)/)
+    expect(css, "the task row's touch policy stopped outranking framer's inline one")
+      .toMatch(/\[data-swipe='none'\] \{ touch-action: none !important; \}/)
+  })
+
+  test('exactly one row is open, whichever input opened it', () => {
+    /*
+     * Two ways for the store to fall out of step with what is on screen, and
+     * both of them were live.
+     *
+     * The wheel path moved a row's drawer on the first event and only published
+     * to the store after a 120ms idle timer, so two rows sat fully open beside
+     * each other for the length of a trackpad gesture plus all of macOS's
+     * momentum. And nothing released the key when the row holding it unmounted —
+     * so opening a drawer on Work with a trackpad (no `pointerdown` anywhere)
+     * and then navigating away left `openKey` set for the rest of the session,
+     * which is what the desk checks before every keyboard shortcut: j, k, Enter,
+     * e, s and Escape dead, with no drawer on screen to explain it.
+     */
+    const wheel = swipe.slice(swipe.indexOf('const onWheel'), swipe.indexOf('const bind'))
+    expect(wheel, 'the wheel path went back to publishing only when the fingers stop')
+      .toMatch(/setOpenSwipe\(key\)\s*\n\s*put\(next\)/)
+    expect(swipe, 'a row that unmounts no longer releases the drawer it was holding')
+      .toMatch(/if \(openSwipeKey\(\) === key\) setOpenSwipe\(null\)/)
+
+    // And the wheel engages on the same 12px the finger does. A trackpad's
+    // vertical scroll decelerates through frames where `deltaY` has decayed to
+    // zero and a pixel of horizontal residue is left; without a threshold each
+    // one opened whichever row the cursor was over by a pixel.
+    expect(wheel, 'the wheel path opens a drawer on a pixel of scroll drift')
+      .toMatch(/travelled < SWIPE_ENGAGE_PX/)
+  })
+
+  test('every option in the status picker is a target, not a word', () => {
+    // Sized by its label alone, `Done` is four characters — a 36px box, the
+    // narrowest interactive thing in the product, sitting immediately left of
+    // `Won't do`, which takes the card off the desk.
+    const picker = swipe.slice(swipe.indexOf('if (picking && status)'), swipe.indexOf('return (\n    <div\n      data-swipe-action'))
+    expect(picker, 'the picker went back to label-width targets on a phone')
+      .toContain('min-w-11')
+  })
+
+  test('the drawer paints under the header it scrolls past', () => {
+    // Two positioned elements at one z-index in one stacking context paint in
+    // tree order, and a `<tbody>` comes after a `<thead>` — so an open drawer
+    // painted its solid 264px block over KIND / TITLE / WHY as its row scrolled
+    // up under the sticky header.
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'the sticky header dropped back to the drawer\'s own layer')
+      .toMatch(/sticky top-0 z-20/)
+    expect(swipe, 'the drawer climbed above the header').toMatch(/right-0 z-10/)
+  })
+
+  test('the picker offers what the row can actually be', () => {
+    // Five for a card, three for a task, two for a goal — and all of them from
+    // the shared table, so a picker cannot offer a value the route refuses.
+    expect(read('src/web/components/CardTable.tsx'), 'the card picker stopped using the shared five')
+      .toMatch(/STATUS_ORDER\.map/)
+    const work = read('src/web/pages/Work.tsx')
+    expect(work, 'the task picker invented its own labels').toContain('TASK_STATUS_LABEL')
+    expect(work, 'the task picker offered a state a task cannot be in')
+      .toMatch(/\(\['todo', 'doing', 'done'\] as const\)/)
+  })
+
+  test('delete on a card is the dismissal Wake already had', () => {
+    // A red button that irreversibly destroyed a card would be the only
+    // irreversible action in the product. On a card `Delete` sets `Won't do`,
+    // which takes it off the desk, keeps it in the restore list, and undoes.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the swipe grew a destructive delete for cards')
+      .toMatch(/onWontDo: wontDo/)
+    expect(home, "the card delete stopped going through Wake's own dismissal")
+      .toMatch(/const wontDo[\s\S]{0,400}actions\.notMine\(/)
+    expect(home, 'the card delete lost its undo')
+      .toMatch(/const wontDo[\s\S]{0,500}undoable\(/)
+  })
+})
+
+describe('the thread is legible in a 320px pane', () => {
+  const detail = read('src/web/components/CardDetail.tsx')
+
+  test('every body clips to three lines', () => {
+    // One Cursor root-cause post is 1,400 characters. Unclipped, the pane is one
+    // message and a scrollbar.
+    const row = detail.slice(detail.indexOf('function ThreadRow('))
+    expect(row, 'a reply body can own the whole pane again').toContain('line-clamp-3')
+  })
+
+  test('a reply that names him says so', () => {
+    const row = detail.slice(detail.indexOf('function ThreadRow('))
+    expect(row, 'the mark that explains why a row lit up is gone').toContain('@you')
+    expect(row, 'the amber rule on a naming reply is gone').toContain('border-l-2 border-l-accent')
+  })
+
+  test('the fresh marks survive the ack that clears the count', () => {
+    /*
+     * Opening a card posts `/ack` and reloads, and `baselineOf` reads exactly
+     * the `acked_at` that write moves — so within one round trip every line the
+     * thread had just drawn in the brighter ink was older than the baseline
+     * again and went back to muted. The pane's own promise is that the `+3` on
+     * the row and the three brighter lines in here are the same three messages;
+     * unfrozen, the second half of it was true for about twenty milliseconds.
+     */
+    expect(detail, 'the thread baseline moved with the ack again')
+      .toMatch(/const opened = useRef\(\{ key: card\.group_key, baseline: baselineOf\(card\) \}\)/)
+    expect(detail, 'the thread went back to reading the live baseline')
+      .toMatch(/<Thread card=\{card\} lines=\{lines\} baseline=\{opened\.current\.baseline\} \/>/)
+    const thread = detail.slice(detail.indexOf('function Thread('), detail.indexOf('function ThreadRow('))
+    expect(thread, 'the thread recomputed a baseline of its own').not.toMatch(/baselineOf\(/)
+  })
+
+  test('a channel in the detail loses its sigil and keeps its name', () => {
+    // `15five-truto` cut to `15five-tru…` names a channel that does not exist,
+    // and every row in this pane is already in Slack, so the `#` says nothing.
+    expect(detail, 'the channel name is truncated again')
+      .toMatch(/const bareChannel/)
+    const facts = detail.slice(detail.indexOf('function Facts('), detail.indexOf('function SeenIn('))
+    expect(facts, 'the channel row went back to truncating').toMatch(/add\('Channel'[^\n]*true\)/)
+  })
+
+  test('Slack opens in Slack, and the permalink stays a link', () => {
+    expect(detail, 'the Slack deep link is gone').toMatch(/slack:\/\/channel\?id=/)
+    expect(detail, 'the hand-off became a scripted open again').not.toMatch(/window\.open\s*\(/)
+    const seen = detail.slice(detail.indexOf('function SeenIn('))
+    expect(seen, 'the https permalink left the seen-in line').toMatch(/href=\{s\.url\}/)
+  })
+})
+
+describe('one key does one thing', () => {
+  test('a row with its drawer open owns the keyboard', () => {
+    // Measured: one Escape both shut the drawer and dismissed the detail pane,
+    // because two document-level handlers were listening for it. Worse, `e`
+    // would have completed a card while that card's own Done sat revealed and
+    // unpressed two inches away.
+    const home = read('src/web/pages/Home.tsx')
+    const handler = home.slice(home.indexOf('const onKey = (e: KeyboardEvent)'))
+    expect(handler.slice(0, 900), 'the desk shortcuts fire through an open drawer')
+      .toMatch(/if \(openSwipeKey\(\)\) return/)
   })
 })

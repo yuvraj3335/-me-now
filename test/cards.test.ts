@@ -170,14 +170,25 @@ describe('every pile the server accepts is a pile the UI can ask for', () => {
     expect(live.parked.map((c: any) => c.group_key)).toContain(GROUP)
   })
 
-  test('and the card detail offers exactly the piles it is not in', () => {
-    // Read off the source: the control is built from a list that excludes the
-    // current pile, so "Move to Open" cannot be offered for an Open card — which
-    // used to be a silent write of `pile_override:'open'`, freezing the card
-    // against Wake's own classification forever.
+  /**
+   * AMENDED. The invariant is the same; the mechanism that keeps it is not.
+   *
+   * This used to assert that the control `filter`ed the current pile out of the
+   * list — which is one way to make sure "move to Waiting" is never offered on a
+   * card that is already waiting, and that offer used to be a silent write of
+   * `pile_override`, freezing the card against Wake's own classification
+   * forever. Filtering also meant the block never said where the card *was*: a
+   * `Where` heading over two chips, neither of them the answer.
+   *
+   * All three are drawn now, and the one the card is in is pressed and carries
+   * no handler at all — so it still cannot write, and the block now reads as an
+   * answer rather than a menu. What is pinned is the thing that mattered: the
+   * current pile is not clickable.
+   */
+  test('and the card detail cannot move a card to the group it is already in', () => {
     const detail = readFileSync('src/web/components/CardDetail.tsx', 'utf8')
     expect(detail).toMatch(/PILES\b/)
-    expect(detail, 'the move control no longer filters out the current pile')
-      .toMatch(/filter\([^)]*p\.id !== card\.pile/)
+    expect(detail, 'the current group grew a handler that would write pile_override')
+      .toMatch(/onClick=\{p\.id === card\.pile \? undefined :/)
   })
 })

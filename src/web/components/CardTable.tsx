@@ -1,5 +1,5 @@
 /**
- * Now, as a table.
+ * The desk, as a table.
  *
  * One `<table>`, one sticky header row, and one `<tbody>` per non-empty pile,
  * all sharing one `<colgroup>`. The shared colgroup is the whole trick: it is
@@ -26,9 +26,12 @@
  * the fold to report that there was nothing in it, and three of them stacked
  * cost 331px of a filtered phone to say nothing at all.
  *
- * **The 2px row stripe is gone.** It was an 855px vertical bracket painting the
- * identical colour on every visible row — brighter than the rules it crossed,
- * encoding nothing.
+ * **The 2px row stripe is gone, and a 2px state edge has taken its place.** The
+ * stripe was an 855px vertical bracket painting the identical colour on every
+ * visible row — brighter than the rules it crossed, encoding nothing. The edge
+ * is the same two pixels spent on the two or three rows that have had something
+ * land on them since he last looked, and it is drawn from the same expression as
+ * the `+N` beside the title, so the two can never disagree.
  *
  * Below 1024px there is no table: the row becomes one 44px line, because six
  * columns in 390px is not a table, it is a diagram of one.
@@ -36,18 +39,53 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
+import type { CardStatus } from '../../shared/status'
+import { STATUS_LABEL, STATUS_ORDER } from '../../shared/status'
 import type { Card, SourceName } from '../lib/types'
 import { ago } from '../lib/time'
 import { Button } from './primitives'
 import { SourceDot, SOURCE_LABEL } from './sources'
 import { cardKind, headTruncate, KindGlyph, whereOf } from './kinds'
+import { SwipeDrawer, useSwipe } from './swipe'
 
 export type RowAction = {
-  /** `Done` on every pile; `Later` on Now and Open; `Wake now` on Parked. */
+  /** Done on every group; Snooze on the two live ones; Bring it back on a snoozed one. */
   onDone: (c: Card) => void
-  onLater: (c: Card) => void
-  onWake: (c: Card) => void
+  onSnooze: (c: Card) => void
+  onBack: (c: Card) => void
   onOpen: (c: Card) => void
+  /** The swipe's Status picker, and its Delete — which on a card is `Won't do`. */
+  onStatus: (c: Card, status: CardStatus) => void
+  onWontDo: (c: Card) => void
+}
+
+/** The five, as the drawer's picker wants them. Built once, not per row. */
+const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id, label: STATUS_LABEL[id] }))
+
+/**
+ * The count, and the edge, from one expression.
+ *
+ * `+2` renders iff there is something new and the row is marked iff there is
+ * something new, so the two can never tell different stories about the same
+ * thread. The server computes the number; this decides nothing except where to
+ * put it.
+ *
+ * The edge is `inset` box-shadow on the row's first cell rather than a border on
+ * the `<tr>`, because under `border-collapse` a row's own border does not paint
+ * at all. This is the 2px state edge the file's docblock reserved when it
+ * deleted the old stripe: that one painted the identical colour on all twenty
+ * rows and encoded nothing. This paints two or three.
+ */
+const EDGE = { boxShadow: 'inset 2px 0 0 var(--color-accent)' } as const
+const edgeIf = (card: Card) => (card.activity.count > 0 ? EDGE : undefined)
+
+function Count({ card }: { card: Card }) {
+  if (card.activity.count <= 0) return null
+  return (
+    <span className="text-accent-ink tnum text-sm shrink-0" title="new since you last looked">
+      +{card.activity.count}
+    </span>
+  )
 }
 
 /**
@@ -102,11 +140,48 @@ const W = { kind: 96, why: 160, where: 112, dots: 20, when: 56, actions: 64 }
 /** What Title wants. It is the only elastic column. */
 const TITLE_MIN = 280
 
-export function columnsFor(width: number): Columns {
-  const pane = width >= PANE_MIN ? paneWidth(width) : 0
+/**
+ * What Title must never be given less than, which is a different question.
+ *
+ * `TITLE_MIN` is the width at which the column is comfortable, and it is what
+ * decides whether `Where` still fits beside it. This is the floor under the
+ * whole table: the pane is draggable now, and under `table-fixed` the one
+ * unsized column gets whatever the others leave — which at 1280 with the pane
+ * dragged to its 640 ceiling is *minus four pixels*. Every row on the desk
+ * rendered a blank Title inside a table four pixels wider than its own column,
+ * from a width that had been persisted on a bigger monitor and restored with no
+ * visible cause. 200px is about twenty-five characters: enough to tell one row
+ * from another, which is the least a title can be and still be one.
+ */
+const TITLE_FLOOR = 200
+
+/** Everything in a row that is not the title, at the width it always takes. */
+const FIXED = W.kind + W.dots + W.when + W.actions + W.why
+
+/**
+ * The widest the detail pane may be at this viewport.
+ *
+ * `clampPane` bounds the pane against itself, 320 to 640, with no reference to
+ * how much shell there is to take the room from — so the bound held on a 1920px
+ * monitor and took the list apart on the 1280px laptop the same `localStorage`
+ * value came back on. The pane may take room from the list; it may not take the
+ * list apart. `Where` is not in the sum because `columnsFor` has already given
+ * it up by the time this bites.
+ */
+export function maxPaneFor(width: number): number {
+  return width - RAIL - PAGE_PAD - FIXED - TITLE_FLOOR
+}
+
+/**
+ * `pane` is passed in now rather than derived, because the pane is draggable.
+ *
+ * It still defaults to what the breakpoint would have chosen, so a caller that
+ * does not care about the pane — and the tests that pin the width table — ask
+ * the same question they always did.
+ */
+export function columnsFor(width: number, pane = width >= PANE_MIN ? paneWidth(width) : 0): Columns {
   const list = width - RAIL - pane - PAGE_PAD
-  const fixed = W.kind + W.dots + W.when + W.actions + W.why
-  return { why: true, where: list - fixed - W.where >= TITLE_MIN }
+  return { why: true, where: list - FIXED - W.where >= TITLE_MIN }
 }
 
 /** The viewport width, as a number the column rules can read. */
@@ -133,7 +208,16 @@ const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-mi
 
 export function TableHead({ cols }: { cols: Columns }) {
   return (
-    <thead className="sticky top-0 z-10 bg-ink-900">
+    /*
+     * `z-20`, because the drawer is `z-10` and so was this.
+     *
+     * Two positioned elements at the same z-index in one stacking context are
+     * painted in tree order, and a `<tbody>` comes after a `<thead>` — so an
+     * open drawer on a row scrolling up under the sticky header painted its
+     * solid 264px block straight over KIND / TITLE / WHY. The header is the one
+     * that has to win: it is the fixed thing the rows move under.
+     */
+    <thead className="sticky top-0 z-20 bg-ink-900">
       <tr className="border-b border-edge">
         <th className={HEAD} scope="col">Kind</th>
         <th className={HEAD} scope="col">Title</th>
@@ -179,12 +263,14 @@ export const colSpanOf = (cols: Columns) =>
 /* ------------------------------ group headers ----------------------------- */
 
 /**
- * `NOW 3`, `OPEN 19`.
+ * `ON YOU 3`, `WAITING 19`.
  *
  * An eyebrow and a tabular count, not a heading. It used to be `text-md
  * font-medium` — the same weight and colour as the page title, four points
  * smaller, repeated four times per screen, so the eye could not tell which "Now"
- * was the page. One `lg` per screen; a group label is 11px uppercase.
+ * was the page. One `lg` per screen; a group label is 11px uppercase. The words
+ * changed with the rest of the vocabulary; what the three groups compute did
+ * not, and the field names in the JSON did not either.
  *
  * The count carries no accent. The same number was amber in three places at
  * once, which is three more than "at most three marks on a screen" allows.
@@ -231,6 +317,7 @@ export function CardRow({
   const lead = card.sources[0]
   const where = whereOf(lead, card)
   const sources = [...new Set(card.sources.map(s => s.source))] as SourceName[]
+  const swipe = useSwipe(card.group_key, 3)
 
   // Keyboard focus scrolls the row into view; without this, `j` past the fold
   // moves a selection nobody can see.
@@ -238,13 +325,20 @@ export function CardRow({
 
   return (
     <tr
-      ref={ref}
+      ref={n => { ref.current = n; swipe.bind.ref(n) }}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      style={swipe.bind.style}
       onClick={() => actions.onOpen(card)}
       aria-selected={selected}
       className={`group cursor-pointer border-b border-rule transition-colors duration-100
         ${focused ? 'bg-ink-700' : selected ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
     >
-      <td className={CELL}>
+      <td className={CELL} style={edgeIf(card)}>
         {/* A fixed slot, not a gap: the glyph varies in width by two pixels
             between kinds, and letting it push the word is what put four row
             titles on four different x. */}
@@ -254,7 +348,15 @@ export function CardRow({
         </span>
       </td>
 
-      <td className={`${CELL} text-base font-medium text-fg`} title={card.title}>{card.title}</td>
+      {/* The count sits immediately after the title, inside its cell, so it
+          costs the elastic column ~26px on the rows that have one and nothing
+          on the rows that do not. */}
+      <td className={`${CELL} text-base font-medium text-fg`} title={card.title}>
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="truncate">{card.title}</span>
+          <Count card={card} />
+        </span>
+      </td>
 
       {cols.why && <td className={`${CELL} text-sm text-fg-dim`} title={card.why}>{card.why}</td>}
       {/* Head-truncated to what the column actually holds, and NOT also
@@ -276,12 +378,28 @@ export function CardRow({
 
       <td className={`${CELL} text-sm text-fg-mute tnum text-right`}>{ago(card.ts)}</td>
 
-      <td className="py-1 pr-0 align-middle" onClick={e => e.stopPropagation()}>
+      {/* The drawer is anchored here and paints leftward over the row. A `<tr>`
+          cannot be a containing block for a panel that spans it — and it cannot
+          clip one either — so the last cell, which is the one at the row's right
+          edge, holds it. */}
+      <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
         <span className="flex items-center justify-end">
           <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
             <Check size={14} />
           </Button>
         </span>
+        <SwipeDrawer
+          dx={swipe.dx}
+          width={swipe.width}
+          onClose={swipe.close}
+          onDone={() => actions.onDone(card)}
+          onDelete={() => actions.onWontDo(card)}
+          status={{
+            current: card.status,
+            options: STATUS_CHOICES,
+            onPick: id => actions.onStatus(card, id as CardStatus),
+          }}
+        />
       </td>
     </tr>
   )
@@ -305,15 +423,31 @@ export function CardLine({
   card, selected, actions,
 }: { card: Card; selected: boolean; actions: RowAction }) {
   const kind = cardKind(card)
+  const swipe = useSwipe(card.group_key, 3)
 
   return (
-    <li className={`flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}>
+    <li
+      ref={swipe.bind.ref}
+      onPointerDown={swipe.bind.onPointerDown}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={swipe.bind.onPointerCancel}
+      onClickCapture={swipe.bind.onClickCapture}
+      data-swipe={swipe.bind['data-swipe']}
+      style={{ ...swipe.bind.style, ...(card.activity.count > 0 ? EDGE : null) }}
+      /* `overflow-hidden` is the drawer's clip. The table cannot have one — a
+         `<tr>` does not clip — but this row can, so a status picker on the
+         narrowest phone is bounded by the row rather than by the page. */
+      className={`relative overflow-hidden flex items-center border-b border-rule h-11
+        ${selected ? 'bg-ink-800' : ''}`}
+    >
       <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
         <div className="flex items-center h-full">
           {/* The same fixed slot the table uses, so every title on the page
               starts on one x whatever glyph precedes it. */}
           <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
           <span className="text-base font-medium text-fg truncate min-w-0 grow">{card.title}</span>
+          {card.activity.count > 0 && <span className="pl-2 flex items-center"><Count card={card} /></span>}
           {/*
             `Why` from 640px up, and not below it.
 
@@ -339,6 +473,18 @@ export function CardLine({
           <Check size={14} />
         </Button>
       </span>
+      <SwipeDrawer
+        dx={swipe.dx}
+        width={swipe.width}
+        onClose={swipe.close}
+        onDone={() => actions.onDone(card)}
+        onDelete={() => actions.onWontDo(card)}
+        status={{
+          current: card.status,
+          options: STATUS_CHOICES,
+          onPick: id => actions.onStatus(card, id as CardStatus),
+        }}
+      />
     </li>
   )
 }

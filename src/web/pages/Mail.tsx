@@ -170,10 +170,14 @@ export function Mail() {
 
           {!list.answered && !list.threads.length && <ArrivingRows />}
           {list.answered && !list.threads.length && <Empty />}
+          {/* `Older`, not `More`. The list is newest-first, so this is the one
+              word that says which direction the next page lies in — and `More`
+              is the word this product retired everywhere else, for being a
+              label that names no destination. */}
           {list.hasMore && !list.loading && (
             <button onClick={list.more}
               className="w-full h-11 text-left text-sm text-fg-mute hover:text-fg-dim transition-colors">
-              More
+              Older
             </button>
           )}
         </div>

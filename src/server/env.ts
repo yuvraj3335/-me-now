@@ -46,6 +46,72 @@ export const ME = {
 export const GMAIL_ACCOUNTS = str('WAKE_GMAIL_ACCOUNTS', ME.emails.join(','))
   .split(',').map(s => s.trim()).filter(Boolean)
 
+/* -------------------------------------------------------------------------- */
+/* Slack — what is asked, and where                                           */
+/* -------------------------------------------------------------------------- */
+
+const list = (k: string, d: string) =>
+  str(k, d).split(',').map(s => s.trim()).filter(Boolean)
+
+/**
+ * Usergroups whose name means him.
+ *
+ * `<!subteam^S06HDT77E1M|@truto-eng>` is how Sentry pages the engineering team,
+ * and being on that list is the same fact as being named personally as far as
+ * "is this on me" is concerned. The raw id is what search matches; the handle is
+ * discovered from the message text, because a usergroup's display name is a
+ * thing people rename.
+ */
+export const SLACK_USERGROUPS = list('WAKE_SLACK_USERGROUPS', 'S06HDT77E1M')
+
+/**
+ * Channels that are READ rather than searched, and why that distinction exists.
+ *
+ * Slack's search index does not cover Block Kit. Sentry's alert carries its
+ * `notes: <!subteam^S06HDT77E1M|@truto-eng>` inside a block, so a search for the
+ * usergroup returns nothing at all for the channel where the usergroup is
+ * actually paged — measured live, see FIXTURES §2. Reading the channel returns
+ * the same text search cannot see.
+ *
+ * Written `<id>:<name>` because the channel read answers with the name anyway
+ * and a config that only holds opaque ids is unreadable.
+ */
+export const SLACK_ALERT_CHANNELS: Array<{ id: string; name: string }> = list(
+  'WAKE_SLACK_ALERT_CHANNELS',
+  'C0BERTMS9K4:sentry-alerts,C05UPHVT2CQ:truto-api-alerts,C0B53TSLGLA:truto-grafana-alerts,C07UWPPLSGN:intent-alerts',
+).map(entry => {
+  const [id = '', name = ''] = entry.split(':')
+  return { id: id.trim(), name: name.trim() || id.trim() }
+}).filter(c => c.id)
+
+/**
+ * Channels that fire constantly and are about nobody in particular.
+ *
+ * `#github-updates` posts every push in the organisation. Matching the query is
+ * not the same as being on him, so a hit from one of these lands only when he is
+ * personally named in the message itself.
+ */
+export const SLACK_FIREHOSE = list('WAKE_SLACK_FIREHOSE', 'github-updates')
+
+/**
+ * The workspace host, for the one case where Slack does not hand one over: a
+ * channel read carries no permalink, so the link has to be built.
+ */
+export const SLACK_WORKSPACE = str('WAKE_SLACK_WORKSPACE', 'truto')
+
+/**
+ * How many threads one poll will read in full.
+ *
+ * Each read is a round trip, and a poll runs every three minutes. Twenty is a
+ * budget rather than a limit on how many threads may exist: the ones that need a
+ * read most take it first (see `slack.ts`), and the rest degrade to the earliest
+ * hit as their parent, carrying `meta.thread_partial`.
+ */
+export const SLACK_THREAD_READS = num('WAKE_SLACK_THREAD_READS', 20)
+
+/** Messages read per alert channel per poll, newest first. */
+export const SLACK_ALERT_CHANNEL_LIMIT = num('WAKE_SLACK_ALERT_CHANNEL_LIMIT', 25)
+
 /** Poll cadence. Jittered per source so they never stampede together. */
 export const POLL_INTERVAL_MS = num('WAKE_POLL_INTERVAL_MS', 3 * 60_000)
 export const REMINDER_TICK_MS = num('WAKE_REMINDER_TICK_MS', 30_000)

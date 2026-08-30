@@ -161,9 +161,18 @@ export const sentry: SourceAdapter = {
     const org = await orgSlug()
     if (!org) throw new Error('Sentry named no organisation for this token')
 
-    // Unresolved and assigned to me — errors nobody owns are not "on me".
+    /*
+     * Three questions, every one of them about him.
+     *
+     * `is:unresolved` never appears on its own: an organisation-wide unresolved
+     * search is a firehose of everybody's errors, and a desk that shows all of
+     * them is a desk nobody reads. `assigned_or_suggested:me` is the one that
+     * earns its place — Sentry's own suggestion is based on who touched the
+     * code, which is how an error lands on him before anybody assigns it.
+     */
     const queries = [
       { q: 'is:unresolved assigned:me', why: 'assigned to you in Sentry', pile: 'now' as const },
+      { q: 'is:unresolved assigned_or_suggested:me', why: 'assigned or suggested to you in Sentry', pile: 'now' as const },
       { q: 'is:unresolved is:for_review', why: 'waiting for review in Sentry', pile: 'open' as const },
     ]
 

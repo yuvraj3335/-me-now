@@ -44,6 +44,24 @@ const VARIANT: Record<ButtonVariant, string> = {
   danger: 'border border-edge text-bad hover:bg-ink-800',
 }
 
+/**
+ * The painted control, as a class list rather than an element.
+ *
+ * One thing in the product needs a control that is genuinely a link — the
+ * detail pane's `Open`, which hands a `slack://` or an `https://` URL to
+ * whatever owns it. A scripted `window.open` is the wrong tool for that: on iOS
+ * only a real link navigation reaches an installed app, which is the whole
+ * reason the hand-off to Claude is an anchor too. Exporting the classes is how
+ * an `<a>` can be that control without a second control language growing beside
+ * this one.
+ */
+export const controlClass = (
+  variant: ButtonVariant = 'default', size: ButtonSize = 'md', extra = '',
+) =>
+  `relative inline-flex items-center justify-center rounded-control whitespace-nowrap
+   transition-colors duration-100 disabled:opacity-40 disabled:pointer-events-none
+   ${SIZE[size]} ${VARIANT[variant]} ${extra}`
+
 export function Button({
   children, onClick, variant = 'default', size = 'md', className = '',
   disabled, type = 'button', title, ariaLabel,
@@ -61,9 +79,7 @@ export function Button({
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={onClick}
-      className={`relative inline-flex items-center justify-center rounded-control whitespace-nowrap
-        transition-colors duration-100 disabled:opacity-40 disabled:pointer-events-none
-        ${SIZE[size]} ${VARIANT[variant]} ${className}`}
+      className={controlClass(variant, size, className)}
     >
       {children}
     </button>

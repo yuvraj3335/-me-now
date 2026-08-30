@@ -26,17 +26,17 @@ import { navigate, setParam, useRoute } from './lib/route'
  * the 44pt target, and a modal to reach Settings cost two taps and a dismissal
  * at exactly the moment something was broken and he was already annoyed.
  * "Refresh sources" left with it: it is not a destination, and it is already a
- * control in Now's header and a command in the palette.
+ * control in the desk's own header and a command in the palette.
  *
- * `flush` marks a page that lays out the whole shell column itself — Now, which
- * is a table beside a detail pane, Mail, which is a list beside a thread, and
+ * `flush` marks a page that lays out the whole shell column itself — the desk,
+ * which is a table beside a detail pane, Mail, which is a list beside a thread, and
  * Work, which is a list beside its notes. All three pad each of their own
  * columns with the same `.pad-x`, which is what puts the second column's left
  * edge on one vertical across the product instead of on a 360px inset that only
  * Work used. Everything else gets the shell's own padding.
  */
 const TABS = [
-  { path: '/', label: 'Now', Icon: Inbox, Page: Home, flush: true },
+  { path: '/', label: 'Desk', Icon: Inbox, Page: Home, flush: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, flush: true },
   { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: true },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, flush: false },
@@ -240,13 +240,14 @@ function useCommands(): Command[] {
       },
       {
         /**
-         * The restore list. It is a collapsed group at the foot of Now rather
-         * than a modal — a pile of his cards belongs on the page that holds his
-         * piles — so the command opens Now with that group expanded. Reachable
-         * with no card to start from, which is the point: the card is gone.
+         * The restore list. It is a collapsed group at the foot of the desk
+         * rather than a modal — a group of his cards belongs on the page that
+         * holds his groups — so the command opens the desk with that group
+         * expanded. Reachable with no card to start from, which is the point:
+         * the card is gone.
          */
         id: 'cards:done',
-        label: 'Done and not mine',
+        label: "Done and won't do",
         hint: 'bring something back',
         group: 'Wake',
         icon: <RotateCcw size={14} />,
@@ -292,7 +293,7 @@ function TabItem({
         transition-colors duration-100 ${active ? 'text-fg' : 'text-fg-mute'}`}>
       <span className="relative">
         <Icon size={16} strokeWidth={active ? 2.1 : 1.7} />
-        {/* The Now badge is one of the three amber marks in the product. It says
+        {/* The desk badge is one of the three amber marks in the product. It says
             "something is waiting", which is the only thing amber ever means. */}
         {badge > 0 && (
           <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full
