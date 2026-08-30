@@ -104,7 +104,37 @@ export function elisionPairs(subjects: string[]): Array<[string, string]> {
   return out
 }
 
-/** Pull every hard reference out of arbitrary text (body, title, permalink). */
+/**
+ * Drop the fragment an ellipsis cut in half.
+ *
+ * Wake truncates a session title it derives from a prompt and keeps the
+ * ellipsis, so nobody reads a clipped title as the whole one. The `ELIDED` guard
+ * above already stops a cut *subject* from identifying anything — but the same
+ * text was also being run through the GitHub regexes, and there the honesty was
+ * not applied at all: `github.com/trutohq/truto/pull/2…` matched, yielding
+ * `gh:trutohq/truto#2`. That is a reference to a pull request that does not
+ * exist, and because `gh` outranks every other reference type it won the group
+ * label — merging two unrelated Claude sessions under a fabricated PR, hiding a
+ * 22-turn session completely, and making the card claim a `trutohq/truto` PR
+ * while its Open button went to `truto-app/pull/1134`.
+ *
+ * A reference extracted from text Wake elided is not a reference. Only the token
+ * the ellipsis is attached to is dropped: the rest of the line was not cut and
+ * is still true.
+ */
+export function withoutElidedTail(text: string): string {
+  return text
+    .split('\n')
+    .map(line => (ELIDED.test(line.trimEnd()) ? line.replace(/(^|\s)\S+\s*$/, '$1') : line))
+    .join('\n')
+}
+
+/**
+ * Pull every hard reference out of arbitrary text (body, title, permalink).
+ *
+ * Callers that pass text Wake itself truncated must run it through
+ * `withoutElidedTail` first — `extractRefsFromElidable` does both.
+ */
 export function extractRefs(text: string, contextRepo?: string): Ref[] {
   const out: Ref[] = []
   const seen = new Set<string>()
@@ -125,6 +155,10 @@ export function extractRefs(text: string, contextRepo?: string): Ref[] {
   }
   return out
 }
+
+/** `extractRefs` over text that may have been cut short by Wake's own truncation. */
+export const extractRefsFromElidable = (text: string, contextRepo?: string): Ref[] =>
+  extractRefs(withoutElidedTail(text), contextRepo)
 
 /* ------------------------------- union-find ------------------------------- */
 

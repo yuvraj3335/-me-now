@@ -15,8 +15,16 @@ const PATTERNS: Array<{ re: RegExp; label: string }> = [
   // Authorization: Bearer <token>  /  "Authorization": "Bearer <token>"
   { re: /(\b(?:authorization|proxy-authorization)"?\s*[:=]\s*"?)(bearer\s+)?([A-Za-z0-9._~+/=-]{12,})/gi, label: 'auth' },
   // Any JSON field whose *name* says secret, regardless of the value's shape.
+  //
+  // The affixes are bounded rather than `*`. Unbounded `[a-z_]*` on both sides
+  // of the alternation is quadratic: on a long run of lowercase text with no
+  // keyword in it, every start position walks the rest of the string forward and
+  // backtracks the whole way. A 30,000-character excerpt — well inside what a
+  // pack quotes — took 3.1 seconds to redact, on the request path. Twenty-four
+  // characters is longer than any real key prefix (`client_refresh_token_v2`),
+  // and the cost becomes linear.
   {
-    re: /("?(?:[a-z_]*(?:secret|password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret|token)[a-z_]*)"?\s*[:=]\s*"?)([^"'\s,}\]]{6,})/gi,
+    re: /("?(?:[a-z_]{0,24}(?:secret|password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key|client[_-]?secret|token)[a-z_]{0,24})"?\s*[:=]\s*"?)([^"'\s,}\]]{6,})/gi,
     label: 'field',
   },
   // Bare credentials that are recognisable on their own.

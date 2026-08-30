@@ -151,6 +151,9 @@ export const gmail: SourceAdapter = {
           why: direct ? 'addressed to you, unread' : 'unread in your inbox',
           actor: nameOf(senderRaw),
           actor_id: addrOf(senderRaw),
+          // The sender is a person. The display name when there is one, the
+          // address when there is not — never an empty string.
+          who: nameOf(senderRaw) || addrOf(senderRaw) || undefined,
           excerpt: (snippet || body).slice(0, 400),
           url: `https://mail.google.com/mail/u/${encodeURIComponent(account)}/#inbox/${id}`,
           ts,

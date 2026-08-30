@@ -1,0 +1,296 @@
+/**
+ * Now, as a table.
+ *
+ * One `<table>`, one sticky header row, and three `<tbody>` groups — Now, Open,
+ * Parked — sharing one `<colgroup>`. The shared colgroup is the whole trick: it
+ * is what lets grouping and column alignment coexist without either becoming a
+ * mode, so the eye reads straight down one column instead of re-parsing every
+ * entry. A fourth group, `Done and not mine`, sits collapsed at the bottom.
+ *
+ * What this replaces: twenty 129px cards, of which 32px was an `opacity: 0`
+ * action bar occupying layout on every row whether or not it was visible and
+ * 30px was a chip row restating the dot in the gutter. Five of twenty rows fit a
+ * 1440×900 viewport. At 44px, fourteen do.
+ *
+ * Below 1024px there is no table: the row becomes two lines, because six columns
+ * in 390px is not a table, it is a diagram of one.
+ */
+
+import { useEffect, useRef, useState } from 'react'
+import { Check, Clock, Sunrise } from 'lucide-react'
+import type { Card, SourceName } from '../lib/types'
+import { ago } from '../lib/time'
+import { Button } from './primitives'
+import { SourceDot, SOURCE_LABEL } from './sources'
+import { cardKind, headTruncate, KindGlyph, whereOf } from './kinds'
+
+export type RowAction = {
+  /** `Done` on every pile; `Later` on Now and Open; `Wake now` on Parked. */
+  onDone: (c: Card) => void
+  onLater: (c: Card) => void
+  onWake: (c: Card) => void
+  onOpen: (c: Card) => void
+}
+
+/**
+ * Which columns exist at this width, with this pane state.
+ *
+ * They disappear from the middle out, and Title and When always survive. With
+ * the detail pane open, Who and Where go first — both are in the pane, three
+ * inches to the right, and repeating them costs the Title column its room.
+ */
+export type Columns = {
+  why: boolean
+  who: boolean
+  where: boolean
+}
+
+export function columnsFor(width: number, paneOpen: boolean): Columns {
+  if (width < 1100) return { why: false, who: false, where: false }
+  if (width < 1280) return { why: true, who: false, where: true }
+  if (paneOpen) return { why: true, who: false, where: false }
+  return { why: true, who: true, where: true }
+}
+
+/** The viewport width, as a number the column rules can read. */
+export function useViewport(): number {
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
+  useEffect(() => {
+    const on = () => setW(window.innerWidth)
+    window.addEventListener('resize', on)
+    on()
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return w
+}
+
+/* --------------------------------- header --------------------------------- */
+
+const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle px-2 py-2'
+
+export function TableHead({ cols }: { cols: Columns }) {
+  return (
+    <thead className="sticky top-0 z-10 bg-ink-900">
+      <tr className="border-b border-edge">
+        <th className={HEAD} scope="col">Kind</th>
+        <th className={HEAD} scope="col">Title</th>
+        {cols.why && <th className={HEAD} scope="col">Why</th>}
+        {cols.who && <th className={HEAD} scope="col">Who</th>}
+        {cols.where && <th className={HEAD} scope="col">Where</th>}
+        <th className={HEAD} scope="col">Source</th>
+        <th className={`${HEAD} text-right`} scope="col">When</th>
+        <th className={HEAD} scope="col"><span className="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+  )
+}
+
+/**
+ * The one `<colgroup>` every group shares.
+ *
+ * Fixed widths and `table-fixed` on the table, so a long title cannot push the
+ * When column left on one row and not on the next — which is the entire content
+ * of "columns that hold their x-position down the page".
+ */
+export function TableCols({ cols }: { cols: Columns }) {
+  return (
+    <colgroup>
+      <col style={{ width: 104 }} />
+      <col style={{ minWidth: 280 }} />
+      {cols.why && <col style={{ width: 176 }} />}
+      {cols.who && <col style={{ width: 112 }} />}
+      {cols.where && <col style={{ width: 128 }} />}
+      <col style={{ width: 56 }} />
+      <col style={{ width: 48 }} />
+      <col style={{ width: 88 }} />
+    </colgroup>
+  )
+}
+
+/** How many cells wide the table currently is, for a full-width group row. */
+export const colSpanOf = (cols: Columns) =>
+  5 + (cols.why ? 1 : 0) + (cols.who ? 1 : 0) + (cols.where ? 1 : 0)
+
+/* ------------------------------ group headers ----------------------------- */
+
+/**
+ * `Now 0`, `Open 3 of 19`.
+ *
+ * The 40px accent numeral is gone. It said one fact — how many things are
+ * waiting — that the group header already says, and it said it in the loudest
+ * type and the only routine use of the accent in the product, at the top of the
+ * first screen of his day, in order to report a zero.
+ *
+ * The count carries the accent only when it is greater than zero. That is the
+ * entire urgency signal, and it is enough.
+ */
+export function GroupHead({
+  title, shown, total, cols, right,
+}: { title: string; shown: number; total: number; cols: Columns; right?: React.ReactNode }) {
+  const filtered = shown !== total
+  const urgent = title === 'Now' && shown > 0
+  return (
+    <tr>
+      <td colSpan={colSpanOf(cols)} className="px-2 pt-8 pb-3">
+        <div className="flex items-baseline gap-2">
+          <h2 className="text-md font-medium tracking-[-0.01em]">{title}</h2>
+          <span className={`tnum text-md ${urgent ? 'text-accent-ink' : 'text-fg-mute'}`}>
+            {filtered ? `${shown} of ${total}` : shown}
+          </span>
+          {right && <span className="ml-auto">{right}</span>}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+/** One muted noun phrase, at the x-position of the Title column, one row tall. */
+export function EmptyRow({ cols, children }: { cols: Columns; children: React.ReactNode }) {
+  return (
+    <tr>
+      <td className="w-[104px]" />
+      <td colSpan={colSpanOf(cols) - 1} className="px-2 h-11 text-sm text-fg-mute align-middle">
+        {children}
+      </td>
+    </tr>
+  )
+}
+
+/* ---------------------------------- rows ---------------------------------- */
+
+const CELL = 'px-2 py-3 align-middle truncate'
+
+/**
+ * The state edge: `--accent` when somebody is waiting, `--edge` when it is
+ * started and nobody is, nothing once it has been acknowledged.
+ */
+function edgeFor(card: Card): string {
+  if (card.state?.acked_at) return 'transparent'
+  return card.pile === 'now' ? 'var(--color-accent)' : 'var(--color-edge)'
+}
+
+export function CardRow({
+  card, cols, selected, focused, actions,
+}: {
+  card: Card
+  cols: Columns
+  selected: boolean
+  focused: boolean
+  actions: RowAction
+}) {
+  const ref = useRef<HTMLTableRowElement>(null)
+  const kind = cardKind(card)
+  const lead = card.sources[0]
+  const where = whereOf(lead, card)
+  const sources = [...new Set(card.sources.map(s => s.source))] as SourceName[]
+  const parked = card.pile === 'parked'
+
+  // Keyboard focus scrolls the row into view; without this, `j` past the fold
+  // moves a selection nobody can see.
+  useEffect(() => { if (focused) ref.current?.scrollIntoView({ block: 'nearest' }) }, [focused])
+
+  return (
+    <tr
+      ref={ref}
+      onClick={() => actions.onOpen(card)}
+      aria-selected={selected}
+      className={`group cursor-pointer border-b border-rule transition-colors duration-100
+        ${focused ? 'bg-ink-700' : selected ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
+    >
+      <td className={CELL} style={{ boxShadow: `inset 2px 0 0 ${focused ? 'var(--color-accent)' : edgeFor(card)}` }}>
+        <span className="flex items-center gap-2">
+          <KindGlyph kind={kind} />
+          <span className="text-sm text-fg-dim">{kind.word}</span>
+        </span>
+      </td>
+
+      <td className={`${CELL} text-base font-medium text-fg`} title={card.title}>{card.title}</td>
+
+      {cols.why && <td className={`${CELL} text-sm text-fg-dim`} title={card.why}>{card.why}</td>}
+      {cols.who && <td className={`${CELL} text-sm text-fg-dim`}>{card.who ?? ''}</td>}
+      {cols.where && (
+        <td className={`${CELL} text-sm text-fg-dim font-mono`} title={where ?? undefined}>
+          {where ? headTruncate(where, 16) : ''}
+        </td>
+      )}
+
+      <td className={CELL}>
+        <span className="flex items-center gap-1">
+          {sources.length > 3
+            ? <span className="text-xs text-fg-mute tnum">••• +{sources.length - 3}</span>
+            : sources.map(s => <SourceDot key={s} source={s} size={6} />)}
+        </span>
+      </td>
+
+      <td className={`${CELL} text-sm text-fg-mute tnum text-right`}>{ago(card.ts)}</td>
+
+      <td className="px-2 py-1 align-middle" onClick={e => e.stopPropagation()}>
+        <span className="flex items-center gap-1 justify-end">
+          <Button
+            size="sm" variant="ghost"
+            title={parked ? 'Wake now' : 'Later'}
+            ariaLabel={parked ? 'Wake now' : 'Later'}
+            onClick={() => (parked ? actions.onWake(card) : actions.onLater(card))}
+          >
+            {parked ? <Sunrise size={14} /> : <Clock size={14} />}
+          </Button>
+          <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
+            <Check size={14} />
+          </Button>
+        </span>
+      </td>
+    </tr>
+  )
+}
+
+/* ------------------------------ the phone row ----------------------------- */
+
+/**
+ * Two lines: the title, then everything else as one muted run.
+ *
+ * 60px, and the actions are 32px painted with a 44px target — never `opacity-0`,
+ * because `group-hover` does not fire on touch, which made four buttons on
+ * twenty rows permanently invisible, permanently 560px of dead scroll, and still
+ * tappable, since opacity does not disable pointer events.
+ */
+export function CardLine({
+  card, selected, actions,
+}: { card: Card; selected: boolean; actions: RowAction }) {
+  const kind = cardKind(card)
+  const where = whereOf(card.sources[0], card)
+  const parked = card.pile === 'parked'
+  const meta = [kind.word, card.why, card.who, where, ago(card.ts)].filter(Boolean).join(' · ')
+
+  return (
+    <li
+      className={`flex items-center gap-3 border-b border-rule px-4 min-h-[60px]
+        ${selected ? 'bg-ink-800' : ''}`}
+      style={{ boxShadow: `inset 2px 0 0 ${edgeFor(card)}` }}
+    >
+      <button onClick={() => actions.onOpen(card)} className="min-w-0 grow text-left py-2">
+        <span className="flex items-center gap-2">
+          <KindGlyph kind={kind} size={14} />
+          <span className="text-base font-medium text-fg truncate">{card.title}</span>
+        </span>
+        <span className="mt-0.5 block text-sm text-fg-mute truncate">{meta}</span>
+      </button>
+      <span className="flex items-center gap-1 shrink-0">
+        <Button
+          size="md" variant="ghost"
+          title={parked ? 'Wake now' : 'Later'}
+          ariaLabel={parked ? 'Wake now' : 'Later'}
+          onClick={() => (parked ? actions.onWake(card) : actions.onLater(card))}
+        >
+          {parked ? <Sunrise size={15} /> : <Clock size={15} />}
+        </Button>
+        <Button size="md" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
+          <Check size={15} />
+        </Button>
+      </span>
+    </li>
+  )
+}
+
+/** The sources a group was seen in, spelled out. Used by the Done group. */
+export const sourceWords = (card: Card) =>
+  [...new Set(card.sources.map(s => SOURCE_LABEL[s.source]))].join(' + ')

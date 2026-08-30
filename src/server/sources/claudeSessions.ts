@@ -8,7 +8,7 @@
 import { readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
-import { extractRefs, subjectRef } from '../dedup'
+import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
@@ -281,7 +281,14 @@ export const claudeSessions: SourceAdapter = {
         kind: 'session',
         title,
         // Nobody else is blocked on a session, so these are never "now".
-        why: ageDays < 1 ? 'you were just working on this' : `you left this ${Math.round(ageDays)}d ago`,
+        //
+        // No number in here. `why` is written at ingest and frozen in the row,
+        // so any age baked into it drifts on its own between polls — and it was
+        // rounded while the age beside it on the row is floored, so twelve of
+        // sixteen rows read "you left this 2d ago … 1d": two ages for one
+        // instant, inside one sentence. There is one age per instant, and the
+        // When column is where it lives.
+        why: ageDays < 1 ? 'you were just working on this' : 'you left this open',
         excerpt: clip(prompt, 400),
         // A local session has no web URL; the card offers the command that
         // rejoins it on the machine it is actually on.
@@ -301,7 +308,13 @@ export const claudeSessions: SourceAdapter = {
           // ("approve — Backend: github.com/trutohq/truto/pull/2008"), which is
           // a hard reference to that PR whether or not the session recorded a
           // pr-link.
-          ...extractRefs(`${title}\n${prompt ?? ''}`),
+          //
+          // `title` is Wake's own truncation of that prompt, and `prompt` is
+          // clipped too. A GitHub URL cut by either is not a reference to
+          // anything — `.../pull/2…` once produced `gh:trutohq/truto#2`, a PR
+          // that does not exist, which then won the group label over the real
+          // one and hid a whole session.
+          ...extractRefsFromElidable(`${title}\n${prompt ?? ''}`),
         ],
         meta: {
           project: projectName,

@@ -112,6 +112,9 @@ export const sentry: SourceAdapter = {
           kind: 'error',
           title: it.title ?? String(short),
           why: g.why,
+          // A project slug, not a person — kept because it is the honest label
+          // for "where this came from", and deliberately not promoted to `who`.
+          // Nobody is waiting on a Sentry issue; it is waiting on him.
           actor: projectSlug(it.project) || undefined,
           excerpt: it.culprit ?? undefined,
           url,

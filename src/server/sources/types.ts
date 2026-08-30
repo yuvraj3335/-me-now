@@ -24,8 +24,25 @@ export type RawCard = {
   title: string
   /** Why this is on me, in plain words. A rule fired; no model wrote this. */
   why: string
+  /**
+   * Whoever put it there, in whatever vocabulary the source uses. Historically
+   * this held a project slug for Sentry and the operator's own login for his own
+   * pull requests, because "whose name is on this row" was never actually asked.
+   */
   actor?: string
   actor_id?: string
+  /**
+   * A *person* who is waiting on you, or nothing.
+   *
+   * Distinct from `actor` on purpose. `actor` is whatever the source calls the
+   * thing that produced the row: for `is:pr author:me` that is Yuvraj himself,
+   * and for Sentry it is a project slug. Neither is a person waiting on him, and
+   * a `Who` column that prints his own name on eight of twenty rows is a column
+   * that has to be re-read rather than scanned. Only Slack and Gmail can
+   * truthfully fill this in for most rows; the rest leave it empty, and the
+   * column renders empty rather than inventing one.
+   */
+  who?: string
   excerpt?: string
   url: string
   ts: number

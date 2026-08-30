@@ -3,10 +3,15 @@
 /*
   Wake's design language, in one place.
 
-  The brief ruled out the admin-dashboard look: no heavy borders, no boxes
-  around everything, no clutter. So the system is deliberately thin — a near
-  black ground, two levels of text, hairline separators, and exactly one accent
-  that is allowed to appear rarely. Space and type carry the hierarchy.
+  Wake is a dense, quiet instrument. Its primary object is a row in a table —
+  many of them, all visible at once, each tellable apart without reading.
+  Structure comes from alignment and hairlines: columns that hold their
+  x-position down the page, so the eye reads straight down one column instead of
+  re-parsing every entry. Ink and amber; amber appears perhaps three times on a
+  screen and always means "this one".
+
+  What it is not: a reading column, a feed of cards floating in a gutter, glass,
+  or a settings README with headings.
 */
 @theme {
   /*
@@ -21,12 +26,26 @@
   --color-ink-900: #0a0a0c;
   --color-ink-850: #101014;
   --color-ink-800: #17171c;
-  --color-ink-700: #212128;
+  --color-ink-700: #1e1e25;
   --color-ink-600: #33333d;
 
+  /*
+    Two structural tokens, and the single most load-bearing change in this file.
+
+    Eight sites used to hard-code `border-white/[0.05]`. Over `#f7f7f9` that is
+    ~1.00:1 — invisible — which is why Settings rendered four bordered cards in
+    dark and zero in light from the identical component. `rule` is the hairline
+    between rows; `edge` is the border of a panel, a rail or a control. Neither
+    may ever be used as a `color`: they are not text, they are structure, and at
+    1.58:1 the `·` separators that used to be painted in `ink-600` were the only
+    elements in the product that failed contrast.
+  */
+  --color-rule: #26262e;
+  --color-edge: #33333d;
+
   --color-fg:      #f2f2f5;
-  --color-fg-dim:  #b4b4c0;
-  --color-fg-mute: #8a8a96;
+  --color-fg-dim:  #c4c4d0;
+  --color-fg-mute: #9b9baa;
 
   /*
     The accent is two tokens, because one colour cannot do both jobs.
@@ -56,10 +75,53 @@
   --color-warn: #e9a23b;
   --color-bad:  #e08282;
 
+  /*
+    Seven sizes, replacing nineteen.
+
+    Wake used to ship 19 distinct font sizes, 123 of ~222 declarations under
+    13.5px. That, not the colour tokens, was the real content of "dark mode text
+    is too faint": most of what he reads to make a decision was rendered at 12.5.
+
+    13px is the floor for anything read to decide. Row hierarchy comes from
+    weight and contrast, not size — a 14/500 title over 13/400 dimmed metadata is
+    a 100-weight and 6-point contrast gap in 1px of size, which is why it pops
+    where 14.5/400 over 12.5/400 did not.
+  */
+  --text-eyebrow: 11px;
+  --text-eyebrow--line-height: 14px;
+  --text-eyebrow--font-weight: 500;
+  --text-eyebrow--letter-spacing: 0.06em;
+
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+
+  --text-sm: 13px;
+  --text-sm--line-height: 18px;
+
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+
+  --text-md: 16px;
+  --text-md--line-height: 22px;
+
+  --text-lg: 20px;
+  --text-lg--line-height: 26px;
+  --text-lg--letter-spacing: -0.02em;
+
+  --text-xl: 28px;
+  --text-xl--line-height: 30px;
+  --text-xl--letter-spacing: -0.03em;
+
   --font-sans: 'InterVariable', 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  /* Mono is load-bearing, not decorative: its different texture is what tells a
+     repo from a channel from a project at a glance in the Where column. It is
+     used there, and in command blocks, and nowhere else. */
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
-  --radius-card: 14px;
+  /* 4px base. 4, 8, 12, 16, 24, 32, 48 — nothing at 6, 10, 14, 20, 28. */
+  --radius-chip:    4px;
+  --radius-control: 6px;
+  --radius-panel:   10px;
 
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -73,11 +135,11 @@
   media query is guarded with `:not([data-theme])`; without it, choosing light
   on a machine set to dark would be overridden by the system every time.
 
-  Contrast is not a matter of taste here. The previous dark palette put muted
-  text at #5c5c66 on #0a0a0c, which is 3.0:1 — under the 4.5:1 minimum for body
-  text, at 11px, for the labels that carry most of the meaning on this app. Every
-  pair below clears AA against its own ground, and the numbers are written down
-  so the next edit has something to check against rather than an opinion.
+  Contrast is not a matter of taste here, and AA is a legibility floor rather
+  than a scannability target. The floors this file holds: text at 13px and above
+  clears 7:1, text at 11–12px clears 9:1, and `rule` and `edge` are never text.
+  Every ratio below is written down so the next edit has something to check
+  against rather than an opinion.
   ---------------------------------------------------------------------------
 */
 
@@ -89,14 +151,17 @@
 
     --color-ink-950: #08080a;
     --color-ink-900: #0a0a0c;   /* the page */
-    --color-ink-850: #101014;   /* sheets, raised cards */
-    --color-ink-800: #17171c;   /* hover, inputs */
-    --color-ink-700: #212128;   /* solid buttons */
-    --color-ink-600: #33333d;   /* separators, scrollbars */
+    --color-ink-850: #101014;   /* panels, sheets, inputs, code blocks */
+    --color-ink-800: #17171c;   /* row hover, button hover */
+    --color-ink-700: #1e1e25;   /* row keyboard focus, pressed */
+    --color-ink-600: #33333d;   /* scrollbars and grabbers only — never text */
+
+    --color-rule: #26262e;      /* hairline between rows */
+    --color-edge: #33333d;      /* panel / rail / control borders */
 
     --color-fg:      #f2f2f5;   /* 17.7:1 */
-    --color-fg-dim:  #b4b4c0;   /*  9.6:1 */
-    --color-fg-mute: #8a8a96;   /*  5.8:1 — was 3.0:1 */
+    --color-fg-dim:  #c4c4d0;   /* 11.4:1 — was #b4b4c0 at 9.6:1 */
+    --color-fg-mute: #9b9baa;   /*  7.2:1 — was #8a8a96 at 5.8:1 */
 
     --color-accent:      #e9a23b;
     --color-accent-ink:  #e9a23b;  /* 9.1:1 on the page */
@@ -110,30 +175,33 @@
     --color-src-sentry: #dd9ab0;
     --color-src-claude: #dcb28e;
 
-    --color-ok:   #6bd39a;
-    --color-warn: #e9a23b;
-    --color-bad:  #ef9494;
+    --color-ok:   #6bd39a;      /* 10.8:1 */
+    --color-warn: #e9a23b;      /*  9.1:1 */
+    --color-bad:  #ef9494;      /*  8.7:1 */
   }
 
   /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
-     page itself is off-white and a sheet is pure white. */
+     page itself is off-white and a panel is pure white. */
   :root[data-theme='light'] {
     color-scheme: light;
 
     --color-ink-950: #14141a;   /* still dark: it is the scrim and the button ink */
     --color-ink-900: #f7f7f9;
     --color-ink-850: #ffffff;
-    --color-ink-800: #edeef2;
-    --color-ink-700: #e3e4ea;
+    --color-ink-800: #eeeef2;
+    --color-ink-700: #e5e6ec;
     --color-ink-600: #c2c2ce;
+
+    --color-rule: #e2e2e8;
+    --color-edge: #d2d2dc;
 
     --color-fg:      #16161a;   /* 16.9:1 */
     --color-fg-dim:  #4a4a55;   /*  8.2:1 */
-    --color-fg-mute: #6b6b78;   /*  4.9:1 */
+    --color-fg-mute: #5c5c69;   /*  6.1:1 — was #6b6b78 at 4.9:1 */
 
     /* The surface amber is unchanged — a bright button with dark ink reads the
        same in both themes. Only the TEXT amber darkens, because #e9a23b on
-       white is 2.0:1. */
+       white is 2.0:1. Do not "simplify" this back to one token. */
     --color-accent:      #e9a23b;
     --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
     --color-accent-soft: #fdf1dd;
@@ -146,12 +214,14 @@
     --color-src-sentry: #9c3459;
     --color-src-claude: #8a5320;
 
-    --color-ok:   #157f4d;
-    --color-warn: #8a5300;
-    --color-bad:  #b3261e;
+    --color-ok:   #157f4d;      /* 4.7:1 */
+    --color-warn: #8a5300;      /* 6.0:1 */
+    --color-bad:  #b3261e;      /* 6.5:1 */
   }
 
-  /* No explicit choice: follow the system. */
+  /* No explicit choice: follow the system. Identical to the block above by
+     construction — a test compares them value for value, because "System" and
+     "Light" rendering differently on one machine is the failure this prevents. */
   @media (prefers-color-scheme: light) {
     :root:not([data-theme]) {
       color-scheme: light;
@@ -159,21 +229,21 @@
       --color-ink-950: #14141a;
       --color-ink-900: #f7f7f9;
       --color-ink-850: #ffffff;
-      --color-ink-800: #edeef2;
-      --color-ink-700: #e3e4ea;
+      --color-ink-800: #eeeef2;
+      --color-ink-700: #e5e6ec;
       --color-ink-600: #c2c2ce;
+
+      --color-rule: #e2e2e8;
+      --color-edge: #d2d2dc;
 
       --color-fg:      #16161a;
       --color-fg-dim:  #4a4a55;
-      --color-fg-mute: #6b6b78;
+      --color-fg-mute: #5c5c69;
 
-      /* The surface amber is unchanged — a bright button with dark ink reads the
-         same in both themes. Only the TEXT amber darkens, because #e9a23b on
-         white is 2.0:1. */
       --color-accent:      #e9a23b;
-      --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
+      --color-accent-ink:  #8a5300;
       --color-accent-soft: #fdf1dd;
-      --color-on-accent:   #241703;  /* 9.0:1 on the accent */
+      --color-on-accent:   #241703;
       --color-scrim:       #14141a;
 
       --color-src-slack:  #6d3fa0;
@@ -202,6 +272,7 @@
     background: var(--color-ink-900);
     color: var(--color-fg);
     font-family: var(--font-sans);
+    font-size: 14px;
     /* Tight tracking at display sizes is most of what makes type feel designed. */
     letter-spacing: -0.011em;
     -webkit-font-smoothing: antialiased;
@@ -218,7 +289,7 @@
   :focus-visible {
     outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
     outline-offset: 2px;
-    border-radius: 6px;
+    border-radius: var(--radius-control);
   }
 
   input, textarea, select, button { font: inherit; letter-spacing: inherit; }
@@ -252,7 +323,7 @@
 
 @layer utilities {
   /* The single separator style used app-wide, instead of borders on cards. */
-  .hairline { border-bottom: 1px solid color-mix(in oklab, var(--color-fg) 7%, transparent); }
+  .hairline { border-bottom: 1px solid var(--color-rule); }
 
   /* Respect the notch and the home indicator on iOS. */
   .pad-top    { padding-top: max(env(safe-area-inset-top), 0px); }
@@ -260,56 +331,45 @@
 
   .tnum { font-variant-numeric: tabular-nums; }
 
-  /* A single warm wash behind the whole page, not behind one section. Painting
-     it on the hero drew a visible rounded rectangle wherever the gradient was
-     still coloured at the container's edge — precisely the box this design
-     avoids. Anchored to the viewport, it has no edge to reveal. */
-  .dawn-light {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    background:
-      radial-gradient(58% 34% at 18% 0%,
-        color-mix(in oklab, var(--color-accent) 7%, transparent),
-        transparent 70%);
-  }
-  /* On white the same wash reads as a stain rather than as light, and the
-     accent it is mixed from is a dark amber there. Kept for dark only. */
-  :root[data-theme='light'] .dawn-light { display: none; }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme]) .dawn-light { display: none; }
-  }
-}
-
-@layer utilities {
-  /* Horizontal chip rails scroll; a scrollbar under them is noise. */
+  /* Horizontal chip rails scroll rather than wrapping to a second line; a
+     scrollbar under them is noise. On a 390px screen the filter row wrapping is
+     what pushed the first row of the list to y≈424. */
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 
   /*
-    Mail is a working surface, not a reading column: a thread list beside a
-    thread. Forcing it into the 760px column would waste two thirds of a laptop
-    screen, so the shell switches on this class instead of every page re-deriving
-    its own width.
+    Small ink, generous target.
+
+    A 26px row action and a 32px toolbar button are the right *painted* size for
+    a tool; they are the wrong touch target. This decouples the two, so a button
+    can shrink to where it belongs visually without becoming unhittable on a
+    phone. Applied by `Button` at sizes sm and md.
   */
-  .column  { max-width: 760px; margin-inline: auto; }
+  .hit::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+
+  /*
+    Wake is a working surface, not a reading column. `column` survives for the
+    two places a measured line length is genuinely right — a single honest error,
+    a form — and everything else fills the shell.
+  */
+  .column  { max-width: 720px; margin-inline: 0; }
   .bleed   { max-width: none; margin-inline: 0; }
 
-  /* Keyboard focus on a list row: an ink shift, never a ring around a card. */
-  .row-focus { background: var(--color-ink-800); }
-
   /* Sanitized mail bodies. Scoped so email CSS cannot reach the rest of the app. */
-  .mail-body { font-size: 13.5px; line-height: 1.65; color: var(--color-fg-dim); word-break: break-word; }
-  .mail-body a { color: var(--color-accent); text-decoration: none; }
+  .mail-body { font-size: 13px; line-height: 1.65; color: var(--color-fg-dim); word-break: break-word; }
+  .mail-body a { color: var(--color-accent-ink); text-decoration: none; }
   .mail-body a:hover { text-decoration: underline; }
   .mail-body p { margin: 0 0 0.75em; }
   .mail-body blockquote {
     margin: 0.5em 0; padding-left: 0.75rem;
-    border-left: 1px solid color-mix(in oklab, var(--color-fg) 12%, transparent);
+    border-left: 1px solid var(--color-rule);
     color: var(--color-fg-mute);
   }
-  .mail-body pre { overflow-x: auto; padding: 0.5rem; background: var(--color-ink-850); border-radius: 8px; }
+  .mail-body pre { overflow-x: auto; padding: 0.5rem; background: var(--color-ink-850); border-radius: var(--radius-panel); }
   .mail-body table { display: block; overflow-x: auto; max-width: 100%; border-collapse: collapse; }
   .mail-body td, .mail-body th { padding: 0.25rem 0.5rem; vertical-align: top; }
   /* A blocked remote image keeps its box so the layout does not jump when loaded. */
@@ -317,6 +377,6 @@
   .mail-body img:not([src]) {
     min-width: 1px; min-height: 1px;
     background: color-mix(in oklab, var(--color-fg) 5%, transparent);
-    border-radius: 4px;
+    border-radius: var(--radius-chip);
   }
 }

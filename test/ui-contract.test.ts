@@ -128,20 +128,196 @@ describe('nothing waits on a frame that may never come', () => {
 })
 
 describe('a card that leaves the list can come back', () => {
+  // Both places a card can be hidden from: the row's own Done button, on the
+  // table, and the Done control in the detail pane. `CardSheet.tsx` was the
+  // second one until the modal became a pane and a push view; `CardDetail.tsx`
+  // is where that behaviour lives now.
   test('Done offers an undo', () => {
-    for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardSheet.tsx']) {
+    for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardDetail.tsx']) {
       const src = read(f)
       expect(src, `${f}: Done hides a card with no way back`).toMatch(/toast\(/)
       expect(src, `${f}: the undo does not restore anything`).toContain('actions.restore')
     }
   })
 
+  test('the undo names what it is undoing', () => {
+    // `actions.restore(g)` with no argument clears EVERYTHING keeping a card off
+    // a pile. That is right for "bring this back" out of the restore list, and
+    // wrong for an undo: it also drops a park or a manual pile that had nothing
+    // to do with the action being undone, which is how one Undo click destroyed
+    // a park the product could not re-create. Every toast that offers an Undo
+    // has to restore a named target.
+    for (const f of ['src/web/pages/Home.tsx', 'src/web/components/CardDetail.tsx']) {
+      const src = read(f)
+      const offers = [...src.matchAll(/label:\s*'Undo'([\s\S]{0,240})/g)]
+      expect(offers.length, `${f}: nothing offers an undo any more`).toBeGreaterThan(0)
+      for (const m of offers) {
+        expect(m[1], `${f}: an undo clears more than the action it undoes`)
+          .toMatch(/actions\.restore\([^)]+,\s*\w/)
+      }
+    }
+  })
+
   test('the restore list is reachable without a card to open', () => {
-    // The sheet is unreachable once a card is off every pile, so the route back
-    // cannot start from the card.
+    // The detail is unreachable once a card is off every pile, so the route back
+    // cannot start from the card. It is a collapsed group at the foot of Now
+    // rather than a modal — a pile of his cards belongs on the page that holds
+    // his piles — and a palette command opens Now with that group expanded.
     const app = read('src/web/App.tsx')
-    expect(app).toContain('DoneSheet')
     expect(app, 'no palette command opens the restore list').toMatch(/cards:done/)
+    expect(app, 'the restore command does not open the group it names')
+      .toMatch(/cards:done[\s\S]{0,400}setParam\('done'/)
+
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'Now no longer renders the restore group').toMatch(/Done and not mine/)
+    expect(home, 'the restore group cannot fetch what it lists').toContain('actions.doneCards')
+    expect(home, 'nothing in the group brings a card back').toContain('actions.restore')
+  })
+})
+
+describe('the console does not become a feed again', () => {
+  const tsx = web.filter(f => f.endsWith('.tsx'))
+
+  test('Now is a table with a shared colgroup', () => {
+    // Three `<tbody>` groups sharing one `<colgroup>` is the whole trick: it is
+    // what lets grouping and column alignment coexist without either becoming a
+    // mode. A list of divs cannot hold an x-position down the page.
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table).toContain('<colgroup>')
+    expect(table).toMatch(/<thead/)
+    const home = read('src/web/pages/Home.tsx')
+    expect(home).toContain('<table')
+    expect(home).toContain('TableCols')
+    expect((home.match(/<tbody>/g) ?? []).length, 'the piles stopped being separate tbody groups')
+      .toBeGreaterThanOrEqual(1)
+  })
+
+  test('no row action is invisible', () => {
+    // `group-hover` never fires on touch, so four buttons at `opacity: 0` were
+    // permanently invisible on a phone, permanently 28px of dead layout on all
+    // twenty rows, and still tappable — opacity does not disable pointer events.
+    for (const f of tsx) {
+      const src = read(f)
+      expect(src, `${f}: a control is hidden behind opacity rather than not rendered`)
+        .not.toMatch(/opacity-0\s+group-hover:opacity-100/)
+    }
+  })
+
+  test('there is no glass anywhere', () => {
+    // Elevation is a 1px edge on a flat surface. Nine sites used backdrop-blur;
+    // over a near-black page it reads as smear, and over an off-white one as
+    // nothing at all.
+    for (const f of tsx) {
+      expect(read(f), `${f}: reintroduced a blurred translucent surface`)
+        .not.toMatch(/backdrop-blur/)
+    }
+  })
+
+  test('no structural edge is hard-coded against one theme', () => {
+    // `border-white/[0.05]` over `#f7f7f9` is ~1.00:1. Eight sites did this,
+    // which is why Settings rendered four bordered cards in dark and zero in
+    // light from the identical component.
+    for (const f of tsx) {
+      expect(read(f), `${f}: an edge that only exists in dark mode`)
+        .not.toMatch(/border-(white|black)\/\[/)
+    }
+  })
+
+  test('a structural token is never used as text', () => {
+    // `--rule` and `--edge` are structure. `ink-600` as a colour was the `·`
+    // separator, at 1.58:1 dark and 1.65:1 light — 65 instances on Now, and the
+    // only elements in the product that failed contrast.
+    for (const f of tsx) {
+      for (const line of read(f).split('\n')) {
+        expect(line, `${f}: a structural token is being painted as text\n  ${line.trim()}`)
+          .not.toMatch(/\btext-(rule|edge|ink-600)\b/)
+      }
+    }
+  })
+
+  test('help text cannot come back through a component prop', () => {
+    // Sixty-one explanatory strings shipped across five routes and six overlays.
+    // Removing the prop is what stops them returning without a code change.
+    const primitives = read('src/web/components/primitives.tsx')
+    const field = primitives.slice(primitives.indexOf('export function Field('))
+    expect(field.slice(0, 300), 'Field grew a hint again').not.toMatch(/\bhint\b/)
+    for (const f of tsx) {
+      expect(read(f), `${f}: a Field is being given a hint`).not.toMatch(/<Field[^>]*\shint=/)
+    }
+  })
+})
+
+describe('the shell reaches everywhere from both places', () => {
+  const app = read('src/web/App.tsx')
+
+  test('all five destinations are on the phone bar', () => {
+    // Pulse and Settings used to live behind a More sheet: two taps and a
+    // dismissal at exactly the moment something is broken.
+    expect(app, 'the phone bar filters the destination list again')
+      .not.toMatch(/TABS\.filter\([^)]*mobile/)
+    expect(app, 'the More sheet came back').not.toMatch(/\bsetMore\b/)
+  })
+
+  test('navigating keeps the harness flag and drops the page-local filter', () => {
+    const route = read('src/web/lib/route.ts')
+    expect(route, 'go() dropped the query string again').toContain('CARRIED')
+    expect(route).toMatch(/'static'/)
+  })
+
+  test('the filter and the open row both live in the URL', () => {
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the source filter went back into useState').toMatch(/useParam\('src'\)/)
+    expect(home, 'the open row went back into useState').toContain('useDetailKey')
+    const route = read('src/web/lib/route.ts')
+    // Opening a row is a push so Back closes it; a filter is a replace so twenty
+    // filter clicks are not twenty presses of Back.
+    expect(route).toMatch(/openDetail[\s\S]{0,400}pushState/)
+    expect(route).toMatch(/setParam[\s\S]{0,400}replaceState/)
+  })
+})
+
+describe('a destructive key cannot fire through a modal', () => {
+  test('the Now shortcuts ask whether an overlay is open', () => {
+    // `e` (Done) and `s` (Later) are unmodified, unconfirmed keys bound to the
+    // document. A `role="dialog"` panel is not an INPUT, so they used to fire
+    // straight through one — and the undo toast rendered under the scrim.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'the keyboard handler stopped checking for an overlay').toContain('overlayOpen()')
+  })
+
+  test('every modal surface counts itself', () => {
+    const primitives = read('src/web/components/primitives.tsx')
+    const palette = read('src/web/components/palette.tsx')
+    expect(primitives, 'Sheet stopped registering as an overlay').toContain('useOverlay(open)')
+    expect(palette, 'the palette stopped registering as an overlay').toContain('useOverlay(open)')
+  })
+
+  test('the body scroll lock has exactly one owner', () => {
+    // `Sheet` used to capture and restore `body.style.overflow` itself, and Work
+    // mounts two sheets at once — so two closing in the wrong order restored
+    // `hidden` over `''` and froze the page behind them.
+    const overlay = read('src/web/lib/overlay.ts')
+    expect(overlay).toContain("document.body.style.overflow")
+    for (const f of web.filter(x => !x.endsWith('lib/overlay.ts'))) {
+      expect(read(f), `${f}: a second owner of the body scroll lock`)
+        .not.toMatch(/body\.style\.overflow/)
+    }
+  })
+})
+
+describe('nothing waits on a frame in a hidden document', () => {
+  test('focus is not scheduled through requestAnimationFrame', () => {
+    // A hidden document schedules no animation frames, so a focus queued in one
+    // simply never happens — the palette opens with nothing focused and the
+    // brief's caret never restores. `useStill` covers animation and not this.
+    for (const f of web) {
+      const src = read(f)
+      for (const m of src.matchAll(/requestAnimationFrame\(([\s\S]{0,120})/g)) {
+        expect(m[1], `${f}: a focus call is waiting on an animation frame`)
+          .not.toMatch(/\.focus\(\)|setSelectionRange/)
+      }
+    }
+    expect(true).toBe(true)
   })
 })
 

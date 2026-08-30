@@ -1,7 +1,7 @@
 import { MotionConfig, motion } from 'motion/react'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
-  BarChart3, Inbox, Mail as MailIcon, MoreHorizontal, RefreshCw, RotateCcw, Settings2,
+  BarChart3, Inbox, Mail as MailIcon, PenLine, RefreshCw, RotateCcw, Settings2,
   SquareCheck, Terminal,
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
@@ -11,73 +11,47 @@ import { Work } from './pages/Work'
 import { Pulse } from './pages/Pulse'
 import { Settings } from './pages/Settings'
 import { Mail } from './pages/Mail'
-import { spring, Sheet } from './components/primitives'
 import { STATIC_MODE, useStill } from './lib/motion'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
-import { DoneSheet } from './components/DoneSheet'
 import { ToastBar } from './components/toast'
 import { openLaunch } from './lib/launch'
 import { useMailBadge } from './lib/mailBadge'
+import { navigate, setParam, useRoute } from './lib/route'
 
 /**
- * Five destinations on a laptop, three on a phone.
+ * Five destinations, on the laptop and on the phone alike.
  *
- * `bleed` is the difference between a reading column and a working surface.
- * Work, Pulse and Settings are things you read, so they stay at 760px. Mail is
- * a list beside a thread, and Now is a list beside whatever you opened from it
- * on a screen wide enough for both — squeezing either into a column wastes two
- * thirds of the screen. Home imposes its own reading width on the list itself
- * when nothing is open, so the plain, nothing-selected case still looks like a
- * column rather than a list stretched edge to edge.
+ * The More sheet is gone. At 390px five tabs are 78px each, comfortably above
+ * the 44pt target, and a modal to reach Settings cost two taps and a dismissal
+ * at exactly the moment something was broken and he was already annoyed.
+ * "Refresh sources" left with it: it is not a destination, and it is already a
+ * control in Now's header and a command in the palette.
+ *
+ * `flush` marks a page that lays out the whole shell column itself — Now, which
+ * is a table beside a detail pane, and Mail, which is a list beside a thread.
+ * Everything else gets the shell's own padding.
  */
 const TABS = [
-  { path: '/', label: 'Now', Icon: Inbox, Page: Home, bleed: true, mobile: true },
-  { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, bleed: true, mobile: true },
-  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, bleed: false, mobile: true },
-  { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, bleed: false, mobile: false },
-  { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, bleed: false, mobile: false },
+  { path: '/', label: 'Now', Icon: Inbox, Page: Home, flush: true },
+  { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, flush: true },
+  { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: false },
+  { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, flush: false },
+  { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, flush: false },
 ] as const
 
-/** Tiny history router — six routes do not justify a routing dependency. */
-function useRoute(): [string, (p: string) => void] {
-  const [path, setPath] = useState(() => window.location.pathname)
-  useEffect(() => {
-    const onPop = () => setPath(window.location.pathname)
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [])
-  // Stable across renders: it is a dependency of the palette's command list,
-  // and a fresh closure each render would rebuild that list every time.
-  const go = useCallback((p: string) => {
-    if (p === window.location.pathname) return window.scrollTo({ top: 0, behavior: 'smooth' })
-    window.history.pushState({}, '', p)
-    setPath(p)
-    window.scrollTo(0, 0)
-  }, [])
-  return [path, go]
-}
-
-/** Exposed so any component can navigate without threading a prop through. */
-export const navigate = (p: string) => {
-  window.history.pushState({}, '', p)
-  window.dispatchEvent(new PopStateEvent('popstate'))
-}
-
 export default function App() {
-  const [path, go] = useRoute()
+  const { path } = useRoute()
   const { loading, error } = useLiveState()
   const store = useStore()
-  const [more, setMore] = useState(false)
   const [palette, setPalette] = useState(false)
-  const [doneList, setDoneList] = useState(false)
 
   useEffect(() => { void registerSW() }, [])
 
   // A notification's deep link lands on a Wake route; honour it on wake-up.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.data?.type === 'navigate' && typeof e.data.path === 'string') go(e.data.path)
+      if (e.data?.type === 'navigate' && typeof e.data.path === 'string') navigate(e.data.path)
     }
     navigator.serviceWorker?.addEventListener('message', onMessage)
     return () => navigator.serviceWorker?.removeEventListener('message', onMessage)
@@ -100,11 +74,7 @@ export default function App() {
 
   const badgeFor = (p: string) => (p === '/' ? nowCount : p === '/mail' ? mailBadge : 0)
 
-  // Stable, like `go`: an inline arrow here would be a fresh dependency on every
-  // render, rebuilding the whole command list each time — the loop the Now page
-  // already had to fix once.
-  const openDoneList = useCallback(() => setDoneList(true), [])
-  const commands = useCommands(go, openDoneList)
+  const commands = useCommands()
 
   // `?static` renders every motion element at its end state, and `useStill`
   // folds in the reader's own reduced-motion preference. Headless panes and
@@ -121,28 +91,29 @@ export default function App() {
       transition={staticMode ? { duration: 0 } : undefined}
     >
     <div className="min-h-dvh sm:flex">
-      <div className="dawn-light" aria-hidden />
 
       {/* Desktop nav: a left rail, not a bar riding on top of the page. A
           horizontal strip scrolls with the document underneath it — its own
           `sticky` only re-pins it at the top of the *viewport*, which does
           nothing once the page has scrolled the reader's eye somewhere else
           on a long one (Pulse). A rail as tall as the viewport has nowhere
-          to scroll away to. */}
-      <nav className="hidden sm:flex sm:flex-col sm:sticky sm:top-0 sm:h-dvh sm:w-56 sm:shrink-0
-                      sm:px-3 sm:py-5 sm:border-r sm:border-white/[0.06] z-30
-                      bg-ink-900/85 backdrop-blur-xl">
-        <span className="text-[14px] font-medium tracking-[-0.02em] px-3 mb-5 select-none">Wake</span>
-        <div className="flex flex-col gap-0.5">
+          to scroll away to.
+
+          Opaque, with a 1px edge. Elevation in this product is an edge on a
+          flat surface, never a blur and never a shadow. */}
+      <nav className="hidden sm:flex sm:flex-col sm:sticky sm:top-0 sm:h-dvh sm:w-50 sm:shrink-0
+                      sm:px-3 sm:py-6 sm:border-r sm:border-edge z-30 bg-ink-900">
+        <span className="text-base font-medium tracking-[-0.02em] px-3 mb-6 select-none">Wake</span>
+        <div className="flex flex-col gap-1">
           {TABS.map(t => (
-            <NavItem key={t.path} {...t} active={active.path === t.path}
-              onClick={() => go(t.path)} badge={badgeFor(t.path)} />
+            <NavItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}
+              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} />
           ))}
         </div>
         <button
           onClick={() => setPalette(true)}
-          className="mt-auto inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-[11.5px]
-                     text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors"
+          className="mt-auto inline-flex items-center gap-2 h-8 px-3 rounded-control text-xs
+                     text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors duration-100"
           title="Command palette"
         >
           <kbd className="font-sans">⌘K</kbd>
@@ -150,12 +121,12 @@ export default function App() {
         </button>
       </nav>
 
-      <main className={`relative z-10 min-w-0 sm:flex-1 px-4 sm:px-6 pad-top ${active.bleed ? 'bleed' : 'column'}`}>
+      <main className={`relative z-10 min-w-0 sm:flex-1 pad-top ${active.flush ? '' : 'px-4 sm:px-6'}`}>
         {error && !store.state && (
-          <p className="mt-24 text-center text-[13px] text-bad">{error}</p>
+          <p className="mt-24 px-4 text-sm text-bad">{error}</p>
         )}
         {loading && !store.state && (
-          <p className="mt-24 text-center text-[13px] text-fg-mute">Waking up…</p>
+          <p className="mt-24 px-4 text-sm text-fg-mute">Waking up…</p>
         )}
         {/*
           The page fades in; it does not fade out.
@@ -170,67 +141,44 @@ export default function App() {
         */}
         <motion.div
           key={active.path}
-          initial={still ? false : { opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          initial={still ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.14 }}
         >
           <active.Page />
         </motion.div>
       </main>
 
-      {/* Mobile nav: three destinations and a More sheet. Six icons in a thumb
-          bar is a row of 48px targets nobody can hit; the three that matter at
-          7am stay, the rest move one tap away. */}
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom
-                      bg-ink-900/90 backdrop-blur-xl border-t border-white/[0.06]">
+      {/* Mobile nav: all five destinations. 78px each at 390px, which clears
+          the 44pt target with room, and nothing worth reaching is behind a
+          sheet you have to know about. */}
+      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom bg-ink-900 border-t border-edge">
         <div className="flex">
-          {TABS.filter(t => t.mobile).map(t => (
-            <TabItem key={t.path} {...t} active={active.path === t.path}
-              onClick={() => go(t.path)} badge={badgeFor(t.path)} />
+          {TABS.map(t => (
+            <TabItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}
+              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} />
           ))}
-          <TabItem
-            path="/more" label="More" Icon={MoreHorizontal}
-            active={TABS.some(t => !t.mobile && t.path === active.path)}
-            onClick={() => setMore(true)} badge={0}
-          />
         </div>
       </nav>
 
-      <Sheet open={more} onClose={() => setMore(false)} title="More">
-        <div className="space-y-1">
-          {TABS.filter(t => !t.mobile).map(t => (
-            <button
-              key={t.path}
-              onClick={() => { setMore(false); go(t.path) }}
-              className="w-full flex items-center gap-3 px-3 py-3 rounded-[10px] text-left
-                         text-[14.5px] text-fg-dim hover:bg-ink-800 transition-colors"
-            >
-              <t.Icon size={16} className="text-fg-mute" />
-              {t.label}
-            </button>
-          ))}
-          <button
-            onClick={() => { setMore(false); void refresh() }}
-            className="w-full flex items-center gap-3 px-3 py-3 rounded-[10px] text-left
-                       text-[14.5px] text-fg-dim hover:bg-ink-800 transition-colors"
-          >
-            <RefreshCw size={16} className="text-fg-mute" />
-            Refresh sources
-          </button>
-        </div>
-      </Sheet>
-
       <Palette open={palette} onClose={() => setPalette(false)} commands={commands} />
       <LaunchSheet />
-      <DoneSheet open={doneList} onClose={() => setDoneList(false)} />
       <ToastBar />
     </div>
     </MotionConfig>
   )
 }
 
-/** Navigation, global actions, and whatever the current page contributed. */
-function useCommands(go: (p: string) => void, openDoneList: () => void): Command[] {
+/**
+ * Navigation, global actions, and whatever the current page contributed.
+ *
+ * The mail commands live here rather than inside the Mail page's own effect.
+ * They used to register when Mail mounted, which meant that from Now — the one
+ * moment a palette is worth having — there was no mail command at all. Both
+ * carry their destination in the URL, so the shell does not have to reach into
+ * a page it does not own.
+ */
+function useCommands(): Command[] {
   const version = useSyncExternalStore(subscribePalette, paletteVersion, paletteVersion)
   return useMemo(() => {
     const nav: Command[] = TABS.map(t => ({
@@ -238,9 +186,16 @@ function useCommands(go: (p: string) => void, openDoneList: () => void): Command
       label: t.label,
       group: 'Go to',
       icon: <t.Icon size={14} />,
-      run: () => go(t.path),
+      run: () => navigate(t.path),
     }))
     const global: Command[] = [
+      {
+        id: 'mail:compose',
+        label: 'Compose mail',
+        group: 'Wake',
+        icon: <PenLine size={14} />,
+        run: () => { navigate('/mail'); setParam('compose', '1') },
+      },
       {
         id: 'refresh',
         label: 'Refresh all sources',
@@ -266,18 +221,24 @@ function useCommands(go: (p: string) => void, openDoneList: () => void): Command
         run: () => openLaunch([], { template: 'blank' }),
       },
       {
+        /**
+         * The restore list. It is a collapsed group at the foot of Now rather
+         * than a modal — a pile of his cards belongs on the page that holds his
+         * piles — so the command opens Now with that group expanded. Reachable
+         * with no card to start from, which is the point: the card is gone.
+         */
         id: 'cards:done',
         label: 'Done and not mine',
         hint: 'bring something back',
         group: 'Wake',
         icon: <RotateCcw size={14} />,
-        run: openDoneList,
+        run: () => { navigate('/'); setParam('done', '1') },
       },
     ]
     // `version` is the dependency that makes a page's contributions appear.
     void version
     return [...nav, ...contributedCommands(), ...global]
-  }, [go, openDoneList, version])
+  }, [version])
 }
 
 function NavItem({
@@ -285,37 +246,33 @@ function NavItem({
 }: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
   return (
     <button onClick={onClick}
-      className={`relative w-full flex items-center gap-2.5 h-9 px-3 rounded-lg text-[13px] text-left
-        transition-colors ${active ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}>
-      {active && (
-        <motion.span layoutId="nav-pill" transition={spring}
-          className="absolute inset-0 bg-ink-800 rounded-lg -z-10" />
-      )}
+      className={`relative w-full flex items-center gap-3 h-8 px-3 rounded-control text-sm text-left
+        transition-colors duration-100 ${active ? 'text-fg bg-ink-800' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}>
       <Icon size={15} />
       <span className="grow">{label}</span>
-      {badge > 0 && <span className="tnum text-[11px] text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
+      {badge > 0 && <span className="tnum text-xs text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
     </button>
   )
 }
 
 function TabItem({
   label, Icon, active, onClick, badge,
-}: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number; path?: string }) {
+}: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
   return (
     <button onClick={onClick}
-      className={`relative flex-1 flex flex-col items-center gap-1 pt-2.5 pb-2 min-h-[54px]
-        transition-colors ${active ? 'text-fg' : 'text-fg-mute'}`}>
+      className={`relative flex-1 flex flex-col items-center gap-1 pt-2 pb-2 min-h-[52px]
+        transition-colors duration-100 ${active ? 'text-fg' : 'text-fg-mute'}`}>
       <span className="relative">
-        <Icon size={19} strokeWidth={active ? 2.1 : 1.7} />
+        <Icon size={18} strokeWidth={active ? 2.1 : 1.7} />
         {badge > 0 && (
-          <span className="absolute -top-1 -right-2 min-w-[15px] h-[15px] px-1 rounded-full
-                           bg-accent text-on-accent text-[10px] font-semibold leading-[15px]
+          <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full
+                           bg-accent text-on-accent text-xs font-semibold leading-4
                            text-center tnum">
             {badge > 99 ? '99+' : badge}
           </span>
         )}
       </span>
-      <span className="text-[10.5px] tracking-[0.01em]">{label}</span>
+      <span className="text-xs">{label}</span>
     </button>
   )
 }

@@ -91,10 +91,17 @@ export const actions = {
    * With no `undo`, everything keeping this card off a list is cleared. With
    * one, only that — so undoing a Done leaves a snooze or a manual pile alone.
    */
-  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine') =>
+  restore: (g: string, undo?: 'done' | 'snoozed' | 'not_mine' | 'moved') =>
     post(`/cards/${encodeURIComponent(g)}/restore`, undo ? { undo } : {}),
   doneCards: () => req<{ cards: import('./types').Card[] }>('/cards/done'),
   thread: (g: string) => req<{ thread: any }>(`/cards/${encodeURIComponent(g)}/thread`),
+  /** A Claude session's last exchanges — read on open, no new ingest. */
+  session: (g: string) =>
+    req<{ session: { id: string; cwd: string | null; text: string } }>(
+      `/cards/${encodeURIComponent(g)}/session`,
+    ),
+  /** The Gmail thread this card is about, sanitized on the way in. */
+  cardMail: (g: string) => req<{ thread: any; messages: any[] }>(`/cards/${encodeURIComponent(g)}/mail`),
 
   createTask: (b: Record<string, unknown>) => post('/tasks', b),
   updateTask: (id: string, b: Record<string, unknown>) => patch(`/tasks/${id}`, b),

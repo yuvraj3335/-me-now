@@ -57,8 +57,12 @@ claudecode.get('/sessions', c => c.json({ sessions: listSessions(Number(c.req.qu
 
 claudecode.post('/packs', async c => {
   const b = await c.req.json<any>().catch(() => ({}))
+  const templates = Array.isArray(b.templates) && b.templates.length
+    ? b.templates.map(String)
+    : [String(b.template ?? 'blank')]
   const built = buildPack({
-    template: String(b.template ?? 'blank'),
+    template: templates[0]!,
+    templates,
     title: b.title,
     cwd: b.cwd ?? null,
     instruction: b.instruction,
@@ -66,7 +70,10 @@ claudecode.post('/packs', async c => {
     skills: Array.isArray(b.skills) ? b.skills.map(String) : undefined,
   })
   if ('error' in built) return c.json(bad(built.error), 400)
-  audit('claude.pack', { target: built.title, detail: { template: built.template, cwd: built.cwd, items: built.items.length } })
+  audit('claude.pack', {
+    target: built.title,
+    detail: { templates: built.templates, cwd: built.cwd, items: built.items.length },
+  })
   return c.json(getPack(built.id))
 })
 

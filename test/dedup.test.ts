@@ -229,3 +229,51 @@ describe('a title cut short still names the same thing', () => {
     expect(elisionPairs(['short opening line…', 'short opening line and the rest of it'])).toEqual([])
   })
 })
+
+/* ---------------------------------------------------------------------------
+ * A reference extracted from text Wake elided is not a reference.
+ * ------------------------------------------------------------------------- */
+
+import { extractRefsFromElidable, withoutElidedTail } from '../src/server/dedup'
+
+describe('references from truncated text', () => {
+  test('a URL the ellipsis cut in half yields nothing', () => {
+    // The live failure: a Claude session's title was Wake's own 72-char cut of
+    // a prompt, ending `github.com/trutohq/truto/pull/2…`. The GitHub regex
+    // happily matched `#2`, `gh` outranks every other reference type, so the
+    // fabricated `gh:trutohq/truto#2` won the group label over the real
+    // `gh:trutohq/truto-app#1134` — merging two unrelated sessions, hiding a
+    // 22-turn one entirely, and pointing the card's Open button at a different
+    // repository than the one it named.
+    const refs = extractRefsFromElidable('approve — Backend: github.com/trutohq/truto/pull/2…')
+    expect(refs).toEqual([])
+  })
+
+  test('the same URL whole still yields its reference', () => {
+    expect(extractRefsFromElidable('approve — Backend: github.com/trutohq/truto/pull/2008'))
+      .toEqual([{ t: 'gh', v: 'trutohq/truto#2008' }])
+  })
+
+  test('only the cut token is dropped, not the line before it', () => {
+    const refs = extractRefsFromElidable(
+      'see github.com/trutohq/truto-app/pull/1134\nfix(mfa): make the token strict so 2fa cannot be…',
+    )
+    expect(refs).toEqual([{ t: 'gh', v: 'trutohq/truto-app#1134' }])
+  })
+
+  test('a short-form reference cut in half is dropped too', () => {
+    expect(extractRefsFromElidable('rebasing trutohq/truto#20…')).toEqual([])
+    expect(extractRefsFromElidable('rebasing trutohq/truto#2034')).toEqual([
+      { t: 'gh', v: 'trutohq/truto#2034' },
+    ])
+  })
+
+  test('text that was never cut is untouched', () => {
+    const whole = 'line one\nline two'
+    expect(withoutElidedTail(whole)).toBe(whole)
+  })
+
+  test('an ellipsis written with three dots counts as a cut', () => {
+    expect(extractRefsFromElidable('see github.com/a/b/pull/12...')).toEqual([])
+  })
+})

@@ -19,11 +19,18 @@ connections.get('/', async c => {
   // last poll still failed" at once. Being reachable and being useful are
   // different claims, and a status row that only makes the first reads as
   // healthy for a source that has not returned anything in a day.
-  const runs = new Map<string, { ok: number; at: number; error: string | null }>(
-    db.query<{ source: string; at: number; ok: number; error: string | null }, []>(
-      `SELECT source, MAX(started_at) AS at, ok, error
+  //
+  // `connected` comes with it, and it is the column that stops a lie. One ingest
+  // run stamps every source with the same `started_at`, including the three that
+  // have no account attached — so handing a status board `at` without
+  // `connected` renders "Slack, synced 1m ago" about a Slack nobody ever
+  // connected. `sync_runs` is the single source of truth for what happened;
+  // `status()` below answers the different question of what could happen now.
+  const runs = new Map<string, { ok: number; connected: number; at: number; count: number | null; error: string | null }>(
+    db.query<{ source: string; at: number; ok: number; connected: number; count: number | null; error: string | null }, []>(
+      `SELECT source, MAX(started_at) AS at, ok, connected, count, error
          FROM sync_runs WHERE finished_at IS NOT NULL GROUP BY source`,
-    ).all().map(r => [r.source, { ok: r.ok, at: r.at, error: r.error }]),
+    ).all().map(r => [r.source, { ok: r.ok, connected: r.connected, at: r.at, count: r.count, error: r.error }]),
   )
 
   const sources = await Promise.all(ADAPTERS.map(async a => {

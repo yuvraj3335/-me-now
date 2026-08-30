@@ -74,9 +74,9 @@ export function Mail() {
   return (
     <div className="sm:h-dvh sm:flex sm:gap-0 -mx-4 sm:-mx-6 pb-20 sm:pb-0">
       {/* List */}
-      <section className={`sm:w-[360px] lg:w-[400px] xl:w-[440px] sm:shrink-0 sm:border-r sm:border-white/[0.06]
+      <section className={`sm:w-[360px] lg:w-[400px] xl:w-[440px] sm:shrink-0 sm:border-r sm:border-edge
                            sm:overflow-y-auto ${selected ? 'hidden sm:block' : ''}`}>
-        <header className="sticky top-0 z-10 bg-ink-900/92 backdrop-blur-xl px-4 sm:px-5 pt-4 pb-2">
+        <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule px-4 sm:px-5 pt-4 pb-2">
           <div className="flex items-center gap-2">
             <h1 className="text-[19px] font-medium tracking-[-0.02em]">Mail</h1>
             <span className="tnum text-[12.5px] text-fg-mute">{list.threads.length}</span>
@@ -85,7 +85,7 @@ export function Mail() {
                 className="p-1.5 rounded-lg text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors" title="Refresh">
                 <RefreshCw size={14} className={list.loading ? 'animate-spin' : ''} />
               </button>
-              <Button variant="accent" onClick={() => setComposing({})}>
+              <Button variant="primary" onClick={() => setComposing({})}>
                 <PenLine size={13} /> Write
               </Button>
             </div>
@@ -348,7 +348,7 @@ function ThreadView({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5">
-        <Button variant="solid" onClick={() => void reply('reply')}><CornerUpLeft size={13} /> Reply</Button>
+        <Button variant="default" onClick={() => void reply('reply')}><CornerUpLeft size={13} /> Reply</Button>
         <Button variant="ghost" onClick={() => void reply('reply_all')}><CornerUpRight size={13} /> Reply all</Button>
         <Button variant="ghost" onClick={() => void reply('forward')}><Forward size={13} /> Forward</Button>
         <span className="grow" />
@@ -559,7 +559,7 @@ function Composer({
               </p>
             </div>
             <div className="flex gap-1.5">
-              <Button variant="accent" className="flex-1" onClick={send} disabled={busy}>
+              <Button variant="primary" className="flex-1" onClick={send} disabled={busy}>
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send now
               </Button>
               <Button variant="ghost" onClick={() => setConfirm(null)}>Back</Button>
@@ -567,7 +567,7 @@ function Composer({
           </div>
         ) : (
           <div className="flex gap-1.5">
-            <Button variant="accent" className="flex-1" onClick={ask}
+            <Button variant="primary" className="flex-1" onClick={ask}
               disabled={busy || !state.canSend || !to.trim() || !subject.trim() || !body.trim()}>
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               {state.canSend ? 'Review and send' : 'Sending unavailable'}
@@ -687,7 +687,7 @@ claude mcp login gmail`}
       </details>
 
       <div className="mt-6">
-        <Button variant="solid" onClick={onRetry}><RefreshCw size={13} /> Check again</Button>
+        <Button variant="default" onClick={onRetry}><RefreshCw size={13} /> Check again</Button>
       </div>
     </div>
   )

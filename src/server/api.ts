@@ -4,6 +4,8 @@ import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { readThread } from './sources/slack'
+import { sessionExcerpt } from './sources/claudeSessions'
+import { getThread } from './mail/service'
 import { analytics } from './analytics'
 import { connections } from './connections'
 import { mail } from './mail/router'
@@ -24,8 +26,9 @@ type Row = Record<string, any>
  * Cards grouped into the dedup unit the UI actually renders.
  *
  * `hidden` asks for the opposite set: the groups a Done or Not-mine took off
- * the list. Nothing else changes — same grouping, same lead card, same sources
- * — because a card someone wants back has to be the card they recognise.
+ * the list. Nothing else changes — same grouping, same speaking member, same
+ * sources — because a card someone wants back has to be the card they
+ * recognise.
  */
 function groupedCards(opts: { hidden?: boolean } = {}) {
   const cards = db.query<Row, []>(`SELECT * FROM cards WHERE gone = 0 ORDER BY ts DESC`).all()
@@ -49,26 +52,44 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
     const sorted = [...members].sort(
       (a, b) => (SOURCE_RANK[a.source] ?? 9) - (SOURCE_RANK[b.source] ?? 9) || b.ts - a.ts,
     )
-    const lead = sorted[0]!
-    const computed = pileOf({ pile: leadPile(sorted) }, state)
+    const natural = leadPile(sorted)
+    const computed = pileOf({ pile: natural }, state)
     if ((computed === 'hidden') !== !!opts.hidden) continue
+
+    /**
+     * The member that produced the pile is the member that gets to explain it.
+     *
+     * The pile came from `leadPile` — *any* member saying "now" wins — while
+     * every displayed field came from `sorted[0]`, ranked by source rather than
+     * by pile. So a group holding a Gmail card addressed to him (pile `now`,
+     * why "addressed to you, unread") and a GitHub card for his own PR (pile
+     * `open`) sat in Now and said "your open pull request": the row was in the
+     * right pile for a reason it did not state, and stated a reason that was not
+     * why it was there.
+     *
+     * Within the members that made the claim, `SOURCE_RANK` still decides — that
+     * ordering is about which system to believe when two describe one thing, and
+     * it is still the right tiebreak. It just no longer overrides the pile.
+     */
+    const voice = sorted.find(m => m.pile === natural) ?? sorted[0]!
 
     out.push({
       group_key,
       pile: computed,
-      title: lead.title,
-      why: lead.why,
-      actor: lead.actor,
-      actor_id: lead.actor_id,
-      excerpt: lead.excerpt,
-      url: lead.url,
-      kind: lead.kind,
+      title: voice.title,
+      why: voice.why,
+      actor: voice.actor,
+      actor_id: voice.actor_id,
+      who: voice.who ?? sorted.find(m => m.who)?.who ?? null,
+      excerpt: voice.excerpt,
+      url: voice.url,
+      kind: voice.kind,
       ts: Math.max(...members.map(m => m.ts)),
-      first_seen_at: state?.first_seen_at ?? lead.first_seen_at,
-      meta: j(lead.meta),
+      first_seen_at: state?.first_seen_at ?? Math.min(...members.map(m => m.first_seen_at)),
+      meta: j(voice.meta),
       sources: sorted.map(m => ({
         source: m.source, kind: m.kind, url: m.url, ts: m.ts, title: m.title,
-        actor: m.actor, account: m.account, why: m.why, meta: j(m.meta),
+        actor: m.actor, who: m.who ?? null, account: m.account, why: m.why, meta: j(m.meta),
       })),
       state: state
         ? {
@@ -142,16 +163,43 @@ api.post('/refresh', async c => c.json(await ingest()))
 
 /* -------------------------------- cards --------------------------------- */
 
-function touchState(group: string, patch: Record<string, unknown>) {
+/**
+ * The fields an undoable action is allowed to have replaced.
+ *
+ * All of them, not the one the action is named after. `Later` writes
+ * `snoozed_until` *and* `pile_override = null`; its undo cleared only the first,
+ * so undoing a snooze on a card that had been deliberately parked put it in Open
+ * and destroyed a park the product had no other way to re-create. An undo that
+ * does less than the action it undoes is not an undo.
+ */
+const UNDOABLE = ['pile_override', 'snoozed_until', 'acked_at', 'done_at', 'not_mine'] as const
+
+/**
+ * Apply a patch to a card's state.
+ *
+ * `undoAs` records what the patch is about to replace, under the label the undo
+ * bar will send back. One record per group: only the most recent action is
+ * undoable, which is what the toast offers and all it ever offered.
+ */
+function touchState(group: string, patch: Record<string, unknown>, undoAs?: string) {
   db.query(
     `INSERT INTO card_state (group_key, first_seen_at, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(group_key) DO NOTHING`,
   ).run(group, now(), now())
-  const keys = Object.keys(patch)
+
+  const full: Record<string, unknown> = { ...patch }
+  if (undoAs) {
+    const before = db.query<Row, [string]>(
+      `SELECT ${UNDOABLE.join(', ')} FROM card_state WHERE group_key = ?`,
+    ).get(group)
+    full.undo_json = JSON.stringify({ action: undoAs, at: now(), fields: before ?? {} })
+  }
+
+  const keys = Object.keys(full)
   if (!keys.length) return
   db.query(
     `UPDATE card_state SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = ? WHERE group_key = ?`,
-  ).run(...keys.map(k => patch[k] as any), now(), group)
+  ).run(...keys.map(k => full[k] as any), now(), group)
 }
 
 api.post('/cards/:group/ack', c => {
@@ -165,7 +213,7 @@ api.post('/cards/:group/snooze', async c => {
   const g = decodeURIComponent(c.req.param('group'))
   const { until } = await c.req.json<{ until: number }>()
   if (!until || until < now()) return c.json(bad('until must be in the future'), 400)
-  touchState(g, { snoozed_until: until, pile_override: null })
+  touchState(g, { snoozed_until: until, pile_override: null }, 'snoozed')
   logEvent('card_snoozed', { group_key: g, meta: { until } })
   return c.json({ ok: true })
 })
@@ -174,21 +222,21 @@ api.post('/cards/:group/pile', async c => {
   const g = decodeURIComponent(c.req.param('group'))
   const { pile } = await c.req.json<{ pile: string | null }>()
   if (pile && !['now', 'open', 'parked'].includes(pile)) return c.json(bad('bad pile'), 400)
-  touchState(g, { pile_override: pile, snoozed_until: null })
+  touchState(g, { pile_override: pile, snoozed_until: null }, 'moved')
   logEvent('card_moved', { group_key: g, meta: { pile } })
   return c.json({ ok: true })
 })
 
 api.post('/cards/:group/not-mine', c => {
   const g = decodeURIComponent(c.req.param('group'))
-  touchState(g, { not_mine: 1 })
+  touchState(g, { not_mine: 1 }, 'not_mine')
   logEvent('card_not_mine', { group_key: g })
   return c.json({ ok: true })
 })
 
 api.post('/cards/:group/done', c => {
   const g = decodeURIComponent(c.req.param('group'))
-  touchState(g, { done_at: now() })
+  touchState(g, { done_at: now() }, 'done')
   logEvent('card_done', { group_key: g })
   return c.json({ ok: true })
 })
@@ -212,7 +260,9 @@ api.post('/cards/:group/pin', async c => {
  * parked before the Done, or drop a manual pile someone chose an hour ago. An
  * undo that does more than the thing it is undoing is its own small surprise.
  */
-const UNDO_FIELD = { done: 'done_at', snoozed: 'snoozed_until', not_mine: 'not_mine' } as const
+const UNDO_FIELD = {
+  done: 'done_at', snoozed: 'snoozed_until', not_mine: 'not_mine', moved: 'pile_override',
+} as const
 
 api.post('/cards/:group/restore', async c => {
   const g = decodeURIComponent(c.req.param('group'))
@@ -222,13 +272,34 @@ api.post('/cards/:group/restore', async c => {
   const field = undo ? UNDO_FIELD[undo as keyof typeof UNDO_FIELD] : undefined
   if (undo && !field) return c.json(bad('unknown undo target'), 400)
 
-  touchState(
-    g,
-    field
-      ? { [field]: field === 'not_mine' ? 0 : null }
-      : { not_mine: 0, done_at: null, snoozed_until: null, pile_override: null },
-  )
-  logEvent('card_restored', { group_key: g, meta: { undo: undo ?? 'all' } })
+  if (!undo) {
+    // "Bring this back" from the restore list: clear everything keeping it off
+    // a pile, and forget the undo record along with it.
+    touchState(g, { not_mine: 0, done_at: null, snoozed_until: null, pile_override: null, undo_json: null })
+    logEvent('card_restored', { group_key: g, meta: { undo: 'all' } })
+    return c.json({ ok: true })
+  }
+
+  const row = db.query<Row, [string]>(`SELECT undo_json FROM card_state WHERE group_key = ?`).get(g)
+  const rec = row?.undo_json ? j(row.undo_json) : null
+
+  if (rec?.action === undo && rec.fields && typeof rec.fields === 'object') {
+    // Put back exactly what that action replaced — every field, not the one the
+    // action was named after — and spend the record so a second undo cannot
+    // rewind past it into a state nobody chose.
+    const restore: Record<string, unknown> = { undo_json: null }
+    for (const k of UNDOABLE) restore[k] = (rec.fields as Row)[k] ?? null
+    restore.not_mine = (rec.fields as Row).not_mine ? 1 : 0
+    touchState(g, restore)
+    logEvent('card_restored', { group_key: g, meta: { undo, exact: true } })
+    return c.json({ ok: true })
+  }
+
+  // No record — a card acted on before this shipped, or an undo of an undo.
+  // Clearing the one named field is the old behaviour, and it is still the
+  // safest thing to do with no memory of what came before.
+  touchState(g, { [field!]: field === 'not_mine' ? 0 : null, undo_json: null })
+  logEvent('card_restored', { group_key: g, meta: { undo, exact: false } })
   return c.json({ ok: true })
 })
 
@@ -246,6 +317,17 @@ api.get('/cards/done', c => {
   return c.json({ cards: groupedCards({ hidden: true }).slice(0, limit) })
 })
 
+/**
+ * A card's own body, per kind, read on demand.
+ *
+ * A detail pane is for facts, and two of these were already built and simply
+ * had no route to reach them: `sessionExcerpt` reads a Claude transcript's last
+ * exchanges and was exported with zero callers, and `getThread` already returns
+ * a full sanitized Gmail thread that the card knows the account and thread id
+ * for. Neither costs a byte of new ingest — they are reads of things Wake can
+ * already see, at the moment somebody actually asks.
+ */
+
 /** Slack threads are read on demand rather than on every poll. */
 api.get('/cards/:group/thread', async c => {
   const g = decodeURIComponent(c.req.param('group'))
@@ -256,6 +338,42 @@ api.get('/cards/:group/thread', async c => {
   const meta = j(row.meta)
   try {
     return c.json({ thread: await readThread(meta.channel_id, meta.thread_ts) })
+  } catch (e) {
+    return c.json(bad((e as Error).message), 502)
+  }
+})
+
+/** The last exchanges of the Claude Code session in this group. */
+api.get('/cards/:group/session', c => {
+  const g = decodeURIComponent(c.req.param('group'))
+  const row = db.query<Row, [string]>(
+    `SELECT meta FROM cards WHERE group_key = ? AND source = 'claude' AND gone = 0 ORDER BY ts DESC LIMIT 1`,
+  ).get(g)
+  if (!row) return c.json(bad('no Claude Code session in this group'), 404)
+  const id = j(row.meta).session_id
+  if (typeof id !== 'string') return c.json(bad('this session recorded no id'), 404)
+
+  // Capped well under the hand-off budget: this is a preview in a 400px pane,
+  // not the transcript.
+  const r = sessionExcerpt(id, 4_000)
+  if (!r.found) return c.json(bad('that transcript is no longer on this machine'), 404)
+  return c.json({ session: { id, cwd: r.cwd ?? null, text: r.text ?? '' } })
+})
+
+/** The Gmail thread this card is about, sanitized, from the account it arrived on. */
+api.get('/cards/:group/mail', async c => {
+  const g = decodeURIComponent(c.req.param('group'))
+  const row = db.query<Row, [string]>(
+    `SELECT account, meta FROM cards WHERE group_key = ? AND source = 'gmail' AND gone = 0 ORDER BY ts DESC LIMIT 1`,
+  ).get(g)
+  if (!row) return c.json(bad('no mail in this group'), 404)
+  const meta = j(row.meta)
+  const account = row.account ?? meta.account
+  const threadId = meta.thread_id
+  if (!account || !threadId) return c.json(bad('this card names no mail thread'), 404)
+  try {
+    const t = await getThread(String(account), String(threadId))
+    return c.json(t)
   } catch (e) {
     return c.json(bad((e as Error).message), 502)
   }

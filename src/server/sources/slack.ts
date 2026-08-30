@@ -229,6 +229,9 @@ export const slack: SourceAdapter = {
           why: ask ?? (h.isDm ? g.why : 'you were mentioned'),
           actor: h.fromName,
           actor_id: h.fromId,
+          // Slack is one of the two sources where the actor genuinely is a
+          // person who is waiting on a reply.
+          who: h.fromName || undefined,
           excerpt: text.slice(0, 400),
           url: h.permalink,
           ts: h.epochMs,

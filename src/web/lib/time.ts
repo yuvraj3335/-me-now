@@ -36,6 +36,38 @@ export const shortDate = (ts: number) =>
 
 export const timeOfDay = (ts: number) =>
   new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    .replace(/\s?([AP])M/i, (_, p: string) => p.toLowerCase() + 'm')
+
+/**
+ * A time he set, said back to him in words: `Thu 3 Sep, 2:35pm`.
+ *
+ * The storage was never wrong — a deadline of 14:30 round-trips as the correct
+ * IST instant and comes back unchanged after a full reload. What he never saw
+ * was the time itself: the list showed `in 4d`, the editor hint showed
+ * `Due in 4d`, and the wall-clock he chose appeared nowhere. A relative
+ * distance is not a commitment; a date and a time are.
+ *
+ * `Today` and `Tomorrow` replace the date when they apply, because on the day
+ * itself the date is the part he already knows.
+ */
+export function wallClock(ts: number, now = Date.now()): string {
+  const d = new Date(ts)
+  const time = timeOfDay(ts)
+  const midnight = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((midnight(d) - midnight(new Date(now))) / 864e5)
+  if (days === 0) return time
+  if (days === 1) return `Tomorrow, ${time}`
+  if (days === -1) return `Yesterday, ${time}`
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${time}`
+}
+
+/**
+ * The same instant, with how far away it is: `Thu 3 Sep, 2:35pm · in 4d`, or
+ * `late — Thu 3 Sep, 2:35pm` once it has passed.
+ */
+export function deadlineWords(ts: number, now = Date.now()): string {
+  return ts < now ? `late — ${wallClock(ts, now)}` : `${wallClock(ts, now)} · ${until(ts, now)}`
+}
 
 /** Local start-of-day plus an hour offset — used by the snooze presets. */
 export function atHour(daysAhead: number, hour: number): number {

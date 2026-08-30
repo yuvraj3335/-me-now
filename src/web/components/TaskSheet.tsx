@@ -2,19 +2,50 @@ import { useEffect, useState } from 'react'
 import { Bell, BellOff, Plus, Trash2 } from 'lucide-react'
 import type { Card as CardT, Goal, Task } from '../lib/types'
 import { actions, reload, useStore } from '../lib/api'
-import { until } from '../lib/time'
+import { atHour, deadlineWords, until, wallClock } from '../lib/time'
+import { actions as api } from '../lib/api'
 import { Button, Chip, Field, Sheet, inputClass } from './primitives'
 
 /** Sticky-note palette: muted enough to sit on the dark ground without shouting. */
 export const NOTE_COLORS = ['#e9a23b', '#b58ee0', '#6bd39a', '#d98a86', '#8fa4c4', '#d0a07a']
 
-/** <input type="datetime-local"> wants local wall-clock, not an ISO instant. */
+/**
+ * `<input type="datetime-local">` wants local wall-clock, not an ISO instant.
+ *
+ * Built from the parts rather than by subtracting an offset. The old version
+ * used `new Date().getTimezoneOffset()` — *today's* offset, applied to an
+ * instant that might sit on the other side of a daylight-saving boundary, which
+ * is an hour wrong wherever the clocks move. It is harmless in IST and wrong
+ * everywhere else, which is the worst kind of harmless.
+ */
+const pad = (n: number) => String(n).padStart(2, '0')
 const toLocalInput = (ts: number | null) => {
   if (!ts) return ''
-  const d = new Date(ts - new Date().getTimezoneOffset() * 60_000)
-  return d.toISOString().slice(0, 16)
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 const fromLocalInput = (v: string) => (v ? new Date(v).getTime() : null)
+
+/** What the reminder field says: the time he chose, and where it will land. */
+function reminderWords(ts: number, devices: number | null, error: string | null): string {
+  if (error) return error
+  const when = `${wallClock(ts)} · ${until(ts)}`
+  if (devices === null) return when
+  if (devices === 0) return `${when} — no device is registered, so it will only appear in Wake`
+  return `${when} — pushes to ${devices} device${devices > 1 ? 's' : ''}`
+}
+
+/**
+ * The four times he actually picks, plus an escape hatch.
+ *
+ * Two bare `datetime-local` fields were the only unstyled native controls in the
+ * product, and they are also the slowest way to say "tomorrow morning".
+ */
+const PRESETS: Array<{ id: string; label: string; at: () => number }> = [
+  { id: 'today5', label: 'Today 5pm', at: () => atHour(0, 17) },
+  { id: 'tom9', label: 'Tomorrow 9am', at: () => atHour(1, 9) },
+  { id: 'mon9', label: 'Mon 9am', at: () => atHour(((8 - new Date().getDay()) % 7) || 7, 9) },
+]
 
 export function TaskSheet({
   open, onClose, task, fromCard,
@@ -34,6 +65,32 @@ export function TaskSheet({
   const [repeat, setRepeat] = useState('')
   const [noteBody, setNoteBody] = useState('')
   const [busy, setBusy] = useState(false)
+  /**
+   * How many devices a reminder can actually reach.
+   *
+   * The field's hint used to read `Pushes to your devices in 2m` while
+   * `GET /api/push/status` returned `{"devices":[]}` — a future-tense promise to
+   * nobody. It states the number now, and says so when the number is zero.
+   */
+  const [devices, setDevices] = useState<number | null>(null)
+  useEffect(() => {
+    if (!open) return
+    let live = true
+    api.pushStatus().then(d => { if (live) setDevices(d.devices.length) }).catch(() => { if (live) setDevices(0) })
+    return () => { live = false }
+  }, [open])
+
+  /**
+   * A reminder in the past is refused here, with a reason, rather than accepted
+   * and fired one second later into nothing. It used to be: `created_at` and
+   * `fired_at` measured one second apart, the Work row filtered on `!fired_at`
+   * so no bell appeared, and reopening the task showed an empty field. He was
+   * never told.
+   */
+  const remindTs = fromLocalInput(remindAt)
+  const remindError = remindTs !== null && remindTs <= Date.now()
+    ? 'That time has already passed — a reminder can only be set for the future.'
+    : null
 
   useEffect(() => {
     if (!open) return
@@ -45,10 +102,15 @@ export function TaskSheet({
     setRemindAt(toLocalInput(existingReminder?.fire_at ?? null))
     setRepeat(existingReminder?.repeat_rule ?? '')
     setNoteBody('')
-  }, [open, task?.id, fromCard?.group_key])
+    // `existingReminder?.id` is in the dependency list on purpose. Without it,
+    // a sheet opened before `/state` had returned seeded `remindAt` from
+    // `undefined` and never re-seeded — and saving then took the
+    // "clear the reminder" branch and silently deleted a reminder the reader
+    // had never touched.
+  }, [open, task?.id, fromCard?.group_key, existingReminder?.id])
 
   async function save() {
-    if (!title.trim() || busy) return
+    if (!title.trim() || busy || remindError) return
     setBusy(true)
     try {
       const body = {
@@ -66,7 +128,9 @@ export function TaskSheet({
       const fireAt = fromLocalInput(remindAt)
       if (fireAt) {
         // The server keeps at most one live reminder per target, so this either
-        // creates it or moves the existing one — never a second buzz.
+        // creates it or moves the existing one — never a second buzz. It also
+        // refuses a `fire_at` in the past now; the field below refuses it first,
+        // so this is a second line rather than the only one.
         await actions.setReminder({
           target_kind: 'task', target_id: saved.id, fire_at: fireAt,
           label: 'Reminder', repeat_rule: repeat || null,
@@ -101,7 +165,7 @@ export function TaskSheet({
               <Trash2 size={14} /> Delete
             </Button>
           )}
-          <Button variant="accent" className="grow" onClick={save} disabled={!title.trim() || busy}>
+          <Button variant="primary" className="grow" onClick={save} disabled={!title.trim() || busy}>
             {busy ? 'Saving…' : task ? 'Save' : 'Add task'}
           </Button>
         </div>
@@ -144,25 +208,24 @@ export function TaskSheet({
         </Field>
       )}
 
-      <Field label="Deadline" hint={due ? `Due ${until(fromLocalInput(due)!)}` : undefined}>
-        <input type="datetime-local" className={inputClass} value={due}
-          onChange={e => setDue(e.target.value)} />
-      </Field>
+      {/* A deadline he set, stated back to him in the words he set it in. The
+          storage was always right; the display never showed the time at all. */}
+      <TimeField label="Deadline" value={due} onChange={setDue}
+        stated={due ? deadlineWords(fromLocalInput(due)!) : null} />
 
-      <Field
-        label="Remind me"
-        hint={remindAt ? `Pushes to your devices ${until(fromLocalInput(remindAt)!)}` : 'One reminder per task, always.'}
+      <TimeField
+        label="Remind me" value={remindAt} onChange={setRemindAt}
+        stated={remindAt ? reminderWords(fromLocalInput(remindAt)!, devices, remindError) : null}
+        tone={remindError ? 'bad' : undefined}
       >
-        <input type="datetime-local" className={inputClass} value={remindAt}
-          onChange={e => setRemindAt(e.target.value)} />
-        {remindAt && (
+        {remindAt && !remindError && (
           <div className="flex flex-wrap gap-1.5 mt-2">
             {[['', 'Once'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly']].map(([v, l]) => (
               <Chip key={v} active={repeat === v} onClick={() => setRepeat(v!)}>{l}</Chip>
             ))}
           </div>
         )}
-      </Field>
+      </TimeField>
 
       <Field label="Colour">
         <div className="flex gap-2 items-center">
@@ -211,8 +274,8 @@ export function TaskSheet({
                 >{n.body}</div>
                 <button
                   onClick={async () => { await actions.deleteNote(n.id); await reload() }}
-                  className="absolute top-1.5 right-1.5 p-1 text-fg-mute opacity-0
-                             group-hover:opacity-100 focus:opacity-100 hover:text-bad transition-opacity"
+                  className="absolute top-1.5 right-1.5 p-1 text-fg-mute hover:text-bad
+                             transition-colors duration-100"
                   aria-label="Delete note"
                 >
                   <Trash2 size={12} />
@@ -227,17 +290,59 @@ export function TaskSheet({
               onKeyDown={e => { if (e.key === 'Enter') void addNote() }}
               placeholder="Add a note…"
             />
-            <Button variant="solid" onClick={addNote} disabled={!noteBody.trim()}><Plus size={15} /></Button>
+            <Button variant="default" onClick={addNote} disabled={!noteBody.trim()}><Plus size={15} /></Button>
           </div>
         </div>
       )}
 
       {existingReminder && (
-        <p className="mt-3 text-[12.5px] text-fg-mute flex items-center gap-1.5">
+        <p className="mt-3 text-sm text-fg-mute flex items-center gap-2">
           {remindAt ? <Bell size={12} /> : <BellOff size={12} />}
-          {remindAt ? `Reminder set for ${until(fromLocalInput(remindAt)!)}` : 'Clearing this reminder on save'}
+          {remindAt ? `Set for ${wallClock(fromLocalInput(remindAt)!)}` : 'Clearing this reminder on save'}
         </p>
       )}
     </Sheet>
+  )
+}
+
+
+/**
+ * A time, chosen from the times he actually picks, with the native control as
+ * the escape hatch rather than as the interface — and stated back in words.
+ */
+function TimeField({
+  label, value, onChange, stated, tone, children,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  stated: string | null
+  tone?: 'bad'
+  children?: React.ReactNode
+}) {
+  const [exact, setExact] = useState(false)
+  useEffect(() => { if (!value) setExact(false) }, [value])
+
+  return (
+    <div className="mb-4">
+      <div className="text-eyebrow uppercase text-fg-mute mb-1.5">{label}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {PRESETS.map(p => (
+          <Chip key={p.id} onClick={() => { onChange(toLocalInput(p.at())); setExact(false) }}>
+            {p.label}
+          </Chip>
+        ))}
+        <Chip active={exact} onClick={() => setExact(o => !o)}>Pick…</Chip>
+        <Chip active={!value} onClick={() => { onChange(''); setExact(false) }}>None</Chip>
+      </div>
+      {(exact || (!!value && !stated)) && (
+        <input type="datetime-local" className={`${inputClass} mt-2`} value={value}
+          onChange={e => onChange(e.target.value)} />
+      )}
+      {stated && (
+        <p className={`mt-1.5 text-sm ${tone === 'bad' ? 'text-bad' : 'text-fg-dim'}`}>{stated}</p>
+      )}
+      {children}
+    </div>
   )
 }

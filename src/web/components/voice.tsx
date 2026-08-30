@@ -142,14 +142,14 @@ export function Recorder({
       <div className="flex items-center gap-2">
         {rec.state === 'recording' ? (
           <>
-            <Button variant="accent" onClick={stop} disabled={saving}>
+            <Button variant="primary" onClick={stop} disabled={saving}>
               <Square size={13} className="fill-current" /> Stop
             </Button>
             <span className="tnum text-[13px] text-accent-ink">{fmtDuration(rec.ms)}</span>
-            <Button variant="quiet" onClick={rec.cancel}>Discard</Button>
+            <Button variant="ghost" onClick={rec.cancel}>Discard</Button>
           </>
         ) : (
-          <Button variant="solid" onClick={start} disabled={saving || rec.state === 'requesting'}>
+          <Button variant="default" onClick={start} disabled={saving || rec.state === 'requesting'}>
             {saving ? <Loader2 size={13} className="animate-spin" /> : <MicIcon size={14} />}
             {saving ? 'Saving…' : rec.state === 'requesting' ? 'Asking for the mic…' : 'Record a note'}
           </Button>

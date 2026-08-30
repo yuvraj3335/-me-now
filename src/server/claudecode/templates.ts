@@ -70,6 +70,27 @@ it is a real defect, an upstream failure passed through, or noise. Say which,
 with the evidence. Propose the smallest patch; do not commit or push it.`,
   },
   {
+    /**
+     * A GitHub card had no template of its own, so `templateFor` mapped it to
+     * `sentry-issue` — opening a pull request preselected the Sentry template
+     * and its instruction told the session to read a stack trace. A pull request
+     * is a different job from an exception, and it is one of the two things
+     * GitHub ever puts on this list.
+     */
+    id: 'review-pr',
+    label: 'Pull request',
+    blurb: 'A pull request or issue that needs a read before it moves.',
+    slots: ['github', 'card', 'note'],
+    defaultRepo: null,
+    skills: ['truto-cli-toolbelt'],
+    instruction: `${NO_REPASTE}
+
+Read the change below and say what it actually does, what it breaks if it is
+wrong, and what you would check before it merges. Be specific about files and
+behaviour rather than restating the description. Do not push, comment or merge
+anything — write the review here and I will decide what to do with it.`,
+  },
+  {
     id: 'slack-thread',
     label: 'Slack thread',
     blurb: 'A thread with a question in it that needs a real answer.',

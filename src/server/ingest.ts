@@ -98,7 +98,8 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
     survivors.push({
       source: row.source, source_id: row.source_id, account: row.account ?? undefined,
       kind: row.kind, title: row.title, why: row.why, actor: row.actor ?? undefined,
-      actor_id: row.actor_id ?? undefined, excerpt: row.excerpt ?? undefined, url: row.url,
+      actor_id: row.actor_id ?? undefined, who: row.who ?? undefined,
+      excerpt: row.excerpt ?? undefined, url: row.url,
       ts: row.ts, pile: row.pile ?? 'open', refs: JSON.parse(row.refs || '[]'),
       meta: JSON.parse(row.meta || '{}'),
     })
@@ -121,17 +122,19 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
 
         db.query(
           `INSERT INTO cards (id, source, source_id, account, group_key, kind, title, why, actor, actor_id,
-                              excerpt, url, ts, pile, refs, meta, first_seen_at, last_seen_at, gone)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+                              who, excerpt, url, ts, pile, refs, meta, first_seen_at, last_seen_at, gone)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
            ON CONFLICT(id) DO UPDATE SET
              group_key = excluded.group_key, kind = excluded.kind, title = excluded.title,
-             why = excluded.why, actor = excluded.actor, excerpt = excluded.excerpt,
+             why = excluded.why, actor = excluded.actor, who = excluded.who,
+             excerpt = excluded.excerpt,
              url = excluded.url, ts = excluded.ts, pile = excluded.pile,
              refs = excluded.refs, meta = excluded.meta,
              last_seen_at = excluded.last_seen_at, gone = 0`,
         ).run(
           id, c.source, c.source_id, c.account ?? null, gk, c.kind, c.title, c.why,
-          c.actor ?? null, c.actor_id ?? null, c.excerpt ?? null, c.url, c.ts, c.pile,
+          c.actor ?? null, c.actor_id ?? null, c.who ?? null,
+          c.excerpt ?? null, c.url, c.ts, c.pile,
           JSON.stringify(c.refs), JSON.stringify(c.meta ?? {}),
           prev?.first_seen_at ?? at, at,
         )

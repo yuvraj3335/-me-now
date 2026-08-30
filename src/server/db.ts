@@ -29,8 +29,9 @@ CREATE TABLE IF NOT EXISTS cards (
   kind          TEXT NOT NULL,             -- dm | mention | thread | review | issue | email | session | error
   title         TEXT NOT NULL,
   why           TEXT NOT NULL,             -- why this is on me, in plain words
-  actor         TEXT,                      -- who put it there
+  actor         TEXT,                      -- who put it there, in the source's own words
   actor_id      TEXT,
+  who           TEXT,                      -- a PERSON waiting on me, or NULL. See sources/types.ts.
   excerpt       TEXT,
   url           TEXT NOT NULL,             -- deep link into the real app
   ts            INTEGER NOT NULL,          -- when it happened (epoch ms)
@@ -60,6 +61,10 @@ CREATE TABLE IF NOT EXISTS card_state (
   not_mine      INTEGER NOT NULL DEFAULT 0,
   done_at       INTEGER,
   pinned        INTEGER NOT NULL DEFAULT 0,
+  -- What the last undoable action replaced, so an undo can put ALL of it back.
+  -- Later writes two fields (snoozed_until AND pile_override = null) and its
+  -- undo used to clear one, which turned "undo" into "destroy the park you had".
+  undo_json     TEXT,
   first_seen_at INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
@@ -443,7 +448,8 @@ CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages(thread_key, seq
 -- because Wake starts none: "opened" means the link was produced.
 CREATE TABLE IF NOT EXISTS launch_packs (
   id            TEXT PRIMARY KEY,
-  template      TEXT NOT NULL,
+  template      TEXT NOT NULL,             -- the first selected template; kept as the row's label
+  templates     TEXT NOT NULL DEFAULT '[]',-- every selected template, JSON array
   title         TEXT NOT NULL,
   cwd           TEXT NOT NULL,
   repo_name     TEXT,
@@ -554,6 +560,40 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
     run() {
       if (!hasColumn('sync_runs', 'connected')) {
         db.exec(`ALTER TABLE sync_runs ADD COLUMN connected INTEGER NOT NULL DEFAULT 1`)
+      }
+    },
+  },
+  {
+    id: 6,
+    name: 'cards-who-undo-and-packs-templates',
+    // Three columns, one release.
+    //
+    // `cards.who` splits "a person is waiting on you" out of `actor`, which for
+    // three of five sources was never a person at all: GitHub's `is:pr
+    // author:me` sets it to the operator's own login, Sentry sets it to a
+    // project slug, and Claude Code sets none. Old rows get NULL rather than a
+    // backfill from `actor`, because backfilling would re-import exactly the
+    // wrong values this column exists to stop rendering. The next poll fills it.
+    //
+    // `card_state.undo_json` records what the last undoable action replaced, so
+    // undo restores every field rather than the one field it happened to name.
+    // NULL on existing rows: nothing was recorded when those actions ran, and
+    // the single-field fallback still covers them.
+    //
+    // `launch_packs.templates` stores a JSON array, so "Open in Claude" can take
+    // more than one template at a time. `template` stays for the rows already
+    // written and for the single-valued reads that have not moved yet; the array
+    // is seeded from it so no row is left without an answer.
+    run() {
+      if (!hasColumn('cards', 'who')) {
+        db.exec(`ALTER TABLE cards ADD COLUMN who TEXT`)
+      }
+      if (!hasColumn('card_state', 'undo_json')) {
+        db.exec(`ALTER TABLE card_state ADD COLUMN undo_json TEXT`)
+      }
+      if (!hasColumn('launch_packs', 'templates')) {
+        db.exec(`ALTER TABLE launch_packs ADD COLUMN templates TEXT`)
+        db.exec(`UPDATE launch_packs SET templates = json_array(template) WHERE templates IS NULL`)
       }
     },
   },

@@ -63,6 +63,7 @@ export type Session = {
 export type Pack = {
   id: string
   template: string
+  templates?: string[]
   title: string
   cwd: string
   repo_name: string | null
@@ -99,7 +100,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const launchApi = {
   state: () => req<LaunchState>('/state'),
   createPack: (b: {
-    template: string
+    templates: string[]
     title?: string
     cwd?: string | null
     instruction?: string
@@ -123,13 +124,14 @@ export const launchApi = {
 type Basket = {
   open: boolean
   items: PackItem[]
-  template: string | null
+  /** Every template the opener suggested. Multi-select, all the way down. */
+  templates: string[]
   /** The repository the card knew about, so the brief does not default to ~/work. */
   repoHint: string | null
   title: string | null
 }
 
-let basket: Basket = { open: false, items: [], template: null, repoHint: null, title: null }
+let basket: Basket = { open: false, items: [], templates: [], repoHint: null, title: null }
 const listeners = new Set<() => void>()
 const set = (p: Partial<Basket>) => {
   basket = { ...basket, ...p }
@@ -147,21 +149,34 @@ export function useLaunchBasket() {
 /** Add objects and open the sheet. Duplicate refs collapse rather than stack. */
 export function openLaunch(
   items: PackItem[],
-  opts: { template?: string; repoHint?: string | null; title?: string | null } = {},
+  opts: { template?: string; templates?: string[]; repoHint?: string | null; title?: string | null } = {},
 ) {
   const seen = new Set(basket.items.map(i => `${i.kind}:${i.ref}`))
   const merged = [...basket.items, ...items.filter(i => !seen.has(`${i.kind}:${i.ref}`))]
+  const templates = opts.templates ?? (opts.template ? [opts.template] : basket.templates)
   set({
     open: true,
     items: merged,
-    template: opts.template ?? basket.template,
+    templates,
     repoHint: opts.repoHint ?? basket.repoHint,
     title: opts.title ?? basket.title,
   })
 }
 export const removeFromLaunch = (ref: string) => set({ items: basket.items.filter(i => i.ref !== ref) })
-export const closeLaunch = () => set({ open: false })
+
+/**
+ * Every dismissal empties the basket.
+ *
+ * `closeLaunch` used to set `{ open: false }` and nothing else, while
+ * `resetLaunch` — the one that actually clears it — was called from exactly one
+ * place: the final anchor's onClick. So the basket emptied only on the success
+ * path. Open one card's brief, press Escape, open a different card, and the
+ * sheet read `CONTEXT — 4 OBJECTS`, three of them from the card he walked away
+ * from — and `repoHint` was sticky too, so an abandoned card's repository could
+ * silently become the next brief's working directory.
+ */
+export const closeLaunch = () => resetLaunch()
 
 /** Empty it. A brief handed over should not leave its objects in the basket. */
 export const resetLaunch = () =>
-  set({ open: false, items: [], template: null, repoHint: null, title: null })
+  set({ open: false, items: [], templates: [], repoHint: null, title: null })

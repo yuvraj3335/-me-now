@@ -8,6 +8,8 @@ export type CardSource = {
   ts: number
   title: string
   actor?: string | null
+  /** A person waiting on you, or null. See `src/server/sources/types.ts`. */
+  who?: string | null
   account?: string | null
   why: string
   meta: Record<string, any>
@@ -19,6 +21,12 @@ export type Card = {
   title: string
   why: string
   actor?: string | null
+  /**
+   * A person waiting on you, or null — never a project slug and never the
+   * operator's own login. The `Who` column renders this, and renders nothing
+   * when it is null, because an invented name is worse than a blank.
+   */
+  who?: string | null
   excerpt?: string | null
   url: string
   kind: string
@@ -100,7 +108,13 @@ export type State = {
 export type SourceStatus = {
   name: SourceName; label: string; ok: boolean; detail: string; via?: string
   /** The last finished poll, or null if this source has never run one. */
-  lastSync: { ok: number; at: number; error: string | null } | null
+  /**
+   * The last finished poll. `connected` is the fact `ok` cannot carry: one
+   * ingest run stamps every source with the same `at`, including the ones with
+   * no account attached, so an age rendered without it says "synced 1m ago"
+   * about a source nobody ever connected.
+   */
+  lastSync: { ok: number; connected: number; at: number; count: number | null; error: string | null } | null
   oauthable: boolean; hasWakeToken: boolean; hasClaudeBridge: boolean
   hasClientId: boolean; needsClientId: boolean
 }

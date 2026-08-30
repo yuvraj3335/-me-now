@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Search } from 'lucide-react'
 import { useStill } from '../lib/motion'
+import { useOverlay } from '../lib/overlay'
 
 export type Command = {
   id: string
@@ -57,6 +58,7 @@ export function Palette({
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const still = useStill()
+  useOverlay(open)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -64,9 +66,12 @@ export function Palette({
     if (!open) return
     setQ('')
     setSel(0)
-    // rAF, not a bare focus(): the element is mounting inside an animation.
-    const id = requestAnimationFrame(() => inputRef.current?.focus())
-    return () => cancelAnimationFrame(id)
+    // A task, not an animation frame. The element is mounting inside an
+    // animation so the focus has to be deferred — but a hidden document
+    // schedules no frames at all, so `requestAnimationFrame` here meant the
+    // palette opened with nothing focused and stayed that way.
+    const id = setTimeout(() => inputRef.current?.focus(), 0)
+    return () => clearTimeout(id)
   }, [open])
 
   const hits = useMemo(() => {
@@ -115,7 +120,7 @@ export function Palette({
       {open && (
         <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4">
           <motion.div
-            className="absolute inset-0 bg-scrim/70 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-scrim/70"
             initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
             exit={still ? undefined : { opacity: 0 }}
             transition={{ duration: 0.14 }}
@@ -130,8 +135,8 @@ export function Palette({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={still ? undefined : { opacity: 0, y: -6, scale: 0.99 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="relative w-full max-w-[560px] rounded-2xl bg-ink-850 shadow-2xl
-                       border border-white/[0.06] overflow-hidden"
+            className="relative w-full max-w-[560px] rounded-panel bg-ink-850
+                       border border-edge overflow-hidden"
           >
             <div className="flex items-center gap-2.5 px-4 h-12 hairline">
               <Search size={15} className="text-fg-mute shrink-0" />

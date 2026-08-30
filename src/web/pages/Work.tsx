@@ -80,7 +80,7 @@ export function Work() {
             {goals.length > 0 && ` · ${goals.length} goal${goals.length > 1 ? 's' : ''}`}
           </p>
         </div>
-        <Button variant="accent" onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
+        <Button variant="primary" onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
           <Plus size={15} /> {tab === 'tasks' ? 'Task' : 'Goal'}
         </Button>
       </header>
@@ -336,7 +336,7 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
               Delete
             </Button>
           )}
-          <Button variant="accent" className="grow" onClick={save} disabled={!title.trim()}>
+          <Button variant="primary" className="grow" onClick={save} disabled={!title.trim()}>
             {g ? 'Save' : 'Add goal'}
           </Button>
         </div>

@@ -125,6 +125,9 @@ export const github: SourceAdapter = {
           why: g.why,
           actor: it.user?.login,
           actor_id: it.user?.login,
+          // `is:pr author:me` returns rows whose author is the operator. Naming
+          // him as the person waiting on him is worse than naming nobody.
+          who: it.user?.login && it.user.login !== me ? it.user.login : undefined,
           // Cut on a word boundary and say so, rather than stopping mid-word —
           // the card sheet has no "read more", so a silent clip reads as the
           // whole description.

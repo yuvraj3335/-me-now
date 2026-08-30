@@ -28,18 +28,28 @@
 import type { Card, CardSource, SourceName } from './types'
 import type { PackItem, SlotKind } from './launch'
 
-/** Which template a card's sources suggest. Most specific wins. */
-export function templateFor(card: Card): string {
+/**
+ * Which templates a card's sources suggest.
+ *
+ * Every source it was actually seen in, most specific first — because a card
+ * that is a Sentry issue *and* a Claude Code session genuinely wants both
+ * instructions, and templates are multi-select now. The old version returned one
+ * string and, for a bare GitHub card, returned `sentry-issue`: opening a pull
+ * request preselected the Sentry template.
+ */
+export function templatesFor(card: Card): string[] {
   const has = (s: SourceName) => card.sources.some(x => x.source === s)
-  if (has('sentry')) return 'sentry-issue'
-  if (has('slack')) return 'slack-thread'
-  if (has('gmail')) return 'mail-thread'
-  // Was missing, which is why a session card fell through to `blank` — and
-  // `blank` names no skills, so the brief arrived with none.
-  if (has('claude')) return 'continue-session'
-  if (has('github')) return 'sentry-issue'
-  return 'blank'
+  const out: string[] = []
+  if (has('sentry')) out.push('sentry-issue')
+  if (has('slack')) out.push('slack-thread')
+  if (has('gmail')) out.push('mail-thread')
+  if (has('claude')) out.push('continue-session')
+  if (has('github')) out.push('review-pr')
+  return out.length ? out : ['blank']
 }
+
+/** The single best template, for the callers that still want one. */
+export const templateFor = (card: Card): string => templatesFor(card)[0]!
 
 /**
  * Which repository the work concerns, if the card knows.
