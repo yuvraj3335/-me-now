@@ -10,7 +10,7 @@ import { basename } from 'node:path'
 import { CLAUDE_PROJECTS_DIR, LOOKBACK_DAYS } from '../env'
 import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
-import { withoutBrief } from '../claudecode/nestedBrief'
+import { titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
 const TAIL_BYTES = 512 * 1024
@@ -120,6 +120,19 @@ function cleanPrompt(s: string | null): string | null {
  * list markers left titles starting with "- ". Cut on a word boundary instead,
  * and prefer the first sentence when there is a short one.
  */
+/**
+ * A session's name, in order of preference, with Wake's own words removed from
+ * every candidate. A transcript started from a brief records that brief's title,
+ * and it arrived on the desk as `Acme sync stopped Packed by Wake`.
+ */
+function titleOf(recorded: string | null, prompt: string | null, project: string): string {
+  const named = recorded ? titleWithoutBrief(recorded) : ''
+  if (named) return named
+  const fromPrompt = prompt ? titleFromPrompt(prompt) : ''
+  if (fromPrompt) return fromPrompt
+  return `Session in ${project}`
+}
+
 function titleFromPrompt(prompt: string, limit = 72): string {
   let t = prompt.replace(/^[\s*\-–—•>#.]+/, '').trim()
 
@@ -197,7 +210,7 @@ export function listSessions(limit = 30, windowDays = 30) {
     const prompt = cleanPrompt(info.lastPrompt)
     return {
       id: info.id,
-      title: info.title ?? (prompt ? titleFromPrompt(prompt) : null) ?? `Session in ${basename(cwd) || file.project}`,
+      title: titleOf(info.title, prompt, basename(cwd) || file.project),
       cwd,
       project: basename(cwd) || file.project,
       lastPrompt: prompt,
@@ -280,7 +293,7 @@ export const claudeSessions: SourceAdapter = {
       const cwd = s.cwd ?? f.project.replace(/^-/, '/').replace(/-/g, '/')
       const projectName = basename(cwd) || f.project
       const prompt = cleanPrompt(s.lastPrompt)
-      const title = s.title ?? (prompt ? titleFromPrompt(prompt) : null) ?? `Session in ${projectName}`
+      const title = titleOf(s.title, prompt, projectName)
 
       const ageDays = (Date.now() - s.lastTs) / 864e5
       const subjectOfTitle = subjectRef(title)

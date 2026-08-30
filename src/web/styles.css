@@ -40,8 +40,8 @@
     1.58:1 the `·` separators that used to be painted in `ink-600` were the only
     elements in the product that failed contrast.
   */
-  --color-rule: #26262e;
-  --color-edge: #33333d;
+  --color-rule: #31313c;
+  --color-edge: #424254;
 
   --color-fg:      #f2f2f5;
   --color-fg-dim:  #c4c4d0;
@@ -69,10 +69,10 @@
   --color-src-github: #8fa4c4;
   --color-src-gmail:  #d98a86;
   --color-src-sentry: #d4869f;
-  --color-src-claude: #d0a07a;
+  --color-src-claude: #a3a3b0;
 
   --color-ok:   #6bd39a;
-  --color-warn: #e9a23b;
+  --color-warn: #ee8b45;
   --color-bad:  #e08282;
 
   /*
@@ -118,7 +118,15 @@
      used there, and in command blocks, and nowhere else. */
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
-  /* 4px base. 4, 8, 12, 16, 24, 32, 48 — nothing at 6, 10, 14, 20, 28. */
+  /*
+    Gaps: 4, 8, 12, 16, 24, 32, 48 — nothing at 6, 10, 14, 20, 28. This file said
+    so and the product violated it 28 times; `gap-1.5` was the second-most-used
+    gap in the app. It is gone now, along with `gap-2.5`.
+
+    Radii: 6px on controls, 4px on a chip or a sticky. `--radius-panel` survives
+    for the two things that are actually panels — a sheet and the palette — and a
+    PAGE never uses it, because a page has no panels on it.
+  */
   --radius-chip:    4px;
   --radius-control: 6px;
   --radius-panel:   10px;
@@ -156,8 +164,13 @@
     --color-ink-700: #1e1e25;   /* row keyboard focus, pressed */
     --color-ink-600: #33333d;   /* scrollbars and grabbers only — never text */
 
-    --color-rule: #26262e;      /* hairline between rows */
-    --color-edge: #33333d;      /* panel / rail / control borders */
+    /* The structure the whole design leans on, and it was too faint to be it.
+       `rule` measured 1.32:1 dark and 1.21:1 light against the page — 21 of 255
+       levels in light, which is why light mode compensated with white cards on
+       grey and why "hairlines, not boxes" was not actually a system. The floors,
+       in both themes: rule >= 1.5:1, edge >= 1.9:1. Every ratio is measured. */
+    --color-rule: #31313c;      /* 1.54:1 — hairline between rows */
+    --color-edge: #424254;      /* 2.01:1 — panel / rail / control borders */
 
     --color-fg:      #f2f2f5;   /* 17.7:1 */
     --color-fg-dim:  #c4c4d0;   /* 11.4:1 — was #b4b4c0 at 9.6:1 */
@@ -173,10 +186,19 @@
     --color-src-github: #9db1ce;
     --color-src-gmail:  #e29d99;
     --color-src-sentry: #dd9ab0;
-    --color-src-claude: #dcb28e;
+    /* Not a hue, on purpose. Claude Code sessions are ~90% of this desk, and
+       #dcb28e sat 12 degrees from the accent — 18 glyphs plus 18 dots plus a
+       chip made 38 amber-adjacent marks on a screen whose budget is three, so
+       the accent meant nothing there. The dominant row type has to be the
+       quietest mark on the page: it recedes rather than competing. */
+    --color-src-claude: #a3a3b0;   /* 7.9:1, and no hue at all */
 
     --color-ok:   #6bd39a;      /* 10.8:1 */
-    --color-warn: #e9a23b;      /*  9.1:1 */
+    /* Visibly not the accent. `warn` and `accent-ink` were byte-identical in
+       both themes, so the one place the product reports a broken source painted
+       it in the colour reserved for "this one". A redder orange, and it is used
+       in exactly one place: the Slack entitlement line in Settings. */
+    --color-warn: #ee8b45;      /*  7.9:1 */
     --color-bad:  #ef9494;      /*  8.7:1 */
   }
 
@@ -192,8 +214,8 @@
     --color-ink-700: #e5e6ec;
     --color-ink-600: #c2c2ce;
 
-    --color-rule: #e2e2e8;
-    --color-edge: #d2d2dc;
+    --color-rule: #c8c8d3;      /* 1.55:1 — was #e2e2e8 at 1.21:1, i.e. invisible */
+    --color-edge: #b2b2c1;      /* 1.96:1 — was #d2d2dc at 1.40:1 */
 
     --color-fg:      #16161a;   /* 16.9:1 */
     --color-fg-dim:  #4a4a55;   /*  8.2:1 */
@@ -212,10 +234,10 @@
     --color-src-github: #3c5680;
     --color-src-gmail:  #a83b36;
     --color-src-sentry: #9c3459;
-    --color-src-claude: #8a5320;
+    --color-src-claude: #4f4f59;   /* 7.6:1 — see the dark block */
 
-    --color-ok:   #157f4d;      /* 4.7:1 */
-    --color-warn: #8a5300;      /* 6.0:1 */
+    --color-ok:   #0d6038;      /* 7.1:1 — was #157f4d at 4.7:1, under this file's own floor */
+    --color-warn: #8f3300;      /* 7.4:1 — and a different hue from accent-ink #8a5300 */
     --color-bad:  #b3261e;      /* 6.5:1 */
   }
 
@@ -233,8 +255,8 @@
       --color-ink-700: #e5e6ec;
       --color-ink-600: #c2c2ce;
 
-      --color-rule: #e2e2e8;
-      --color-edge: #d2d2dc;
+      --color-rule: #c8c8d3;
+      --color-edge: #b2b2c1;
 
       --color-fg:      #16161a;
       --color-fg-dim:  #4a4a55;
@@ -250,10 +272,10 @@
       --color-src-github: #3c5680;
       --color-src-gmail:  #a83b36;
       --color-src-sentry: #9c3459;
-      --color-src-claude: #8a5320;
+      --color-src-claude: #4f4f59;
 
-      --color-ok:   #157f4d;
-      --color-warn: #8a5300;
+      --color-ok:   #0d6038;
+      --color-warn: #8f3300;
       --color-bad:  #b3261e;
     }
   }
@@ -322,6 +344,23 @@
 }
 
 @layer utilities {
+  /*
+    The page pad, once, as one value.
+
+    Measured before this existed: four horizontal page pads in use on the laptop
+    (12, 16, 20, 24) plus the table's own `px-2` on top, so the page title sat at
+    x=216 on Now and x=224 on Settings, Now's `<th>`s at 225, Settings' section
+    titles at 241 and its value column at 365 against the Sources column's 367 —
+    two columns two pixels apart, which is one column drawn twice. Switching tabs
+    moved every heading eight pixels.
+
+    Content origin is x=224 on the laptop (the 200px rail plus this) and x=16 on
+    the phone. Nothing is inset again inside it; a section title, a table header,
+    a row and the page title all start on the same vertical.
+  */
+  .pad-x { padding-inline: 16px; }
+  @media (min-width: 640px) { .pad-x { padding-inline: 24px; } }
+
   /* The single separator style used app-wide, instead of borders on cards. */
   .hairline { border-bottom: 1px solid var(--color-rule); }
 

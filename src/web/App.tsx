@@ -121,12 +121,12 @@ export default function App() {
         </button>
       </nav>
 
-      <main className={`relative z-10 min-w-0 sm:flex-1 pad-top ${active.flush ? '' : 'px-4 sm:px-6'}`}>
+      {/* One page pad, applied once, by the class that owns it. A flush page
+          lays out its own columns and pads each of them with the same `.pad-x`,
+          so a table header, a section title and a page title all land on x=224. */}
+      <main className={`relative z-10 min-w-0 sm:flex-1 pad-top ${active.flush ? '' : 'pad-x'}`}>
         {error && !store.state && (
-          <p className="mt-24 px-4 text-sm text-bad">{error}</p>
-        )}
-        {loading && !store.state && (
-          <p className="mt-24 px-4 text-sm text-fg-mute">Waking up…</p>
+          <p className="mt-24 pad-x text-sm text-bad">{error}</p>
         )}
         {/*
           The page fades in; it does not fade out.
@@ -198,7 +198,7 @@ function useCommands(): Command[] {
       },
       {
         id: 'refresh',
-        label: 'Refresh all sources',
+        label: 'Poll every source',
         group: 'Wake',
         icon: <RefreshCw size={14} />,
         run: () => void refresh(),
@@ -244,13 +244,23 @@ function useCommands(): Command[] {
 function NavItem({
   label, Icon, active, onClick, badge,
 }: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
+  // Weight and colour, not a filled rectangle. The active item was a grey pill
+  // at `font-weight: 400` — the fill was the only signal, and a filled rectangle
+  // around the active nav item is the one shape this design does not use.
+  //
+  // The count is muted here. It was `text-accent-ink` in the rail while the tab
+  // bar painted the same number on an amber pill and the group heading painted
+  // it a third time: one number, three amber marks, on a screen whose budget is
+  // three marks in total. The phone's badge keeps the accent, because that one
+  // is seen without the page.
   return (
     <button onClick={onClick}
       className={`relative w-full flex items-center gap-3 h-8 px-3 rounded-control text-sm text-left
-        transition-colors duration-100 ${active ? 'text-fg bg-ink-800' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}>
-      <Icon size={15} />
+        transition-colors duration-100
+        ${active ? 'text-fg font-medium' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}>
+      <Icon size={14} />
       <span className="grow">{label}</span>
-      {badge > 0 && <span className="tnum text-xs text-accent-ink">{badge > 99 ? '99+' : badge}</span>}
+      {badge > 0 && <span className="tnum text-sm text-fg-mute">{badge > 99 ? '99+' : badge}</span>}
     </button>
   )
 }
@@ -260,10 +270,12 @@ function TabItem({
 }: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
   return (
     <button onClick={onClick}
-      className={`relative flex-1 flex flex-col items-center gap-1 pt-2 pb-2 min-h-[52px]
+      className={`relative flex-1 flex flex-col items-center gap-1 py-2 min-h-12
         transition-colors duration-100 ${active ? 'text-fg' : 'text-fg-mute'}`}>
       <span className="relative">
-        <Icon size={18} strokeWidth={active ? 2.1 : 1.7} />
+        <Icon size={16} strokeWidth={active ? 2.1 : 1.7} />
+        {/* The Now badge is one of the three amber marks in the product. It says
+            "something is waiting", which is the only thing amber ever means. */}
         {badge > 0 && (
           <span className="absolute -top-1 -right-2 min-w-4 h-4 px-1 rounded-full
                            bg-accent text-on-accent text-xs font-semibold leading-4
@@ -272,7 +284,7 @@ function TabItem({
           </span>
         )}
       </span>
-      <span className="text-xs">{label}</span>
+      <span className={`text-xs ${active ? 'font-medium' : ''}`}>{label}</span>
     </button>
   )
 }

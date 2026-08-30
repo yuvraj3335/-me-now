@@ -13,26 +13,28 @@ export type ButtonSize = 'sm' | 'md' | 'lg'
 export type ButtonVariant = 'primary' | 'default' | 'ghost' | 'danger'
 
 /**
- * Three sizes, and the hit area is not the ink.
+ * One height. The sizes differ in padding, and the hit area is not the ink.
  *
- * There used to be exactly one button in the app — `min-h-9 px-3 text-sm`
- * — used for a close X, a snooze preset and a form submit alike, which is how
- * "Tonight" became a 69×36 box around a seven-character label.
+ * There were nine painted control heights in this product against four row
+ * heights — 24, 26, 28, 32, 36, 38, 44, 45, 48, 52, 60, 65 — and not one control
+ * equalled a row. A control is 32px now, everywhere, with a glyph of at most
+ * 14px inside it, and `.hit` grows the touch target to 44px on a coarse pointer
+ * while the painted box stays 32. Small ink, generous target: that is what
+ * "feels like a tool" means. See the note in `styles.css` for why the hit box is
+ * scoped to touch.
  *
- * `sm` and `md` carry `.hit`, an `::after { inset: -6px }` that grows the touch
- * target to 38/44px while the painted box stays 26/32px. Small ink, generous
- * target: that is what "feels like a tool" means, and it is what lets a button
- * shrink without becoming unhittable on a phone. It applies under
- * `(any-pointer: coarse)` only — see the note in `styles.css` for why a mouse
- * does not get it.
+ * Every label is `text-sm`. `text-xs` was on the filter chips, every row action
+ * and every `sm` button — which is most of what gets read before a decision, at
+ * 12px, under this file's own stated floor.
  *
- * `primary` is the amber fill, and there is at most one per surface.
- * `default` is bordered and not filled, which is what actually reads as a tool.
+ * `primary` is the amber fill. At most one per surface, and only when pressing
+ * it commits something. It is never `Open`, `Connect`, `Turn on`, `Instruction`
+ * or `Fetch` — those are decisions, not commitments, and they are ghost text.
  */
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'hit h-[26px] px-2 text-xs font-medium gap-1.5',
-  md: 'hit h-8 px-3 text-sm font-medium gap-1.5',
-  lg: 'h-[38px] px-4 text-base font-medium gap-2',
+  sm: 'hit h-8 px-2 text-sm font-medium gap-2',
+  md: 'hit h-8 px-3 text-sm font-medium gap-2',
+  lg: 'hit h-8 px-4 text-sm font-medium gap-2',
 }
 
 const VARIANT: Record<ButtonVariant, string> = {
@@ -199,7 +201,7 @@ export function Sheet({
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block mb-4">
-      <div className="text-eyebrow uppercase text-fg-mute mb-1.5">{label}</div>
+      <div className="text-eyebrow uppercase text-fg-mute mb-2">{label}</div>
       {children}
     </label>
   )
@@ -211,38 +213,53 @@ export const inputClass =
    focus:ring-1 focus:ring-accent/50`
 
 export function Chip({
-  active, onClick, children, dot, disabled, title,
+  active, onClick, children, dot, hollow, disabled, title, ariaLabel,
 }: {
   active?: boolean; onClick?: () => void; children: ReactNode
-  dot?: string; disabled?: boolean; title?: string
+  dot?: string
+  /** The dot is an outline: this source's last poll failed. */
+  hollow?: boolean
+  disabled?: boolean; title?: string; ariaLabel?: string
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={ariaLabel}
       aria-pressed={active}
-      className={`hit relative inline-flex items-center gap-1.5 h-[26px] px-2 rounded-control text-xs
+      className={`hit relative inline-flex items-center gap-2 h-8 px-2 rounded-control text-sm
         font-medium transition-colors duration-100 whitespace-nowrap shrink-0
         disabled:opacity-40 disabled:pointer-events-none
         ${active ? 'bg-ink-800 text-fg border border-edge' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800 border border-transparent'}`}
     >
-      {dot && <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: dot }} />}
+      {/* A hollow dot is a source whose last poll failed; the reason is on the
+          chip's own `title`. It is the only sync mark on Now. */}
+      {dot && (
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={hollow
+            ? { border: `1.5px solid ${dot}`, background: 'transparent' }
+            : { background: dot }}
+        />
+      )}
       {children}
     </button>
   )
 }
 
 /**
- * An empty surface keeps all of its chrome and says nothing louder than a row.
+ * A whole surface that is empty says one word, on the row grid.
  *
- * One line, left-aligned at the x-position of the content it replaces, occupying
- * exactly one row's height. A noun phrase, not a sentence — no terminal period,
- * no second line, no explanation, no number, no icon, and never centred. The
- * previous version was `py-10 text-center`, which made "nothing here" the
- * largest thing on the screen.
+ * One line at the content's own x, exactly one row tall. Never centred, never a
+ * sentence, never a number, never an icon — and never naming the filter, because
+ * the chip already does and "Nothing from Slack" is three chapters' worth of
+ * apology compressed into one. Default `—`, because most callers are a value
+ * that has nothing in it rather than a surface that is empty.
+ *
+ * An empty *group* does not use this. It is not rendered at all.
  */
-export function Empty({ children }: { children: ReactNode }) {
+export function Empty({ children = '—' }: { children?: ReactNode }) {
   return (
     <p className="text-sm text-fg-mute h-11 flex items-center">{children}</p>
   )

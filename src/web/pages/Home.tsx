@@ -2,40 +2,53 @@
  * Now.
  *
  * A table of everything on him, in one downward glance: what it is, the thing
- * itself, why it is on him, who, where, which source, when, and the two things
- * he can do about it without opening anything.
+ * itself, why it is on him, where, which source, when, and the one thing he can
+ * do about it without opening anything.
  *
- * The three piles are three `<tbody>` groups of one table sharing one
- * `<colgroup>`, so the columns hold their x-position from the first row of Now
- * to the last row of Parked. A fourth group, `Done and not mine`, sits collapsed
- * at the bottom — a pile of his cards belongs on the page that holds his piles,
- * not behind a modal.
+ * Above the first row there is a title and one chrome row, and nothing else.
+ * Everything left of that row's spacer narrows what you see; the one thing right
+ * of it — Fetch — changes what exists. Piles with nothing in them are not
+ * rendered: `Now 0` plus the sentence under it cost 109px of the fold to report
+ * a zero, and three of them stacked cost 331px of a 844px phone to say nothing
+ * at all.
  *
- * Everything that used to shout is gone: the 40px accent numeral, the sentence
- * under it, and the second sentence under that, all three of which said the same
- * thing about a zero.
+ * The three piles are `<tbody>` groups of one table sharing one `<colgroup>`, so
+ * the columns hold their x-position from the first row of Now to the last row of
+ * Parked. `Done and not mine` sits collapsed at the bottom, in the same columns.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronRight, RefreshCw, RotateCcw } from 'lucide-react'
-import { actions, optimistic, refresh, reload, useStore } from '../lib/api'
+import { ChevronDown, ChevronRight, Download, Loader2, RotateCcw } from 'lucide-react'
+import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
 import type { Card as CardT, SourceName } from '../lib/types'
-import { ago, atHour } from '../lib/time'
+import { ago, atHour, timeOfDay } from '../lib/time'
 import {
-  CardLine, CardRow, columnsFor, colSpanOf, EmptyRow, GroupHead, TableCols, TableHead,
+  CardLine, CardRow, columnsFor, colSpanOf, GroupHead, PANE_MIN, TABLE_MIN, TableCols, TableHead,
   useViewport, sourceWords, type Columns, type RowAction,
 } from '../components/CardTable'
-import { CardDetail, EmptyDetail } from '../components/CardDetail'
+import { CardDetail } from '../components/CardDetail'
 import { TaskSheet } from '../components/TaskSheet'
 import { Button, Chip, Empty } from '../components/primitives'
 import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
-import { overlayOpen } from '../lib/overlay'
+import { overlayOpen, useOverlay } from '../lib/overlay'
 import { closeDetail, openDetail, setParam, useDetailKey, useParam } from '../lib/route'
 
-/** Every source the filter row offers, in a fixed order. */
+/**
+ * Every source the filter row offers, in a fixed order, always all five.
+ *
+ * They used to be re-sorted by connectedness on every render, which moved chips
+ * under the finger as polls landed and pushed the one broken source off the
+ * right edge of a 390px screen inside `overflow-x-auto no-scrollbar` — so Gmail,
+ * the source that was not connected, did not exist on the device he checks at
+ * 7am. Hiding the broken thing is how the broken thing stops getting fixed.
+ *
+ * They are filters over rows, not connection indicators, so none of them is ever
+ * disabled either. A source whose last poll failed carries a hollow dot and the
+ * reason on `title`, and that is the only sync mark on this page.
+ */
 const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
 
 /**
@@ -48,11 +61,8 @@ const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
  */
 const NO_CARDS: CardT[] = []
 
-/** The width below which six columns stop being a table and become a diagram of one. */
-const TABLE_MIN = 1024
-
 export function Home() {
-  const { state, syncing } = useStore()
+  const { state } = useStore()
   const width = useViewport()
   const filter = (useParam('src') ?? 'all') as SourceName | 'all'
   const doneOpen = useParam('done') === '1'
@@ -79,12 +89,22 @@ export function Home() {
   const fParked = useMemo(() => parked.filter(matches), [parked, matches])
 
   const rows = useMemo(() => [...fNow, ...fOpen, ...fParked], [fNow, fOpen, fParked])
+  /**
+   * The pane's resting state is the top row's detail, not the words "No
+   * selection" in a 400×855 void — 27.8% of the viewport, every morning, until
+   * something is clicked. At 7am there is always a most-likely thing.
+   *
+   * The keyboard cursor still starts at `null`, so nothing is destructible by
+   * accident: showing a row is not selecting it.
+   */
   const selected = useMemo(
     () => rows.find(c => c.group_key === selectedKey) ?? null,
     [rows, selectedKey],
   )
+  const shown = selected ?? rows[0] ?? null
   const cols = columnsFor(width)
   const isTable = width >= TABLE_MIN
+  const hasPane = width >= PANE_MIN
 
   /** Remove locally first so the list closes under the thumb immediately. */
   const drop = (g: string) =>
@@ -200,112 +220,105 @@ export function Home() {
       })),
     ), [rows])
 
-  if (!state) {
-    return <div className="px-4 sm:px-6 pt-16"><Empty>Reading what's on you</Empty></div>
-  }
+  // Nothing at all until the first read lands. A 200ms loader is worse than a
+  // beat of nothing, and a sentence explaining that a page is loading is chrome
+  // that teaches.
+  if (!state) return <div className="pad-x pt-4"><Header /></div>
 
-  const groups: Array<{ title: string; shown: CardT[]; total: number; empty: string }> = [
-    { title: 'Now', shown: fNow, total: now.length, empty: emptyWord('Nothing waiting', filter) },
-    { title: 'Open', shown: fOpen, total: open.length, empty: emptyWord('Nothing in flight', filter) },
-    { title: 'Parked', shown: fParked, total: parked.length, empty: emptyWord('Nothing parked', filter) },
+  const groups: Array<{ title: string; shown: CardT[]; total: number }> = [
+    { title: 'Now', shown: fNow, total: now.length },
+    { title: 'Open', shown: fOpen, total: open.length },
+    { title: 'Parked', shown: fParked, total: parked.length },
   ]
+  const live = groups.filter(g => g.shown.length > 0)
 
+  /**
+   * A filter that matches nothing anywhere is one line.
+   *
+   * Not three chapters and a count and a fourth heading. Not "Nothing from
+   * Slack" either — the chip above it is already pressed and already says Slack,
+   * so the suffix restates the question in the answer. `Done and not mine` is
+   * not rendered here either: it is scoped to the same filter, so it opens to
+   * either a different population than the filter implies or a second empty
+   * state, and both are worse than absence.
+   */
   const list = (
-    <div className="min-w-0 grow px-4 pb-24 lg:pb-8">
-      <Header syncing={syncing} />
+    <div className="min-w-0 grow pad-x pb-24 lg:pb-8">
+      <Header />
       <FilterRow value={filter} state={state} />
 
-      {isTable ? (
+      {live.length === 0 ? (
+        <Empty>Nothing</Empty>
+      ) : isTable ? (
         <table className="w-full table-fixed border-collapse">
           <TableCols cols={cols} />
           <TableHead cols={cols} />
-          {groups.map(g => (
+          {live.map((g, i) => (
             <tbody key={g.title}>
               <GroupHead title={g.title} shown={g.shown.length} total={g.total} cols={cols}
-                first={g.title === 'Now'} />
-              {g.shown.length === 0
-                ? <EmptyRow cols={cols}>{g.empty}</EmptyRow>
-                : g.shown.map(c => (
-                    <CardRow
-                      key={c.group_key} card={c} cols={cols}
-                      selected={c.group_key === selectedKey}
-                      focused={cursor !== null && rows[cursor]?.group_key === c.group_key}
-                      actions={rowActions}
-                    />
-                  ))}
+                first={i === 0} />
+              {g.shown.map(c => (
+                <CardRow
+                  key={c.group_key} card={c} cols={cols}
+                  selected={c.group_key === selectedKey}
+                  focused={cursor !== null && rows[cursor]?.group_key === c.group_key}
+                  actions={rowActions}
+                />
+              ))}
             </tbody>
           ))}
           <DoneGroup cols={cols} open={doneOpen} />
         </table>
       ) : (
         <div>
-          {groups.map(g => (
+          {live.map(g => (
             <section key={g.title}>
               <div className="flex items-baseline gap-2 pt-6 pb-2">
-                <h2 className="text-md font-medium tracking-[-0.01em]">{g.title}</h2>
-                <span className={`tnum text-md ${g.title === 'Now' && g.shown.length ? 'text-accent-ink' : 'text-fg-mute'}`}>
+                <h2 className="text-eyebrow uppercase text-fg-mute">{g.title}</h2>
+                <span className="text-eyebrow uppercase tnum text-fg-mute">
                   {g.shown.length !== g.total ? `${g.shown.length} of ${g.total}` : g.shown.length}
                 </span>
               </div>
-              {g.shown.length === 0
-                ? <p className="text-sm text-fg-mute h-11 flex items-center">{g.empty}</p>
-                : (
-                  <ul className="-mx-4">
-                    {g.shown.map(c => (
-                      <CardLine key={c.group_key} card={c}
-                        selected={c.group_key === selectedKey} actions={rowActions} />
-                    ))}
-                  </ul>
-                )}
+              <ul>
+                {g.shown.map(c => (
+                  <CardLine key={c.group_key} card={c}
+                    selected={c.group_key === selectedKey} actions={rowActions} />
+                ))}
+              </ul>
             </section>
           ))}
           <DoneList open={doneOpen} />
         </div>
       )}
-
-      <SyncLine />
     </div>
   )
 
   /*
-   * Below the table width the detail is a full-screen push view, not a bottom
+   * Below the pane width the detail is a full-screen push view, not a bottom
    * sheet. The sheet was 963px of content in a 725px scroller that also
    * drag-dismissed on the same axis as its own scroll, and its last two actions
    * sat behind the tab bar. A push view fixes the clipping structurally and
    * makes the OS Back button close the detail instead of leaving Wake.
    */
-  if (!isTable && selected) {
-    // Through a portal, not inline. `main` carries `relative z-10`, so anything
-    // rendered inside it lives in that stacking context and can never paint
-    // above the `z-30` tab bar that is its sibling — which put the detail's
-    // action bar back underneath the nav, the exact clipping this view exists to
-    // fix. On `document.body` it is above everything, and the tab bar is
-    // covered rather than competed with.
-    return createPortal(
-      <div className="fixed inset-0 z-50 bg-ink-900 flex flex-col pad-top pad-bottom">
-        <CardDetail card={selected} onClose={closeDetail}
-          onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
-        <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
-      </div>,
-      document.body,
-    )
+  if (!hasPane && selected) {
+    return <PushDetail card={selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
   }
 
   return (
     <div className="lg:flex lg:items-stretch lg:min-h-dvh">
       {list}
       {/*
-        The pane column always exists at the table width, so opening a row never
-        re-lays out the list. The list used to be `max-w-[760px] mx-auto` and
-        flip to `flex-1` the moment a card opened, which moved every row on the
-        page as a side effect of reading one.
+        The pane column always exists at the pane width, so opening a row never
+        re-lays out the list. No fill: `bg-ink-850` is pure white in light mode,
+        which put a 400px white panel on a grey page on the product's main
+        screen. A left hairline is the whole edge it needs.
       */}
-      <aside className="hidden lg:block lg:w-88 xl:w-100 lg:shrink-0 lg:border-l lg:border-edge
-                        lg:sticky lg:top-0 lg:h-dvh bg-ink-850">
-        {selected
-          ? <CardDetail card={selected} onClose={closeDetail}
-              onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
-          : <EmptyDetail />}
+      <aside className="hidden xl:block xl:w-90 2xl:w-100 xl:shrink-0 xl:border-l xl:border-edge
+                        xl:sticky xl:top-0 xl:h-dvh">
+        {shown && (
+          <CardDetail card={shown} onClose={closeDetail}
+            onMakeTask={c => { closeDetail(); setTaskFrom(c) }} />
+        )}
       </aside>
       <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
     </div>
@@ -313,97 +326,148 @@ export function Home() {
 }
 
 /**
- * A noun phrase, not a sentence, and it names the filter when there is one:
- * "no parked GitHub items" and "Parked does not exist" used to look identical.
+ * The phone and narrow-laptop detail, and the bug it used to carry.
+ *
+ * `overlay.ts` exists precisely because `e` (Done) and `s` (Later) — both
+ * destructive and both unconfirmed — leaked through open modals. This view was
+ * added afterwards and never counted itself, so below the pane width, on a
+ * laptop at half screen with a keyboard, `e` marked the *cursor* card done
+ * rather than the one being read, and the undo toast rendered under the `z-50`
+ * overlay. It counts itself now, which is what the module was written for.
  */
-const emptyWord = (base: string, filter: SourceName | 'all') =>
-  filter === 'all' ? base : `${base} from ${SOURCE_LABEL[filter]}`
+function PushDetail({
+  card, taskFrom, onMakeTask,
+}: { card: CardT; taskFrom: CardT | null; onMakeTask: (c: CardT | null) => void }) {
+  useOverlay(true)
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-ink-900 flex flex-col pad-top pad-bottom">
+      <CardDetail card={card} onClose={closeDetail}
+        onMakeTask={c => { closeDetail(); onMakeTask(c) }} />
+      <TaskSheet open={!!taskFrom} onClose={() => onMakeTask(null)} fromCard={taskFrom} />
+    </div>,
+    document.body,
+  )
+}
 
 /* --------------------------------- chrome --------------------------------- */
 
-function Header({ syncing }: { syncing: boolean }) {
+function Header() {
   return (
-    <header className="flex items-center gap-3 pt-4 pb-2">
+    <header className="pt-4 pb-2">
       <h1 className="text-lg font-medium">Now</h1>
-      {/* `md`, not `sm`: with its `::after` inset this is a 44px target, and
-          the old one was a 31×31 tap on a phone. */}
-      <Button size="md" variant="ghost" className="ml-auto"
-        title="Refresh all sources" ariaLabel="Refresh all sources"
-        onClick={() => void refresh()}>
-        <RefreshCw size={15} className={syncing ? 'animate-spin' : ''} />
-      </Button>
     </header>
   )
 }
 
 /**
- * The filter, in the URL.
+ * The chrome row: what you see, then what exists.
  *
- * It used to live in `useState`: clicking GitHub narrowed Open 19 → 3 while
- * `location.href` stayed `/`, so a filtered view could not be bookmarked and a
- * refresh mid-triage lost his place.
+ * The filter lives in the URL. It used to live in `useState`, so a filtered view
+ * could not be bookmarked and a refresh mid-triage lost his place.
  *
- * A source that is not connected renders disabled and sorts last, rather than
- * being hidden — hiding them makes the row change shape as connections come and
- * go — and rather than being offered identically to the ones that work, which is
- * how picking Slack emptied the list with no statement of why.
+ * All five sources, always, in one fixed order, never disabled and never
+ * reordered. A source whose last poll failed gets a hollow dot and the reason on
+ * `title`; a source with no credential gets the same treatment with a different
+ * reason. That is the only sync mark on this page — `SyncLine`, a wrapping
+ * five-clause paragraph at 12px that ended in amber and sat 424px below the
+ * fold, is deleted rather than shortened. Failure belongs on the chip you are
+ * about to press and on the row in Settings where you would go to fix it.
  */
-function FilterRow({ value, state }: { value: SourceName | 'all'; state: { lastSync: Array<{ source: string; connected: number }> } }) {
-  const connected = new Set(state.lastSync.filter(r => r.connected).map(r => r.source))
-  const ordered = [...FILTERS].sort(
-    (a, b) => Number(connected.has(b)) - Number(connected.has(a)),
-  )
+function FilterRow({
+  value, state,
+}: { value: SourceName | 'all'; state: { lastSync: Array<{ source: string; ok: number; connected: number; error: string | null }> } }) {
+  const runs = new Map(state.lastSync.map(r => [r.source, r]))
+
+  const wordFor = (s: SourceName) => {
+    const r = runs.get(s)
+    if (!r || !r.connected) return 'not connected'
+    if (!r.ok) return 'sync failed'
+    return null
+  }
+
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2">
+    <div className="flex items-center gap-2 pb-2">
       <Chip active={value === 'all'} onClick={() => setParam('src', null)}>All</Chip>
-      {ordered.map(s => {
-        const on = connected.has(s)
+      {FILTERS.map(s => {
+        const bad = wordFor(s)
         return (
           <Chip
             key={s}
             active={value === s}
-            disabled={!on}
-            title={on ? undefined : `${SOURCE_LABEL[s]} is not connected`}
-            onClick={() => setParam('src', value === s ? null : s)}
             dot={SOURCE_COLOR[s]}
+            hollow={!!bad}
+            title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
+            ariaLabel={SOURCE_LABEL[s]}
+            onClick={() => setParam('src', value === s ? null : s)}
           >
-            {SOURCE_LABEL[s]}
+            {/* On the phone only the pressed chip carries its label, so all five
+                sources plus Fetch fit 390px in one row that does not scroll.
+                The row used to be 442px of content in a 358px box with the
+                scrollbar suppressed. */}
+            <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
           </Chip>
         )
       })}
+      <span className="grow" />
+      <Fetch />
     </div>
   )
 }
 
 /**
- * One line naming when each source last answered and which one did not.
+ * Pipe 2, as one control.
  *
- * Three states, not two: "not connected" and "connected but the sync failed" are
- * different problems with different fixes. This is the one place in the product
- * that already made that distinction, and it is kept verbatim.
+ * Bordered rather than amber, and to the right of a spacer: everything left of
+ * that spacer narrows what you see; this changes what exists. An amber chip in a
+ * filter row reads as a hero, and Fetch is a tool.
+ *
+ * Pressing it blocks nothing. Triage continues while it runs, because Fetch only
+ * ever adds. A second press is never disabled and never scolded — it re-runs,
+ * dedups, and answers `0 new`, which is a useful answer where "please wait" is
+ * chrome that teaches. The label swaps to `Fetching` and the control does not
+ * change width, so nothing on the page moves.
  */
-function syncWord(r: { ok: number; connected: number; at: number }): { text: string; tone: string } {
-  if (!r.connected) return { text: 'not connected', tone: 'text-fg-mute' }
-  if (!r.ok) return { text: `sync failed ${ago(r.at)}`, tone: 'text-warn' }
-  return { text: ago(r.at), tone: '' }
-}
+function Fetch() {
+  const [busy, setBusy] = useState(false)
+  const [line, setLine] = useState<{ text: string; title?: string } | null>(null)
 
-function SyncLine() {
-  const { state } = useStore()
-  const rows = state?.lastSync ?? []
-  if (!rows.length) return null
+  const run = async () => {
+    setBusy(true)
+    try {
+      const r = await fetchNow()
+      const asked = r.connectors.filter(c => c.via !== 'none')
+      const quiet = asked.filter(c => !c.ok).map(c => c.name)
+      setLine({
+        text: [
+          `Fetched ${r.found}`,
+          `${r.fresh} new`,
+          quiet.length ? `${quiet.join(' and ')} didn't answer` : null,
+          timeOfDay(Date.now()),
+        ].filter(Boolean).join(' · '),
+        title: asked.map(c => `${c.name}: ${c.error ?? `${c.count} via ${c.via}`}`).join('\n'),
+      })
+      await reload()
+    } catch (e) {
+      setLine({ text: `Fetch failed · ${timeOfDay(Date.now())}`, title: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
-    <p className="mt-8 pt-4 border-t border-rule text-xs text-fg-mute flex flex-wrap items-center gap-x-2 gap-y-1">
-      {rows.map((r, i) => (
-        <span key={r.source} className="inline-flex items-center gap-2">
-          {i > 0 && <span aria-hidden>·</span>}
-          <span className={syncWord(r).tone} title={r.error ?? undefined}>
-            {SOURCE_LABEL[r.source as keyof typeof SOURCE_LABEL] ?? r.source} {syncWord(r).text}
-          </span>
+    <span className="flex items-center gap-3 shrink-0">
+      {line && !busy && (
+        <span className="hidden sm:inline text-sm text-fg-mute tnum truncate" title={line.title}>
+          {line.text}
         </span>
-      ))}
-    </p>
+      )}
+      <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
+        title="Ask every connector this machine can reach what is on you">
+        {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+        {/* One width for both words, so the row does not shift under the finger. */}
+        <span className="w-14 text-left">{busy ? 'Fetching' : 'Fetch'}</span>
+      </Button>
+    </span>
   )
 }
 
@@ -445,28 +509,32 @@ function DoneGroup({ cols, open }: { cols: Columns; open: boolean }) {
   return (
     <tbody>
       <tr>
-        <td colSpan={colSpanOf(cols)} className="px-2 pt-6 pb-2">
+        <td colSpan={colSpanOf(cols)} className="pt-6 pb-2">
           <button
             onClick={() => setParam('done', open ? null : '1')}
-            className="inline-flex items-center gap-2 text-md font-medium tracking-[-0.01em]
-                       text-fg-dim hover:text-fg transition-colors duration-100"
+            className="inline-flex items-center gap-2 text-eyebrow uppercase
+                       text-fg-mute hover:text-fg-dim transition-colors duration-100"
           >
-            <Chevron size={15} className="text-fg-mute" />
+            <Chevron size={13} />
             Done and not mine
-            {cards && <span className="tnum text-md text-fg-mute">{cards.length}</span>}
+            {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
           </button>
         </td>
       </tr>
-      {open && cards?.length === 0 && <EmptyRow cols={cols}>Nothing taken off</EmptyRow>}
+      {/* The real columns, not a second table wearing the first one's headers.
+          `doneWord` used to land in KIND, the title spanned three columns, and
+          the source names landed left-aligned in the right-aligned WHEN column. */}
       {open && cards?.map(c => (
         <tr key={c.group_key} className="border-b border-rule">
-          <td className="px-2 py-3 text-sm text-fg-mute align-middle">{doneWord(c)}</td>
-          <td className="px-2 py-3 text-base text-fg-dim align-middle truncate" colSpan={colSpanOf(cols) - 3}>
-            {c.title}
-          </td>
-          <td className="px-2 py-3 text-sm text-fg-mute align-middle truncate font-mono">{sourceWords(c)}</td>
-          <td className="px-2 py-1 align-middle text-right">
-            <Button size="sm" variant="ghost" title="Bring it back" onClick={() => void restore(c)}>
+          <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate">{doneWord(c)}</td>
+          <td className="py-3 pr-4 text-base text-fg-dim align-middle truncate">{c.title}</td>
+          {cols.why && <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate">{c.why}</td>}
+          {cols.where && <td className="py-3 pr-4 text-sm text-fg-mute align-middle truncate font-mono">{sourceWords(c)}</td>}
+          <td />
+          <td className="py-3 pr-4 text-sm text-fg-mute align-middle tnum text-right">{ago(c.ts)}</td>
+          <td className="py-1 pr-0 align-middle text-right">
+            <Button size="sm" variant="ghost" title="Bring it back" ariaLabel="Bring it back"
+              onClick={() => void restore(c)}>
               <RotateCcw size={14} />
             </Button>
           </td>
@@ -483,24 +551,24 @@ function DoneList({ open }: { open: boolean }) {
     <section>
       <button
         onClick={() => setParam('done', open ? null : '1')}
-        className="inline-flex items-center gap-2 pt-6 pb-2 text-md font-medium text-fg-dim"
+        className="inline-flex items-center gap-2 pt-6 pb-2 text-eyebrow uppercase text-fg-mute"
       >
-        <Chevron size={15} className="text-fg-mute" />
+        <Chevron size={13} />
         Done and not mine
-        {cards && <span className="tnum text-md text-fg-mute">{cards.length}</span>}
+        {cards && <span className="text-eyebrow uppercase tnum">{cards.length}</span>}
       </button>
-      {open && cards?.length === 0 && <p className="text-sm text-fg-mute h-11 flex items-center">Nothing taken off</p>}
       {open && !!cards?.length && (
-        <ul className="-mx-4">
+        <ul>
           {cards.map(c => (
-            <li key={c.group_key} className="flex items-center gap-3 px-4 min-h-[60px] border-b border-rule">
-              <div className="min-w-0 grow py-2">
-                <div className="text-base text-fg-dim truncate">{c.title}</div>
-                <div className="text-sm text-fg-mute truncate">{doneWord(c)} · {sourceWords(c)}</div>
-              </div>
-              <Button size="md" variant="ghost" title="Bring it back" onClick={() => void restore(c)}>
-                <RotateCcw size={15} />
-              </Button>
+            <li key={c.group_key} className="flex items-center h-11 border-b border-rule">
+              <span className="text-base text-fg-dim truncate grow min-w-0">{c.title}</span>
+              <span className="text-sm text-fg-mute shrink-0 pl-3">{doneWord(c)}</span>
+              <span className="pl-2 shrink-0">
+                <Button size="sm" variant="ghost" title="Bring it back" ariaLabel="Bring it back"
+                  onClick={() => void restore(c)}>
+                  <RotateCcw size={14} />
+                </Button>
+              </span>
             </li>
           ))}
         </ul>

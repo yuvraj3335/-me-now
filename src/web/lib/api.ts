@@ -59,6 +59,17 @@ export function reload(): Promise<void> {
   return inflight
 }
 
+/**
+ * Fetch — pipe 2. Runs pipe 1 first, then asks every connector this machine can
+ * reach the two standing questions and lands what comes back on the same desk.
+ *
+ * It takes no argument, because there is nothing to ask it. Deliberately not
+ * routed through `syncing`: Fetch blocks nothing, and a global spinner would
+ * make it look like it does.
+ */
+export const fetchNow = () =>
+  post<import('./types').FetchReport>('/fetch')
+
 /** Ask the server to poll every source now, then reload. */
 export async function refresh() {
   set({ syncing: true })

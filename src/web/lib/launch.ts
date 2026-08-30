@@ -9,7 +9,15 @@
 
 import { useCallback, useSyncExternalStore } from 'react'
 
-export type SlotKind = 'card' | 'mail' | 'slack' | 'sentry' | 'notion' | 'github' | 'session' | 'note'
+/**
+ * `task` is Wake's own object rather than somebody else's.
+ *
+ * It was the missing link in the chain the product exists to serve — row → task
+ * → stickies → Open in Claude → Pulse. `openLaunch` had three callers (the
+ * palette, a card, a mail thread) and Work had none, and a task could not be an
+ * object in a brief even if a button had existed.
+ */
+export type SlotKind = 'card' | 'mail' | 'slack' | 'sentry' | 'notion' | 'github' | 'session' | 'note' | 'task'
 
 export type PackItem = {
   kind: SlotKind
@@ -180,3 +188,66 @@ export const closeLaunch = () => resetLaunch()
 /** Empty it. A brief handed over should not leave its objects in the basket. */
 export const resetLaunch = () =>
   set({ open: false, items: [], templates: [], repoHint: null, title: null })
+
+/**
+ * A task, as objects a brief can carry.
+ *
+ * The task itself, then one `note` slot per sticky — a slot every template has
+ * listed since the first release and nothing has ever filled. Stickies are the
+ * operator's own words about this task, they are short by construction, and they
+ * are the highest-signal thing in any brief.
+ *
+ * The provenance comes from the task's frozen `origin_*` columns rather than
+ * from the card it was made from: the card is swept when its source stops
+ * returning it, and the whole point of freezing was that the brief still knows
+ * why the task exists after the pull request merges.
+ */
+export function taskContext(task: {
+  id: string; title: string; detail?: string | null
+  notes?: Array<{ id: string; body: string }>
+  origin_source?: string | null; origin_title?: string | null; origin_why?: string | null
+  origin_url?: string | null; origin_excerpt?: string | null; origin_meta?: string | null
+  due_at?: number | null
+}, goal?: { title: string } | null): PackItem[] {
+  const meta: Record<string, string | number | boolean | null> = {}
+  if (goal?.title) meta.goal = goal.title
+  if (task.due_at) meta.due = new Date(task.due_at).toISOString()
+  if (task.origin_source) meta.came_from = task.origin_source
+  if (task.origin_why) meta.why_it_exists = task.origin_why
+
+  const items: PackItem[] = [{
+    kind: 'task',
+    ref: `task:${task.id}`,
+    title: task.title,
+    url: task.origin_url?.startsWith('http') ? task.origin_url : null,
+    excerpt: task.detail?.trim() || task.origin_excerpt || null,
+    why: task.origin_why ?? 'on your own list',
+    meta,
+  }]
+
+  for (const n of task.notes ?? []) {
+    items.push({
+      kind: 'note',
+      ref: `note:${n.id}`,
+      title: 'Note',
+      excerpt: n.body,
+      why: 'your own note on this task',
+      meta: {},
+    })
+  }
+  return items
+}
+
+/**
+ * Which repository a task concerns, if its frozen provenance knows.
+ * `origin_meta` is the card's `meta` as stored JSON.
+ */
+export function taskRepoHint(originMeta: string | null | undefined): string | null {
+  if (!originMeta) return null
+  try {
+    const m = JSON.parse(originMeta) as Record<string, unknown>
+    if (typeof m.cwd === 'string') return m.cwd
+    if (typeof m.repo === 'string') return m.repo.split('/').pop() ?? null
+  } catch { /* a task with unreadable provenance simply has no hint */ }
+  return null
+}

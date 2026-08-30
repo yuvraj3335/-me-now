@@ -39,7 +39,8 @@ connections.get('/', async c => {
 
   const sources = await Promise.all(ADAPTERS.map(async a => {
     const status = await a.status()
-    const oauthable = a.name in MCP_SERVERS
+    const cfg = MCP_SERVERS[a.name]
+    const oauthable = !!cfg
     const stored = oauthable ? getStored(a.name) : null
     return {
       name: a.name,
@@ -47,6 +48,14 @@ connections.get('/', async c => {
       ...status,
       lastSync: runs.get(a.name) ?? null,
       oauthable,
+      /**
+       * Whether Connect can actually work, as opposed to whether Wake knows a
+       * URL. `oauthable` meant the second and was read as the first, so Gmail
+       * rendered a Connect button on two screens that could only ever answer
+       * 400: `gmailmcp.googleapis.com` publishes no OAuth metadata at either
+       * well-known, so there is no authorize URL to build.
+       */
+      connectable: cfg?.oauth !== 'none',
       // Surface which link in the credential chain answered, so a confusing
       // "connected but empty" state is diagnosable from the UI.
       hasWakeToken: !!stored?.access_token,

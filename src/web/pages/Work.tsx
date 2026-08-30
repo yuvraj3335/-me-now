@@ -14,7 +14,7 @@
 import { Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useState } from 'react'
-import { Bell, BellRing, Circle, CircleCheck, CircleDot, Mic, Plus, X } from 'lucide-react'
+import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, Terminal, X } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
@@ -23,6 +23,7 @@ import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
+import { openLaunch, taskContext, taskRepoHint } from '../lib/launch'
 import { setParam, useParam } from '../lib/route'
 
 type Tab = 'tasks' | 'goals'
@@ -78,11 +79,15 @@ export function Work() {
     await Promise.all(list.map((t, i) => actions.updateTask(t.id, { sort: i })))
   }
 
-  // Same distinction as Now: no state yet is not the same fact as "0 waiting".
-  if (!state) return <div className="pt-16"><Empty>Reading what's queued</Empty></div>
+  // Nothing at all until the first read lands. A sentence saying a page is
+  // loading is chrome that teaches, and it paints for one frame.
+  if (!state) return <div className="pt-4"><h1 className="text-lg font-medium">Work</h1></div>
 
   const rowProps = (t: Task) => ({
     task: t, reminders, goals,
+    // The live card when there still is one, so the link is current; the frozen
+    // copy when the poller has swept it, so the line does not vanish with the
+    // pull request it was about.
     origin: cardByGroup.get(t.source_card_group ?? ''),
     onCycle: cycle, onEdit: setEditing,
   })
@@ -91,9 +96,7 @@ export function Work() {
     <div className="pb-24">
       <header className="flex items-center gap-3 pt-4 pb-2">
         <h1 className="text-lg font-medium">Work</h1>
-        <span className="tnum text-md text-fg-mute">
-          {doing.length ? `${doing.length} in flight` : todo.length}
-        </span>
+        <span className="tnum text-sm text-fg-mute">{todo.length + doing.length}</span>
         <span className="ml-auto flex items-center gap-2">
           <Segmented
             options={[{ id: 'tasks', label: 'Tasks' }, { id: 'goals', label: 'Goals' }]}
@@ -101,34 +104,36 @@ export function Work() {
             onChange={id => setParam('tab', id === 'tasks' ? null : id)}
             ariaLabel="Tasks or goals"
           />
+          {/* The one primary in the product, and the only place amber marks a
+              commit rather than a decision. */}
           <Button size="md" variant="primary"
             onClick={() => (tab === 'tasks' ? setCreating(true) : setGoalEditing('new'))}>
-            <Plus size={15} /> {tab === 'tasks' ? 'Task' : 'Goal'}
+            <Plus size={14} /> {tab === 'tasks' ? 'Task' : 'Goal'}
           </Button>
         </span>
       </header>
 
-      <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-8 lg:items-start">
+      <div className="lg:grid lg:grid-cols-[1fr_360px] lg:gap-6 lg:items-start">
         <div className="min-w-0">
           {tab === 'tasks' ? (
             <>
               {doing.length > 0 && (
-                <Group label="In flight" accent>
+                <Group label="In flight">
                   <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
                     {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                   </Reorder.Group>
                 </Group>
               )}
 
-              <Group label="Up next">
-                {todo.length ? (
+              {todo.length > 0 && (
+                <Group label="Up next">
                   <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
                     {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
                   </Reorder.Group>
-                ) : (
-                  <Empty>No tasks</Empty>
-                )}
-              </Group>
+                </Group>
+              )}
+              {/* An empty desk is one dash, not a paragraph and not a tutorial. */}
+              {!todo.length && !doing.length && !done.length && <Empty />}
 
               {done.length > 0 && (
                 <Group label={`Done — ${done.length}`}>
@@ -157,10 +162,11 @@ export function Work() {
   )
 }
 
-function Group({ label, children, accent }: { label: string; children: React.ReactNode; accent?: boolean }) {
+/** An eyebrow and rows. It is never amber: a heading colour is not a state. */
+function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="mb-6">
-      <h2 className={`text-eyebrow uppercase mb-1 ${accent ? 'text-accent-ink' : 'text-fg-mute'}`}>{label}</h2>
+      <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{label}</h2>
       {children}
     </section>
   )
@@ -177,6 +183,15 @@ function TaskRow({
   const reminder = reminders.find(r => r.target_kind === 'task' && r.target_id === task.id && !r.fired_at && !r.dismissed_at)
   const overdue = task.due_at && task.due_at < Date.now() && task.status !== 'done'
 
+  const source = (origin?.sources[0]?.source ?? task.origin_source) as keyof typeof SOURCE_LABEL | undefined
+  const provenance = source
+    ? {
+        label: SOURCE_LABEL[source] ?? source,
+        url: origin?.url ?? task.origin_url ?? undefined,
+        title: origin?.title ?? task.origin_title ?? undefined,
+      }
+    : null
+
   const Icon = task.status === 'done' ? CircleCheck : task.status === 'doing' ? CircleDot : Circle
 
   const body = (
@@ -186,8 +201,8 @@ function TaskRow({
         className="pt-0.5 shrink-0 transition-colors duration-100"
         aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}`}
       >
-        <Icon size={16} className={
-          task.status === 'done' ? 'text-ok' : task.status === 'doing' ? 'text-accent-ink' : 'text-fg-mute hover:text-fg-dim'
+        <Icon size={14} className={
+          task.status === 'done' ? 'text-ok' : task.status === 'doing' ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'
         } />
       </button>
 
@@ -199,7 +214,7 @@ function TaskRow({
         {!!(goal || task.due_at || reminder || task.notes?.length) && (
           <div className="mt-0.5 flex items-center gap-x-3 gap-y-1 flex-wrap text-sm text-fg-mute">
             {goal && (
-              <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: goal.color ?? 'var(--color-fg-mute)' }} />
                 {goal.title}
               </span>
@@ -209,26 +224,41 @@ function TaskRow({
               <span className={overdue ? 'text-bad' : 'text-fg-dim'}>{deadlineWords(task.due_at)}</span>
             )}
             {reminder && (
-              <span className="inline-flex items-center gap-1.5">
-                <Bell size={11} className="text-accent-ink" />
+              <span className="inline-flex items-center gap-2">
+                <Bell size={12} />
                 {wallClock(reminder.fire_at)}
               </span>
             )}
             {!!task.notes?.length && <span>{task.notes.length} note{task.notes.length > 1 ? 's' : ''}</span>}
-            {origin && (
+            {provenance && (
               <a
-                href={origin.url.startsWith('http') ? origin.url : undefined}
+                href={provenance.url?.startsWith('http') ? provenance.url : undefined}
                 target="_blank" rel="noreferrer"
                 onClick={e => e.stopPropagation()}
                 className="hover:text-fg-dim transition-colors duration-100"
-                title={origin.title}
+                title={provenance.title}
               >
-                from {SOURCE_LABEL[origin.sources[0]?.source ?? 'github']}
+                {provenance.label}
               </a>
             )}
           </div>
         )}
       </div>
+
+      {/* The third arrow of the chain, which did not exist: `openLaunch` had three
+          call sites and none of them was a task. The brief carries the task's
+          title as the instruction seed, its stickies as `note` slots, and its
+          frozen provenance as the reason it exists. */}
+      <span className="shrink-0" onClick={e => e.stopPropagation()}>
+        <Button size="sm" variant="ghost" title="Open in Claude" ariaLabel="Open in Claude"
+          onClick={() => openLaunch(taskContext(task, goal), {
+            template: 'blank',
+            title: task.title,
+            repoHint: taskRepoHint(task.origin_meta),
+          })}>
+          <Terminal size={14} />
+        </Button>
+      </span>
 
       {task.color && (
         <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: task.color }} />
@@ -253,26 +283,26 @@ function TaskRow({
 
 function GoalList({ goals, tasks, onEdit }: { goals: Goal[]; tasks: Task[]; onEdit: (g: Goal) => void }) {
   const reduce = useStill()
-  if (!goals.length) return <Empty>No goals</Empty>
+  if (!goals.length) return <Empty />
   return (
     <div>
       {goals.map(g => {
         const linked = tasks.filter(t => t.goal_id === g.id)
         const done = linked.filter(t => t.status === 'done').length
         const pct = linked.length ? done / linked.length : 0
-        const color = g.color ?? 'var(--color-accent)'
+        const color = g.color ?? 'var(--color-fg-dim)'
         return (
           <button
             key={g.id} onClick={() => onEdit(g)}
             className="w-full text-left py-3 border-b border-rule last:border-0"
           >
-            <div className="flex items-baseline gap-2.5">
+            <div className="flex items-baseline gap-3">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
               <span className="text-base grow">{g.title}</span>
               {g.target_date && <span className="text-sm text-fg-mute">by {shortDate(g.target_date)}</span>}
               <span className="tnum text-sm text-fg-mute">{done}/{linked.length}</span>
             </div>
-            <div className="mt-2 h-[3px] bg-ink-800 rounded-full overflow-hidden">
+            <div className="mt-2 h-1 bg-ink-800 rounded-full overflow-hidden">
               <motion.div
                 className="h-full rounded-full"
                 style={{ background: color }}
@@ -340,7 +370,7 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
           onChange={e => setTitle(e.target.value)} placeholder="What are you moving toward?" />
       </Field>
       <Field label="Detail">
-        <textarea className={`${inputClass} min-h-[60px] resize-y`} value={detail}
+        <textarea className={`${inputClass} min-h-16 resize-y`} value={detail}
           onChange={e => setDetail(e.target.value)} placeholder="Optional" />
       </Field>
       <Field label="Target date">
@@ -385,7 +415,7 @@ function Fired() {
       <h2 className="text-eyebrow uppercase text-fg-mute mb-1">Went off</h2>
       {rows.map(n => (
         <div key={n.id} className="flex items-start gap-2 py-2 border-b border-rule last:border-0">
-          <BellRing size={13} className="text-accent-ink mt-0.5 shrink-0" />
+          <BellRing size={14} className="text-fg-mute mt-0.5 shrink-0" />
           <div className="min-w-0 grow">
             <div className="text-base text-fg-dim truncate">{n.title}</div>
             {n.body && <div className="text-sm text-fg-mute truncate">{n.body}</div>}
@@ -409,31 +439,26 @@ function Fired() {
  */
 function VoiceNotes() {
   const [notes, setNotes] = useState<VoiceNote[]>([])
-  const [stt, setStt] = useState<{ available: boolean; reason: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
     voiceApi.list()
-      .then(d => { setNotes(d.notes); setStt(d.stt) })
+      .then(d => { setNotes(d.notes) })
       .catch(e => setErr((e as Error).message))
   }, [])
 
   return (
     <section className="mt-8 lg:mt-0">
-      <div className="flex items-center gap-2 mb-1">
+      {/* The lone `ml-auto` mic glyph is gone: it sat 250px from anything it
+          related to and did nothing when pressed. `Recorder` below is the mic. */}
+      <div className="flex items-baseline gap-2 mb-2">
         <h2 className="text-eyebrow uppercase text-fg-mute">Voice notes</h2>
-        {notes.length > 0 && <span className="tnum text-xs text-fg-mute">{notes.length}</span>}
-        <Mic size={12} className="text-fg-mute ml-auto" />
+        {notes.length > 0 && <span className="text-eyebrow uppercase tnum text-fg-mute">{notes.length}</span>}
       </div>
 
       <Recorder onSaved={n => setNotes(prev => [n, ...prev])} />
 
       {err && <p className="mt-2 text-sm text-bad">{err}</p>}
-      {/* A safety-adjacent fact rather than help text: it is the claim the
-          product keeps about where a recording goes. */}
-      {stt && !stt.available && notes.some(n => !n.transcript) && (
-        <p className="mt-2 text-sm text-fg-mute">{stt.reason}</p>
-      )}
 
       <div className="mt-2">
         {notes.map(n => (
@@ -446,7 +471,7 @@ function VoiceNotes() {
             }}
           />
         ))}
-        {!notes.length && <Empty>No notes</Empty>}
+        {!notes.length && <Empty />}
       </div>
     </section>
   )

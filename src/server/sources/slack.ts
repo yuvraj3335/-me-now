@@ -168,9 +168,10 @@ export const slack: SourceAdapter = {
   async status() {
     const { token, via } = await resolveToken('slack')
     if (!token) {
-      // Product copy, not a command. Settings offers Connect, and keeps the
-      // terminal route behind a disclosure for when that is the faster answer.
-      return { ok: false, detail: 'Wake reads DMs, mentions and asks addressed to you. Connect it to start.' }
+      // The shape of the work, in three words, before the click. Slack publishes
+      // no registration endpoint, so Connect opens a form for a client id and
+      // secret rather than a consent screen, and the row should say so first.
+      return { ok: false, detail: 'needs an app of your own' }
     }
     try {
       const t = await discoverTools()

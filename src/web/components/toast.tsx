@@ -35,7 +35,7 @@ export function ToastBar() {
             {t.action && (
               <button
                 onClick={() => { const run = t.action!.run; dismissToast(); void run() }}
-                className="shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full
+                className="shrink-0 inline-flex items-center gap-2 h-8 px-3 rounded-full
                            text-sm font-medium text-accent-ink hover:bg-ink-600 transition-colors"
               >
                 <Undo2 size={13} />

@@ -61,6 +61,20 @@ export type Task = {
   created_at: number; updated_at: number
   started_at: number | null; completed_at: number | null
   notes: Note[]
+  /**
+   * Provenance, frozen at creation.
+   *
+   * A copy, not a reference: `source_card_group` points at a `cards` row the
+   * poller marks gone when its source stops returning it, so a task's "from
+   * GitHub" used to disappear exactly when the pull request merged. Written
+   * once and never updated. `origin_meta` is the card's `meta` as stored JSON.
+   */
+  origin_source: string | null
+  origin_title: string | null
+  origin_why: string | null
+  origin_url: string | null
+  origin_excerpt: string | null
+  origin_meta: string | null
 }
 
 export type Goal = {
@@ -115,7 +129,13 @@ export type SourceStatus = {
    * about a source nobody ever connected.
    */
   lastSync: { ok: number; connected: number; at: number; count: number | null; error: string | null } | null
-  oauthable: boolean; hasWakeToken: boolean; hasClaudeBridge: boolean
+  oauthable: boolean
+  /**
+   * Whether pressing Connect can succeed at all, as opposed to whether Wake
+   * knows a URL for this server. A button that can only 400 is worse than none.
+   */
+  connectable: boolean
+  hasWakeToken: boolean; hasClaudeBridge: boolean
   hasClientId: boolean; needsClientId: boolean
 }
 
@@ -140,4 +160,27 @@ export type Analytics = {
   agingBuckets: string[]
   goals: Array<{ id: string; title: string; color: string | null; target_date: number | null; total: number; done: number }>
   totals: { openNow: number; doneAllTime: number; tasksOpen: number }
+}
+
+/**
+ * What one press of Fetch did.
+ *
+ * `found` is rows that landed after dedup; `fresh` is groups that did not exist
+ * before. "Fetched 6 · 0 new" is a useful answer, which is why a second press is
+ * never refused.
+ */
+export type FetchReport = {
+  at: number
+  ms: number
+  found: number
+  fresh: number
+  connectors: Array<{
+    name: string
+    /** Wake's own credential answered, the box's did, or neither could. */
+    via: 'wake' | 'box' | 'none'
+    ok: boolean
+    count: number
+    ms: number
+    error?: string
+  }>
 }

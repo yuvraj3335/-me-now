@@ -12,13 +12,25 @@ import { scaleBand, scaleLinear, scaleSqrt } from 'd3-scale'
 import { area, curveMonotoneX, line } from 'd3-shape'
 import { useId, useState } from 'react'
 
-/** Chart marks are surfaces, so they use the surface amber, not the text one. */
-const ACCENT = 'var(--color-accent)'
+/**
+ * Chart marks are neutral.
+ *
+ * They used to default to the surface amber, so Pulse painted an amber hero, an
+ * amber throughput bar, an amber clock hand and a full-width amber Ageing bar —
+ * four marks, none of which meant "this one". Amber is spent on three things in
+ * this product and a chart series is not one of them.
+ */
+const MARK = 'var(--color-fg-dim)'
+
+/** How few days a sparse series is allowed to compact to, and how wide one bar
+ *  may be drawn in the 720-unit canvas the chart is stretched from. */
+const MIN_SLOTS = 7
+const MAX_BAR = 26
 
 /* ------------------------------ bar chart -------------------------------- */
 
 export function Bars({
-  data, height = 132, color = ACCENT, format = (n: number) => String(n), label,
+  data, height = 132, color = MARK, format = (n: number) => String(n), label,
 }: {
   data: Array<{ day: string; value: number }>
   height?: number; color?: string
@@ -33,19 +45,37 @@ export function Bars({
   const w = 720, padB = 18
   const rawMax = Math.max(0, ...data.map(d => d.value))
 
-  // A window with nothing in it renders as a full-width canvas of invisible
-  // 2px slivers — which looks broken, not early. Say so instead, the same way
-  // `Trend` already does when it has too few points to draw a line.
-  if (rawMax === 0) {
-    return <div style={{ height }} className="grid place-items-center text-xs text-fg-mute">
-      Nothing here yet
-    </div>
+  // Nothing to draw is not a hole to fill with a sentence. The panel's title row
+  // carries an em dash and the chart is not drawn at all. A 572×132 box
+  // centring three words about the absence was the largest mark on the page.
+  if (rawMax === 0) return null
+
+  /**
+   * A sparse series compacts to its own extent, and says what that extent is.
+   *
+   * Measured: `Throughput` drew thirty day-slots across 572px and painted one
+   * 11px bar at slot thirty — 98% of the axis empty — and `The pile` did it
+   * twice more. That is a formatting decision, not a data problem: the chart
+   * shows the days it has, and the axis labels say which days those are.
+   */
+  const first = data.findIndex(d => d.value > 0)
+  const last = data.length - 1 - [...data].reverse().findIndex(d => d.value > 0)
+  const span = last - first + 1
+  if (span < 4 || span < data.length / 4) {
+    // Enough slots either side that it still reads as a chart rather than as a
+    // slab, centred on the days that actually have something in them.
+    const need = Math.min(data.length, Math.max(MIN_SLOTS, span + 2))
+    const hi = Math.min(data.length, Math.max(last + 1 + Math.ceil((need - span) / 2), need))
+    data = data.slice(Math.max(0, hi - need), hi)
   }
 
   const max = Math.max(1, rawMax)
   const x = scaleBand<string>().domain(data.map(d => d.day)).range([0, w]).padding(0.34)
   const y = scaleLinear().domain([0, max]).range([height - padB, 2])
-  const bw = Math.max(2, x.bandwidth())
+  // Capped, because the viewBox is stretched to the container: three slots in a
+  // 720-unit canvas makes a 200-unit bar, which is a rectangle, not a mark.
+  const bw = Math.min(Math.max(2, x.bandwidth()), MAX_BAR)
+  const bx = (d: string) => x(d)! + (x.bandwidth() - bw) / 2
 
   const active = hover != null ? data[hover] : null
 
@@ -60,7 +90,7 @@ export function Bars({
               {/* A full-height transparent target: hitting a 2px bar with a
                   thumb is impossible, so the hit area is the whole column. */}
               <rect
-                x={x(d.day)!} y={0} width={bw} height={height} fill="transparent"
+                x={x(d.day)!} y={0} width={x.bandwidth()} height={height} fill="transparent"
                 onPointerEnter={() => setHover(i)} onPointerLeave={() => setHover(null)}
               />
               {/* Geometry is static and the growth is a CSS transform. Animating
@@ -69,7 +99,7 @@ export function Bars({
                   settles on the real value, which left every bar a few px tall.
                   transform-box:fill-box makes the origin the bar, not the canvas. */}
               <motion.rect
-                x={x(d.day)} y={height - padB - h} width={bw} height={h}
+                x={bx(d.day)} y={height - padB - h} width={bw} height={h}
                 rx={Math.min(3, bw / 2)} fill={color}
                 initial={reduce ? false : { scaleY: 0 }}
                 animate={{ scaleY: 1 }}
@@ -86,7 +116,7 @@ export function Bars({
         })}
       </svg>
 
-      <div className="flex justify-between mt-1.5 text-xs text-fg-mute tnum">
+      <div className="flex justify-between mt-2 text-sm text-fg-mute tnum">
         <span>{data[0]?.day.slice(5)}</span>
         <span className={active ? 'text-fg' : ''}>
           {active ? (label?.(active) ?? `${active.day.slice(5)} · ${format(active.value)}`) : ''}
@@ -103,7 +133,7 @@ export function Bars({
 export const TREND_MIN_POINTS = 2
 
 export function Trend({
-  data, height = 132, color = ACCENT, format = (n: number) => String(n),
+  data, height = 132, color = MARK, format = (n: number) => String(n),
 }: {
   data: Array<{ day: string; value: number | null }>
   height?: number; color?: string; format?: (n: number) => string
@@ -115,14 +145,11 @@ export function Trend({
   const points = data.map((d, i) => ({ i, v: d.value, day: d.day }))
   const known = points.filter(p => p.v != null) as Array<{ i: number; v: number; day: string }>
 
-  // A line needs two points. The caller is told the same threshold through
-  // `trendNeedsPoints`, so the tile above a chart cannot state a median while
-  // the chart under it says there is not enough history to draw one.
-  if (known.length < TREND_MIN_POINTS) {
-    return <div className="h-[132px] flex items-center text-sm text-fg-mute">
-      Not enough history
-    </div>
-  }
+  // A line needs two points, and the caller is told the same threshold through
+  // `TREND_MIN_POINTS`, so the tile above cannot state a median the chart below
+  // refuses to draw. Not enough is not a 572×132 box saying so: the panel puts
+  // an em dash on its title row and draws nothing.
+  if (known.length < TREND_MIN_POINTS) return null
 
   const max = Math.max(...known.map(p => p.v))
   const x = scaleLinear().domain([0, data.length - 1]).range([0, w])
@@ -172,7 +199,7 @@ export function Trend({
                 onPointerEnter={() => setHover(p.i)} onPointerLeave={() => setHover(null)} />
         ))}
       </svg>
-      <div className="flex justify-between mt-1.5 text-xs text-fg-mute tnum">
+      <div className="flex justify-between mt-2 text-sm text-fg-mute tnum">
         <span>{data[0]?.day.slice(5)}</span>
         <span className={active ? 'text-fg' : ''}>
           {active ? `${active.day.slice(5)} · ${format(active.v)}` : ''}
@@ -207,8 +234,8 @@ export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; val
   const shown = hover != null ? data[hover]! : peak
 
   return (
-    <div className="flex flex-col items-center">
-      <svg viewBox={`0 0 ${size} ${size}`} className="w-full max-w-[280px]" role="img">
+    <div className="flex flex-col">
+      <svg viewBox={`0 0 ${size} ${size}`} className="w-full max-w-56" role="img">
         {/* midnight / noon guides, the only chrome on this chart */}
         <circle cx={cx} cy={cy} r={rOut} fill="none" stroke="var(--color-ink-800)" strokeWidth={1} />
         <circle cx={cx} cy={cy} r={rIn} fill="none" stroke="var(--color-ink-800)" strokeWidth={1} />
@@ -231,7 +258,7 @@ export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; val
                 initial={reduce ? false : { pathLength: 0, opacity: 0 }}
                 animate={{ pathLength: 1, opacity: 1 }}
                 transition={{ delay: 0.1 + d.hour * 0.018, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                stroke={isHot ? 'var(--color-accent)' : 'var(--color-fg-mute)'}
+                stroke={isHot ? 'var(--color-fg)' : 'var(--color-fg-mute)'}
                 strokeOpacity={isHot ? 1 : d.value ? 0.55 : 0.16}
                 strokeWidth={stroke} strokeLinecap="round"
               />
@@ -249,13 +276,11 @@ export function DayClock({ data, size = 260 }: { data: Array<{ hour: number; val
           {String(shown.hour).padStart(2, '0')}:00
         </text>
         <text x={cx} y={cy + 13} textAnchor="middle"
-              className="fill-[var(--color-fg-mute)] text-xs">
+              className="fill-[var(--color-fg-mute)] text-sm">
           {shown.value} done
         </text>
       </svg>
-      <p className="text-xs text-fg-mute mt-1">
-        {hover == null ? 'Your sharpest hour' : 'Hover to compare'}
-      </p>
+
     </div>
   )
 }
@@ -276,12 +301,12 @@ export function StackedAging({
   const max = Math.max(1, ...totals)
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-4">
       {rows.map((r, i) => {
         const total = totals[i]!
         return (
           <div key={r.source}>
-            <div className="flex items-baseline justify-between mb-1.5">
+            <div className="flex items-baseline justify-between mb-2">
               <span className="inline-flex items-center gap-2 text-sm text-fg-dim">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: colorOf(r.source) }} />
                 {labelOf(r.source)}
@@ -295,7 +320,7 @@ export function StackedAging({
                 return (
                   <motion.div
                     key={b} title={`${v} · ${b}`}
-                    className="rounded-[2px]"
+                    className="rounded-chip"
                     style={{
                       background: colorOf(r.source),
                       // Older items are drawn stronger, so a pile that is going
@@ -324,20 +349,20 @@ export function WeekdayBars({ data }: { data: Array<{ weekday: number; value: nu
   const reduce = useStill()
   const max = Math.max(1, ...data.map(d => d.value))
   return (
-    <div className="flex items-end gap-2.5 h-[104px]">
+    <div className="flex items-end gap-2 h-26">
       {data.map(d => (
         <div key={d.weekday} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
           <motion.div
-            className="w-full rounded-[3px]"
+            className="w-full rounded-chip"
             style={{
-              background: d.value === max ? ACCENT : 'var(--color-ink-700)',
+              background: d.value === max ? 'var(--color-fg-dim)' : 'var(--color-ink-700)',
               opacity: d.value === max ? 0.9 : 1,
             }}
             initial={reduce ? false : { height: 0 }}
             animate={{ height: `${Math.max(3, (d.value / max) * 82)}%` }}
             transition={{ delay: d.weekday * 0.04, type: 'spring', stiffness: 200, damping: 24 }}
           />
-          <span className="text-xs text-fg-mute">{WD[d.weekday]!.slice(0, 1)}</span>
+          <span className="text-sm text-fg-mute">{WD[d.weekday]!.slice(0, 1)}</span>
         </div>
       ))}
     </div>

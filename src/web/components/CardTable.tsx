@@ -1,23 +1,40 @@
 /**
  * Now, as a table.
  *
- * One `<table>`, one sticky header row, and three `<tbody>` groups — Now, Open,
- * Parked — sharing one `<colgroup>`. The shared colgroup is the whole trick: it
- * is what lets grouping and column alignment coexist without either becoming a
+ * One `<table>`, one sticky header row, and one `<tbody>` per non-empty pile,
+ * all sharing one `<colgroup>`. The shared colgroup is the whole trick: it is
+ * what lets grouping and column alignment coexist without either becoming a
  * mode, so the eye reads straight down one column instead of re-parsing every
- * entry. A fourth group, `Done and not mine`, sits collapsed at the bottom.
+ * entry.
  *
- * What this replaces: twenty 129px cards, of which 32px was an `opacity: 0`
- * action bar occupying layout on every row whether or not it was visible and
- * 30px was a chip row restating the dot in the gutter. Five of twenty rows fit a
- * 1440×900 viewport. At 44px, fourteen do.
+ * Four things changed here, and each was measured on the live page.
  *
- * Below 1024px there is no table: the row becomes two lines, because six columns
- * in 390px is not a table, it is a diagram of one.
+ * **`SOURCE` is not a column heading any more.** The word is 45px wide and the
+ * thing it labelled is a 6px dot, so the column was padded to 68 to fit its own
+ * label, `WHEN` ended up 22px away from it, and `columnsFor` then dropped the
+ * repo name at every laptop width to pay for it — the laptop showed fewer facts
+ * per row than the phone. The dots move to an unlabelled slot immediately left
+ * of When, and `Where` survives.
+ *
+ * **`<th>` and `<td>` share an x in every column, including the first.** The
+ * kind glyph gets a fixed slot rather than pushing the word, so `KIND` at x=224
+ * sits over `Session` at x=224 instead of 23px to its left, on the one column
+ * the eye lands on first.
+ *
+ * **A pile with zero rows is not rendered.** No heading, no count, no sentence.
+ * `Now 0` plus `Nothing waiting` cost 109px of the fold to report a zero, and
+ * three of them stacked cost 331px on a filtered phone.
+ *
+ * **The 2px row stripe is gone.** It was an 855px vertical bracket painting the
+ * identical colour on every visible row — brighter than the rules it crossed,
+ * encoding nothing.
+ *
+ * Below 1024px there is no table: the row becomes one 44px line, because six
+ * columns in 390px is not a table, it is a diagram of one.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, Clock, Sunrise } from 'lucide-react'
+import { Check } from 'lucide-react'
 import type { Card, SourceName } from '../lib/types'
 import { ago } from '../lib/time'
 import { Button } from './primitives'
@@ -35,67 +52,55 @@ export type RowAction = {
 /**
  * Which columns exist, decided by how much room the list actually has.
  *
- * Not by the viewport: the rail and the detail pane are both fixed columns of
- * the shell, so a 1440px screen gives the table about 790px, and the eight
- * columns at their nominal widths want more than that. Deciding on the viewport
- * instead of on the list is how the table came out 992px wide inside a 792px
- * container and slid underneath the pane.
- *
- * Columns disappear from the middle out, and Who and Where disappear together:
- * they are the two facts the detail pane already carries in full, and dropping
- * one while keeping the other is a rule nobody can predict from the header.
- * Eight columns beside a 400px pane want 668px of fixed width and leave Title
- * 140px at 1440, which is not a title; six leave it 348px, which is.
- *
- * Why is the last thing to go. A clipped Title still has its full text one click
- * away in the pane; a clipped `why` has nowhere else to be — so Title gives up
- * its nominal 280px, down to a 220px floor, rather than lose it.
+ * `Where` is the only optional one now, and it yields to the detail pane rather
+ * than to `Why`. The previous rule dropped `Why` — the column the file's own
+ * comment said must never be lost — for every width between 1024 and 1087,
+ * because eight columns had to fit beside a pane that appeared at 1024. The pane
+ * appears at 1280 instead, so between 1024 and 1280 the table has the whole
+ * shell and every column fits.
  */
 export type Columns = {
   why: boolean
-  who: boolean
   where: boolean
 }
 
 /** The shell's own fixed columns, which the table never gets to use. */
 const RAIL = 200
-const PAGE_PAD = 32
+/** One page pad, both sides. `.pad-x` in styles.css is the only source of it. */
+const PAGE_PAD = 48
 
-/** The pane is narrower on a small laptop, where 400px is a third of the screen. */
-export const paneWidth = (w: number) => (w >= 1440 ? 400 : 352)
+/** The width at which a table stops being a diagram of one. */
+export const TABLE_MIN = 1024
+/**
+ * The width at which the detail pane earns its column.
+ *
+ * At 1024 a 352px pane left the table 424px for six columns, which is how `Why`
+ * came to be dropped on an iPad in landscape. Below 1280 the detail is the
+ * full-screen push view the phone already uses, which is a better read anyway.
+ */
+export const PANE_MIN = 1280
+
+export const paneWidth = (w: number) => (w >= 1440 ? 400 : 360)
 
 /**
  * Column widths, in the order they appear.
  *
- * Sized to their content rather than to a round number: `Session` plus a 16px
- * glyph is 88px, `trutohq/truto` in mono is 112px, and two 26px row actions plus
- * their gap is 72px. `Source` and `When` are wider than their *content* needs
- * because their column headings are wider than they are — 60px of dots under a
- * 44px column made `SOURCE` and `WHEN` collide into `SOURCEWHEN`.
- *
- * Why is 176px because that is what its own sentences measure: `your open pull
- * request` needs 148px with the cell's padding, `you left this open` needs
- * 118px. At 108px all twelve rows of it rendered `your open pul…`, which
- * answers nothing — on the one column the screen exists to answer.
+ * Sized to their content, and measured rather than guessed: `Session` behind a
+ * 20px glyph slot needs 96, `trutohq/truto` in mono needs 112, two source dots
+ * need 20, `22m` under a `WHEN` heading needs 64, and one 32px row action needs
+ * 64. `Why` is 168 because that is what its own sentences measure —
+ * `your open pull request` needs 148.
  */
-const W = { kind: 88, why: 176, who: 88, where: 120, source: 68, when: 56, actions: 72 }
+const W = { kind: 96, why: 168, where: 112, dots: 20, when: 64, actions: 64 }
 
-/** What Title wants, and the floor it will take rather than give up Why. */
+/** What Title wants. It is the only elastic column. */
 const TITLE_MIN = 280
-const TITLE_FLOOR = 220
 
 export function columnsFor(width: number): Columns {
-  const list = width - RAIL - paneWidth(width) - PAGE_PAD
-  const cols: Columns = { why: true, who: true, where: true }
-  const spend = () =>
-    W.kind + W.source + W.when + W.actions +
-    (cols.why ? W.why : 0) + (cols.who ? W.who : 0) + (cols.where ? W.where : 0)
-
-  // The pair first — both are in the pane — and Why only if what is left still
-  // cannot give Title a readable line.
-  if (list - spend() < TITLE_MIN) { cols.who = false; cols.where = false }
-  if (list - spend() < TITLE_FLOOR) cols.why = false
-  return cols
+  const pane = width >= PANE_MIN ? paneWidth(width) : 0
+  const list = width - RAIL - pane - PAGE_PAD
+  const fixed = W.kind + W.dots + W.when + W.actions + W.why
+  return { why: true, where: list - fixed - W.where >= TITLE_MIN }
 }
 
 /** The viewport width, as a number the column rules can read. */
@@ -112,7 +117,13 @@ export function useViewport(): number {
 
 /* --------------------------------- header --------------------------------- */
 
-const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle px-2 py-2 truncate'
+/**
+ * No left padding on any cell.
+ *
+ * The page pad is applied once, by `.pad-x` on the container. A cell that pads
+ * itself again is what put the `<th>`s at 225 while the page title sat at 216.
+ */
+const HEAD = 'text-eyebrow uppercase text-fg-mute font-medium text-left align-middle py-2 pr-4 truncate'
 
 export function TableHead({ cols }: { cols: Columns }) {
   return (
@@ -121,15 +132,12 @@ export function TableHead({ cols }: { cols: Columns }) {
         <th className={HEAD} scope="col">Kind</th>
         <th className={HEAD} scope="col">Title</th>
         {cols.why && <th className={HEAD} scope="col">Why</th>}
-        {cols.who && <th className={HEAD} scope="col">Who</th>}
         {cols.where && <th className={HEAD} scope="col">Where</th>}
-        <th className={HEAD} scope="col">Source</th>
+        {/* The source column has no heading. Its label was seven times wider
+            than the dot it labelled and cost the repo name to fit. */}
+        <th className={HEAD} scope="col" aria-label="Source" />
         <th className={`${HEAD} text-right`} scope="col">When</th>
-        {/* Named for a screen reader and empty for everyone else. An `sr-only`
-            span carried the word in a 1px `overflow: hidden` box, which is a
-            53px scroll overflow on a header cell — indistinguishable, to
-            anything measuring clipped text, from a column that is too narrow. */}
-        <th className={HEAD} scope="col" aria-label="Actions" />
+        <th className={`${HEAD} pr-0`} scope="col" aria-label="Actions" />
       </tr>
     </thead>
   )
@@ -147,14 +155,11 @@ export function TableCols({ cols }: { cols: Columns }) {
     <colgroup>
       <col style={{ width: W.kind }} />
       {/* No width: under `table-fixed` the one unsized column absorbs whatever
-          the others leave, which is what makes Title elastic and every other
-          column hold its x-position. A `min-width` here is what overflowed the
-          table out from under its own container. */}
+          the others leave, which is what makes Title elastic. */}
       <col />
       {cols.why && <col style={{ width: W.why }} />}
-      {cols.who && <col style={{ width: W.who }} />}
       {cols.where && <col style={{ width: W.where }} />}
-      <col style={{ width: W.source }} />
+      <col style={{ width: W.dots }} />
       <col style={{ width: W.when }} />
       <col style={{ width: W.actions }} />
     </colgroup>
@@ -163,37 +168,36 @@ export function TableCols({ cols }: { cols: Columns }) {
 
 /** How many cells wide the table currently is, for a full-width group row. */
 export const colSpanOf = (cols: Columns) =>
-  5 + (cols.why ? 1 : 0) + (cols.who ? 1 : 0) + (cols.where ? 1 : 0)
+  5 + (cols.why ? 1 : 0) + (cols.where ? 1 : 0)
 
 /* ------------------------------ group headers ----------------------------- */
 
 /**
- * `Now 0`, `Open 3 of 19`.
+ * `NOW 3`, `OPEN 19`.
  *
- * The 40px accent numeral is gone. It said one fact — how many things are
- * waiting — that the group header already says, and it said it in the loudest
- * type and the only routine use of the accent in the product, at the top of the
- * first screen of his day, in order to report a zero.
+ * An eyebrow and a tabular count, not a heading. It used to be `text-md
+ * font-medium` — the same weight and colour as the page title, four points
+ * smaller, repeated four times per screen, so the eye could not tell which "Now"
+ * was the page. One `lg` per screen; a group label is 11px uppercase.
  *
- * The count carries the accent only when it is greater than zero. That is the
- * entire urgency signal, and it is enough.
+ * The count carries no accent. The same number was amber in three places at
+ * once, which is three more than "at most three marks on a screen" allows.
  */
 export function GroupHead({
   title, shown, total, cols, right, first,
 }: {
   title: string; shown: number; total: number; cols: Columns
   right?: React.ReactNode
-  /** The first group sits under the header row, so it needs less air above it. */
+  /** The first group sits under the header row, so it needs no air above it. */
   first?: boolean
 }) {
   const filtered = shown !== total
-  const urgent = title === 'Now' && shown > 0
   return (
     <tr>
-      <td colSpan={colSpanOf(cols)} className={`px-2 pb-2 ${first ? 'pt-4' : 'pt-6'}`}>
+      <td colSpan={colSpanOf(cols)} className={`pb-2 ${first ? 'pt-2' : 'pt-6'}`}>
         <div className="flex items-baseline gap-2">
-          <h2 className="text-md font-medium tracking-[-0.01em]">{title}</h2>
-          <span className={`tnum text-md ${urgent ? 'text-accent-ink' : 'text-fg-mute'}`}>
+          <h2 className="text-eyebrow uppercase text-fg-mute">{title}</h2>
+          <span className="text-eyebrow uppercase tnum text-fg-mute">
             {filtered ? `${shown} of ${total}` : shown}
           </span>
           {right && <span className="ml-auto">{right}</span>}
@@ -203,30 +207,9 @@ export function GroupHead({
   )
 }
 
-/** One muted noun phrase, at the x-position of the Title column, one row tall. */
-export function EmptyRow({ cols, children }: { cols: Columns; children: React.ReactNode }) {
-  return (
-    <tr>
-      <td />
-      <td colSpan={colSpanOf(cols) - 1} className="px-2 h-11 text-sm text-fg-mute align-middle">
-        {children}
-      </td>
-    </tr>
-  )
-}
-
 /* ---------------------------------- rows ---------------------------------- */
 
-const CELL = 'px-2 py-3 align-middle truncate'
-
-/**
- * The state edge: `--accent` when somebody is waiting, `--edge` when it is
- * started and nobody is, nothing once it has been acknowledged.
- */
-function edgeFor(card: Card): string {
-  if (card.state?.acked_at) return 'transparent'
-  return card.pile === 'now' ? 'var(--color-accent)' : 'var(--color-edge)'
-}
+const CELL = 'py-3 pr-4 align-middle truncate'
 
 export function CardRow({
   card, cols, selected, focused, actions,
@@ -242,7 +225,6 @@ export function CardRow({
   const lead = card.sources[0]
   const where = whereOf(lead, card)
   const sources = [...new Set(card.sources.map(s => s.source))] as SourceName[]
-  const parked = card.pile === 'parked'
 
   // Keyboard focus scrolls the row into view; without this, `j` past the fold
   // moves a selection nobody can see.
@@ -256,17 +238,19 @@ export function CardRow({
       className={`group cursor-pointer border-b border-rule transition-colors duration-100
         ${focused ? 'bg-ink-700' : selected ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
     >
-      <td className={CELL} style={{ boxShadow: `inset 2px 0 0 ${focused ? 'var(--color-accent)' : edgeFor(card)}` }}>
-        <span className="flex items-center gap-2">
-          <KindGlyph kind={kind} />
-          <span className="text-sm text-fg-dim">{kind.word}</span>
+      <td className={CELL}>
+        {/* A fixed slot, not a gap: the glyph varies in width by two pixels
+            between kinds, and letting it push the word is what put four row
+            titles on four different x. */}
+        <span className="flex items-center">
+          <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
+          <span className="text-sm text-fg-dim truncate">{kind.word}</span>
         </span>
       </td>
 
       <td className={`${CELL} text-base font-medium text-fg`} title={card.title}>{card.title}</td>
 
       {cols.why && <td className={`${CELL} text-sm text-fg-dim`} title={card.why}>{card.why}</td>}
-      {cols.who && <td className={`${CELL} text-sm text-fg-dim`}>{card.who ?? ''}</td>}
       {/* Head-truncated to what the column actually holds, and NOT also
           `truncate`d: doing both gave `…utohq/tru…`, cut at each end, which is
           the one form that identifies nothing. */}
@@ -278,24 +262,16 @@ export function CardRow({
 
       <td className={CELL}>
         <span className="flex items-center gap-1">
-          {sources.length > 3
-            ? <span className="text-xs text-fg-mute tnum">••• +{sources.length - 3}</span>
+          {sources.length > 2
+            ? <SourceDot source={sources[0]!} size={6} />
             : sources.map(s => <SourceDot key={s} source={s} size={6} />)}
         </span>
       </td>
 
       <td className={`${CELL} text-sm text-fg-mute tnum text-right`}>{ago(card.ts)}</td>
 
-      <td className="px-2 py-1 align-middle" onClick={e => e.stopPropagation()}>
-        <span className="flex items-center gap-1 justify-end">
-          <Button
-            size="sm" variant="ghost"
-            title={parked ? 'Wake now' : 'Later'}
-            ariaLabel={parked ? 'Wake now' : 'Later'}
-            onClick={() => (parked ? actions.onWake(card) : actions.onLater(card))}
-          >
-            {parked ? <Sunrise size={14} /> : <Clock size={14} />}
-          </Button>
+      <td className="py-1 pr-0 align-middle" onClick={e => e.stopPropagation()}>
+        <span className="flex items-center justify-end">
           <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
             <Check size={14} />
           </Button>
@@ -308,49 +284,53 @@ export function CardRow({
 /* ------------------------------ the phone row ----------------------------- */
 
 /**
- * Two lines: the title, then everything else as one muted run.
+ * One line, 44px.
  *
- * 60px, and the actions are 32px painted with a 44px target — never `opacity-0`,
- * because `group-hover` does not fire on touch, which made four buttons on
- * twenty rows permanently invisible, permanently 560px of dead scroll, and still
- * tappable, since opacity does not disable pointer events.
+ * It was two lines and 60px: a title, then kind, who, where and why as one
+ * muted run beginning 13px to the LEFT of the title it belonged to, and two 32px
+ * icon buttons taking 24% of the row's width for actions that are also one tap
+ * away in the detail. At 44px nineteen of the twenty Open rows fit a 390×844
+ * phone, against thirteen before, and the pile stops needing two screens.
+ *
+ * Kind and repo move to the detail. `Why` stays, because it is the answer to the
+ * question the screen exists to answer.
  */
 export function CardLine({
   card, selected, actions,
 }: { card: Card; selected: boolean; actions: RowAction }) {
   const kind = cardKind(card)
-  const where = whereOf(card.sources[0], card)
-  const parked = card.pile === 'parked'
-  // The age is pinned to the title line rather than left at the end of the meta
-  // run: `why` is the longest of these by far, and putting `when` behind it
-  // meant the one fact he scans for was the first one truncated away.
-  const meta = [kind.word, card.who, where, card.why].filter(Boolean).join(' · ')
 
   return (
-    <li
-      className={`flex items-center gap-3 border-b border-rule px-4 min-h-[60px]
-        ${selected ? 'bg-ink-800' : ''}`}
-      style={{ boxShadow: `inset 2px 0 0 ${edgeFor(card)}` }}
-    >
-      <button onClick={() => actions.onOpen(card)} className="min-w-0 grow text-left py-2">
-        <span className="flex items-baseline gap-2">
-          <KindGlyph kind={kind} size={14} />
-          <span className="text-base font-medium text-fg truncate grow">{card.title}</span>
-          <span className="text-sm text-fg-mute tnum shrink-0">{ago(card.ts)}</span>
-        </span>
-        <span className="mt-0.5 block text-sm text-fg-mute truncate">{meta}</span>
+    <li className={`flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}>
+      <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
+        <div className="flex items-center h-full">
+          {/* The same fixed slot the table uses, so every title on the page
+              starts on one x whatever glyph precedes it. */}
+          <span className="w-5 shrink-0 flex items-center"><KindGlyph kind={kind} size={14} /></span>
+          <span className="text-base font-medium text-fg truncate min-w-0 grow">{card.title}</span>
+          {/*
+            `Why` from 640px up, and not below it.
+
+            The brief's phone row is glyph, title, why, age. Measured at 390 with
+            real rows, that is 358px holding a 20px slot, a 40px action, a 38px
+            age and two competing truncations — both land at about twelve
+            characters, and "waiting for r…" over "TypeError: Cannot re…" answers
+            neither question. The glyph and its colour already say which source a
+            row came from, and `why` is very nearly constant per source: every
+            session says the same eight words, every one of his pull requests says
+            the same four. So the phone spends the width on the one fact that is
+            different on every row, and `why` — which leads the detail — is one
+            tap away.
+          */}
+          <span className="hidden sm:block text-sm text-fg-mute truncate min-w-0 max-w-[38%] pl-3 text-right">
+            {card.why}
+          </span>
+          <span className="text-sm text-fg-mute tnum shrink-0 pl-3">{ago(card.ts)}</span>
+        </div>
       </button>
-      <span className="flex items-center gap-1 shrink-0">
-        <Button
-          size="md" variant="ghost"
-          title={parked ? 'Wake now' : 'Later'}
-          ariaLabel={parked ? 'Wake now' : 'Later'}
-          onClick={() => (parked ? actions.onWake(card) : actions.onLater(card))}
-        >
-          {parked ? <Sunrise size={15} /> : <Clock size={15} />}
-        </Button>
-        <Button size="md" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
-          <Check size={15} />
+      <span className="pl-2 shrink-0">
+        <Button size="sm" variant="ghost" title="Done" ariaLabel="Done" onClick={() => actions.onDone(card)}>
+          <Check size={14} />
         </Button>
       </span>
     </li>

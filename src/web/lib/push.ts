@@ -41,7 +41,10 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 }
 
 export async function enablePush(): Promise<{ ok: boolean; reason?: string }> {
-  if (!pushSupported()) return { ok: false, reason: 'This browser has no Web Push support.' }
+  // Short, because it renders in a 44px row's value column rather than as a
+  // sentence standing on the page. The row does not render at all where this is
+  // the answer; this covers the case where support disappears mid-session.
+  if (!pushSupported()) return { ok: false, reason: 'unsupported here' }
   if (needsHomeScreenInstall()) {
     return { ok: false, reason: 'On iPhone, add Wake to your Home Screen first — Safari tabs cannot receive push.' }
   }

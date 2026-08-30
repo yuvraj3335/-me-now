@@ -80,48 +80,59 @@ export function Mail() {
       })),
     ]), [state?.boxes, reload, listReload])
 
-  if (error) return <Empty>Mail is unavailable: {error}</Empty>
-  if (!state) return <div className="pt-24"><Empty>Opening the mailbox…</Empty></div>
+  if (error) return <div className="pad-x pt-4"><Empty>—</Empty></div>
+  // Nothing until the first read lands.
+  if (!state) return <div className="pad-x pt-4"><h1 className="text-lg font-medium">Mail</h1></div>
 
   if (!state.connected) return <NotConnected state={state} onRetry={() => void reload(true)} />
 
+  // The pane's resting state is the top thread, not an apology.
+  const shown = selected ?? list.threads[0] ?? null
+
   return (
-    <div className="sm:h-dvh sm:flex sm:gap-0 -mx-4 sm:-mx-6 pb-20 sm:pb-0">
+    /* Same metrics as Now: one page pad per column, the same pane width token,
+       the same 44px rows, the same hairline. It used to carry three horizontal
+       pads in one page — 20 on the header, 12 on the rows, 24 on the thread —
+       after a negative margin that undid the shell's own. */
+    <div className="sm:h-dvh sm:flex sm:gap-0 pb-20 sm:pb-0">
       {/* List */}
-      <section className={`sm:w-[360px] lg:w-[400px] xl:w-[440px] sm:shrink-0 sm:border-r sm:border-edge
+      <section className={`sm:w-90 2xl:w-100 sm:shrink-0 sm:border-r sm:border-edge
                            sm:overflow-y-auto ${selected ? 'hidden sm:block' : ''}`}>
-        <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule px-4 sm:px-5 pt-4 pb-2">
+        <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule pad-x pt-4 pb-2">
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-medium tracking-[-0.02em]">Mail</h1>
-            <span className="tnum text-xs text-fg-mute">{list.threads.length}</span>
-            <div className="ml-auto flex items-center gap-1">
-              <button onClick={() => { void reload(true); list.reload() }}
-                className="p-1.5 rounded-lg text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors" title="Refresh">
+            <h1 className="text-lg font-medium">Mail</h1>
+            <span className="tnum text-sm text-fg-mute">{list.threads.length}</span>
+            <div className="ml-auto flex items-center gap-2">
+              <Button size="sm" variant="ghost" title="Refresh" ariaLabel="Refresh"
+                onClick={() => { void reload(true); list.reload() }}>
                 <RefreshCw size={14} className={list.loading ? 'animate-spin' : ''} />
-              </button>
-              <Button variant="primary" onClick={() => setComposing({})}>
-                <PenLine size={13} /> Write
+              </Button>
+              {/* The one commit on this surface. */}
+              <Button size="md" variant="primary" onClick={() => setComposing({})}>
+                <PenLine size={14} /> Write
               </Button>
             </div>
           </div>
 
-          <div className="mt-2.5 flex items-center gap-2 px-2.5 h-8 rounded-[10px] bg-ink-850">
+          {/* No fill and no off-token radius: `bg-ink-850` is pure white in
+              light mode, so this was a white box on a grey page. */}
+          <div className="mt-2 flex items-center gap-2 h-8 border-b border-rule">
             <Search size={13} className="text-fg-mute shrink-0" />
             <input
               value={q}
               onChange={e => setQ(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') submitSearch(); if (e.key === 'Escape') clearSearch() }}
-              placeholder="Search mail — press enter"
+              placeholder="Search"
               className="flex-1 bg-transparent outline-none text-sm text-fg placeholder:text-fg-mute"
             />
             {q && (
               <button onClick={clearSearch} className="text-fg-mute hover:text-fg-dim" title="Clear">
-                <X size={12} />
+                <X size={14} />
               </button>
             )}
           </div>
 
-          <div className="mt-2 flex gap-1 overflow-x-auto no-scrollbar pb-1">
+          <div className="mt-2 flex gap-2 overflow-x-auto no-scrollbar pb-1">
             {state.boxes.map(b => (
               <Chip key={b.id} active={box === b.id} onClick={() => { setBox(b.id); setSelected(null) }}>
                 {b.label}
@@ -141,7 +152,7 @@ export function Mail() {
           </div>
         </header>
 
-        <div className="px-2 sm:px-3">
+        <div className="pad-x">
           {list.errors.map(e => <BoxError key={e.account} account={e.account} error={e.error} />)}
 
           {list.threads.map(t => (
@@ -154,14 +165,11 @@ export function Mail() {
             />
           ))}
 
-          {!list.loading && !list.threads.length && (
-            <Empty>{query.text ? 'Nothing matches that search.' : 'Nothing here.'}</Empty>
-          )}
-          {list.loading && <p className="text-xs text-fg-mute py-6 text-center">Loading…</p>}
+          {!list.loading && !list.threads.length && <Empty />}
           {list.hasMore && !list.loading && (
             <button onClick={list.more}
-              className="w-full py-3 text-xs text-fg-mute hover:text-fg-dim transition-colors">
-              Load more
+              className="w-full h-11 text-left text-sm text-fg-mute hover:text-fg-dim transition-colors">
+              More
             </button>
           )}
         </div>
@@ -169,17 +177,16 @@ export function Mail() {
 
       {/* Thread */}
       <section className={`grow sm:overflow-y-auto ${selected ? '' : 'hidden sm:block'}`}>
-        {selected ? (
+        {/* The first thread, pre-selected. A 720px column centring an
+            instruction to choose one is an apology for a decision the page can
+            make. */}
+        {shown && (
           <ThreadView
-            key={selected.id}
-            thread={selected}
+            key={shown.id}
+            thread={shown}
             onBack={() => setSelected(null)}
             onCompose={setComposing}
           />
-        ) : (
-          <div className="hidden sm:flex h-full items-center justify-center">
-            <p className="text-sm text-fg-mute">Pick a thread.</p>
-          </div>
         )}
       </section>
 
@@ -202,19 +209,13 @@ export function Mail() {
  * threads should be. That detail is worth keeping (it is what makes a failure
  * diagnosable) and worth not leading with.
  */
+/** One row, and the transport's own words on `title`. It was a sentence, a
+ *  disclosure and an escaped JSON-RPC envelope where the threads should be. */
 function BoxError({ account, error }: { account: string; error: string }) {
   return (
-    <div className="px-2 py-2">
-      <p className="flex items-start gap-1.5 text-xs text-warn leading-snug">
-        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-        <span>Wake couldn’t load this box for {account}.</span>
-      </p>
-      <details className="mt-1 ml-[18px]">
-        <summary className="cursor-pointer list-none text-xs text-fg-mute hover:text-fg-dim transition-colors">
-          What went wrong
-        </summary>
-        <p className="mt-1 text-xs font-mono text-fg-mute break-words leading-relaxed">{error}</p>
-      </details>
+    <div className="flex items-center h-11 border-b border-rule min-w-0" title={error}>
+      <span className="text-sm font-mono truncate grow min-w-0">{account}</span>
+      <span className="text-sm text-fg-mute shrink-0 pl-3">didn't load</span>
     </div>
   )
 }
@@ -278,27 +279,26 @@ function ThreadRow({
   return (
     <button
       onClick={onOpen}
-      className={`w-full text-left px-3 py-2.5 rounded-xl transition-colors
-        ${active ? 'bg-ink-800' : 'hover:bg-ink-850'}`}
+      className={`w-full text-left py-2 border-b border-rule transition-colors
+        ${active ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
     >
       <div className="flex items-baseline gap-2">
-        {thread.unread && <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 translate-y-[-1px]" />}
-        <span className={`text-sm truncate ${thread.unread ? 'text-fg' : 'text-fg-dim'}`}>
+        {/* Weight, not a per-thread accent dot: an unread count of forty was
+            forty amber marks on one screen. */}
+        <span className={`text-sm truncate ${thread.unread ? 'text-fg font-medium' : 'text-fg-dim'}`}>
           {displayName(thread.from)}
         </span>
-        {thread.messageCount > 1 && <span className="tnum text-xs text-fg-mute">{thread.messageCount}</span>}
-        <span className="ml-auto tnum text-xs text-fg-mute shrink-0">{ago(thread.ts)}</span>
+        {thread.messageCount > 1 && <span className="tnum text-sm text-fg-mute">{thread.messageCount}</span>}
+        <span className="ml-auto tnum text-sm text-fg-mute shrink-0">{ago(thread.ts)}</span>
       </div>
       <div className={`mt-0.5 text-sm truncate ${thread.unread ? 'text-fg' : 'text-fg-dim'}`}>
         {thread.subject}
       </div>
-      <div className="mt-0.5 text-xs text-fg-mute truncate">{thread.snippet}</div>
-      {(multiAccount || thread.toMe) && (
-        <div className="mt-1 flex items-center gap-1.5 text-xs text-fg-mute">
-          {thread.toMe && <span className="text-accent-ink/80">to you</span>}
-          {multiAccount && <span className="truncate">{thread.account}</span>}
-        </div>
-      )}
+      <div className="mt-0.5 text-sm text-fg-mute truncate">
+        {thread.toMe && <span className="text-fg-dim">to you · </span>}
+        {thread.snippet}
+      </div>
+      {multiAccount && <div className="mt-1 text-sm text-fg-mute truncate">{thread.account}</div>}
     </button>
   )
 }
@@ -347,21 +347,21 @@ function ThreadView({
   )
 
   return (
-    <div className="px-4 sm:px-6 pt-4 pb-16">
+    <div className="pad-x pt-4 pb-16">
       <div className="flex items-start gap-2">
         <button onClick={onBack} className="sm:hidden p-2 -ml-2 text-fg-mute" title="Back">
           <ArrowLeft size={16} />
         </button>
         <div className="grow min-w-0">
-          <h2 className="text-lg leading-snug tracking-[-0.015em] font-medium">{thread.subject}</h2>
-          <p className="mt-1 text-xs text-fg-mute">
+          <h2 className="text-md leading-snug font-medium">{thread.subject}</h2>
+          <p className="mt-1 text-sm text-fg-mute">
             {thread.account} · {messages.length || thread.messageCount} message{(messages.length || thread.messageCount) > 1 ? 's' : ''}
             {cached && ' · cached'}
           </p>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap gap-1.5">
+      <div className="mt-3 flex flex-wrap gap-2">
         <Button variant="default" onClick={() => void reply('reply')}><CornerUpLeft size={13} /> Reply</Button>
         <Button variant="ghost" onClick={() => void reply('reply_all')}><CornerUpRight size={13} /> Reply all</Button>
         <Button variant="ghost" onClick={() => void reply('forward')}><Forward size={13} /> Forward</Button>
@@ -388,11 +388,11 @@ function ThreadView({
       </div>
 
       {err && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-warn leading-snug">
+        <p className="mt-3 flex items-start gap-2 text-sm text-fg-mute leading-snug">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />{err}
         </p>
       )}
-      {loading && <p className="mt-6 text-xs text-fg-mute">Reading the thread…</p>}
+      
 
       <div className="mt-5">
         {messages.map((m, i) => (
@@ -419,27 +419,27 @@ function MessageView({ message, expanded }: { message: MailMessage; expanded: bo
     <article className="py-3 hairline last:border-0">
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-baseline gap-2 text-left">
         <span className="text-sm text-fg truncate">{displayName(message.from)}</span>
-        <span className="text-xs text-fg-mute truncate hidden sm:inline">
+        <span className="text-sm text-fg-mute truncate hidden sm:inline">
           to {message.to.map(displayName).join(', ') || 'you'}
         </span>
-        <span className="ml-auto tnum text-xs text-fg-mute shrink-0">
+        <span className="ml-auto tnum text-sm text-fg-mute shrink-0">
           {message.ts ? timeOfDay(message.ts) : ''}
         </span>
         <ChevronDown size={13} className={`text-fg-mute transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
-        <div className="mt-2.5">
+        <div className="mt-2">
           {message.attachments.length > 0 && (
-            <div className="mb-2.5 flex flex-wrap gap-1.5">
+            <div className="mb-2 flex flex-wrap gap-2">
               {message.attachments.map((a, i) => (
-                <span key={i} className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-ink-800 text-xs text-fg-mute">
+                <span key={i} className="inline-flex items-center gap-2 h-8 px-2 rounded-control bg-ink-800 text-sm text-fg-mute">
                   <Paperclip size={11} />
                   {a.filename}
                   {a.size ? <span className="tnum">{Math.round(a.size / 1024)}kb</span> : null}
                 </span>
               ))}
-              <span className="self-center text-xs text-fg-mute">
+              <span className="self-center text-sm text-fg-mute">
                 metadata only — Wake does not download attachments
               </span>
             </div>
@@ -449,7 +449,7 @@ function MessageView({ message, expanded }: { message: MailMessage; expanded: bo
             <>
               {message.blockedImages > 0 && !showImages && (
                 <button onClick={() => setShowImages(true)}
-                  className="mb-2 inline-flex items-center gap-1.5 text-xs text-fg-mute hover:text-fg-dim transition-colors">
+                  className="mb-2 inline-flex items-center gap-2 text-sm text-fg-mute hover:text-fg-dim transition-colors">
                   <ImageIcon size={12} />
                   Load {message.blockedImages} remote image{message.blockedImages > 1 ? 's' : ''}
                 </button>
@@ -467,7 +467,7 @@ function MessageView({ message, expanded }: { message: MailMessage; expanded: bo
 
           {message.html && message.text && (
             <button onClick={() => setShowHtml(v => !v)}
-              className="mt-2 text-xs text-fg-mute hover:text-fg-dim transition-colors">
+              className="mt-2 text-sm text-fg-mute hover:text-fg-dim transition-colors">
               {showHtml ? 'Show plain text' : 'Show formatted'}
             </button>
           )}
@@ -562,17 +562,17 @@ function Composer({
           <p className="text-sm text-ok text-center py-1">{sent}</p>
         ) : confirm ? (
           <div className="space-y-2">
-            <div className="rounded-[10px] bg-warn/[0.06] border border-warn/30 p-3">
-              <p className="text-xs text-fg-dim leading-relaxed">
+            <div className="border-b border-rule pb-3">
+              <p className="text-sm text-fg-dim leading-relaxed">
                 This will send from <strong className="text-fg">{confirm.preview.account}</strong> to{' '}
                 <strong className="text-fg">{confirm.preview.to.join(', ')}</strong>
                 {confirm.preview.cc?.length ? <> (cc {confirm.preview.cc.join(', ')})</> : null}.
               </p>
-              <p className="text-xs text-fg-mute mt-1.5">
+              <p className="text-sm text-fg-mute mt-2">
                 Editing anything below cancels this approval.
               </p>
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex gap-2">
               <Button variant="primary" className="flex-1" onClick={send} disabled={busy}>
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send now
               </Button>
@@ -580,7 +580,7 @@ function Composer({
             </div>
           </div>
         ) : (
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <Button variant="primary" className="flex-1" onClick={ask}
               disabled={busy || !state.canSend || !to.trim() || !subject.trim() || !body.trim()}>
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
@@ -599,7 +599,7 @@ function Composer({
       }
     >
       {!state.canSend && (
-        <p className="mb-3 flex items-start gap-1.5 text-xs text-warn leading-relaxed">
+        <p className="mb-3 flex items-start gap-2 text-sm text-fg-mute leading-relaxed">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
           This Gmail connection exposes no send tool, so Wake can draft but cannot send. It advertised:{' '}
           {state.discovered.join(', ') || '(nothing)'}.
@@ -642,7 +642,7 @@ function Composer({
         </div>
       </Field>
 
-      {err && <p className="text-xs text-bad leading-snug">{err}</p>}
+      {err && <p className="text-sm text-bad leading-snug">{err}</p>}
     </Sheet>
   )
 }
@@ -660,96 +660,41 @@ function Composer({
  * One honest error, and the button that fixes it.
  *
  * The screen where he notices the problem used to be the one screen that could
- * not fix it: it offered `Fix it from a terminal` and `Check again`, while
+ * not fix it: it offered a shell command and a re-check button, while
  * Settings offered a one-click `Connect` for the same source. And `Check again`
  * re-checked and repainted an identical screen with no spinner, no toast and no
  * timestamp — indistinguishable from a dead button.
  */
-function NotConnected({ state, onRetry }: { state: MailState; onRetry: () => void }) {
-  const [checking, setChecking] = useState(false)
-  const [checkedAt, setCheckedAt] = useState<number | null>(null)
-  const [connecting, setConnecting] = useState(false)
-
-  const check = async () => {
-    setChecking(true)
-    try { await onRetry() } finally {
-      setChecking(false)
-      setCheckedAt(Date.now())
-    }
-  }
-
-  /** The same one-click Connect Settings offers, on the surface that needs it. */
-  const connect = async () => {
-    setConnecting(true)
-    try {
-      const r = await actions.connectStart('gmail')
-      if (r.url) window.open(r.url, '_blank', 'width=620,height=760')
-      else toast(r.detail ?? r.error ?? 'Could not start authorization.')
-    } catch (e) {
-      toast((e as Error).message)
-    } finally {
-      setConnecting(false)
-    }
-  }
-
+/**
+ * Gmail, down.
+ *
+ * Two lines in the list column, on the same grid as everything else. What it
+ * replaced was a whole page: a `text-lg` `<h1>` reading "Gmail is not
+ * connected", a paragraph about claude.ai connectors, an amber `lg` primary
+ * labelled Connect, a `Check again` button, and a `<details>` holding two shell
+ * commands and a paragraph about directly-added HTTP servers — 590px of chrome
+ * inside a 720px reading column on a full-bleed working surface, teaching a
+ * terminal command as the fix.
+ *
+ * There is no Connect button, because there is nothing to press:
+ * `gmailmcp.googleapis.com` publishes no OAuth metadata, so Wake cannot build an
+ * authorize URL and the button could only ever answer 400. The reason is on
+ * `title` and the row in Settings is where a source is diagnosed.
+ */
+function NotConnected({ state }: { state: MailState; onRetry: () => void }) {
   return (
-    <div className="column px-4 sm:px-6 pt-6 pb-24">
-      <div className="flex items-start gap-3">
-        <MailIcon size={18} className="text-fg-mute mt-1 shrink-0" />
-        <div>
-          <h1 className="text-lg font-medium">Gmail is not connected</h1>
-          {/* `state.reason` is a safety control, not help text: one honest
-              sentence about why is the whole requirement here. */}
-          <p className="mt-2 text-sm text-fg-dim max-w-[62ch]">{state.reason}</p>
+    <div className="pad-x pt-4 pb-24">
+      <header className="pb-2">
+        <h1 className="text-lg font-medium">Mail</h1>
+      </header>
+      {state.accounts.map(a => (
+        <div key={a.address} className="flex items-center h-11 border-b border-rule min-w-0">
+          <span className="text-sm font-mono truncate grow min-w-0">{a.address}</span>
+          <span className="text-sm text-fg-mute shrink-0 pl-3" title={state.reason ?? undefined}>
+            not connected
+          </span>
         </div>
-      </div>
-
-      <div className="mt-6">
-        {state.accounts.map(a => (
-          <div key={a.address} className="flex items-center gap-3 h-11 border-b border-rule last:border-0">
-            <span className="text-base font-mono truncate grow">{a.address}</span>
-            <span className="text-sm text-fg-mute shrink-0">not connected</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 flex items-center gap-2">
-        <Button size="lg" variant="primary" onClick={connect} disabled={connecting}>
-          {connecting ? <Loader2 size={16} className="animate-spin" /> : null} Connect
-        </Button>
-        <Button size="md" variant="default" onClick={check} disabled={checking}>
-          <RefreshCw size={14} className={checking ? 'animate-spin' : ''} /> Check again
-        </Button>
-        {/* The acknowledgement. Nothing changed is a result, and it has to look
-            different from nothing happening. */}
-        {checkedAt && !checking && (
-          <span className="text-sm text-fg-mute">Still not connected · checked {timeOfDay(checkedAt)}</span>
-        )}
-      </div>
-
-      <details className="mt-6 group">
-        <summary className="cursor-pointer text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100 list-none">
-          Fix it from a terminal
-        </summary>
-        {/* The resolution order, the dotfile and the environment variable live
-            here rather than in the paragraph above: they are the answer to
-            "how", and only for a reader who has already asked. */}
-        {state.reasonDetail && (
-          <p className="mt-2 text-xs text-fg-mute leading-relaxed max-w-[62ch]">
-            {state.reasonDetail}
-          </p>
-        )}
-        <pre className="mt-2 p-3 rounded-control bg-ink-850 border border-edge text-xs font-mono
-                        text-fg-dim overflow-x-auto">
-{`claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1
-claude mcp login gmail`}
-        </pre>
-        <p className="mt-2 text-xs text-fg-mute leading-relaxed max-w-[56ch]">
-          It must be a directly-added HTTP server, not a claude.ai connector — both show as
-          “Connected”, but only the direct one writes a token Wake can read.
-        </p>
-      </details>
-
+      ))}
     </div>
   )
 }

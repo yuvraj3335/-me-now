@@ -57,13 +57,14 @@ export function TaskSheet({
   )
 
   const [title, setTitle] = useState('')
-  const [detail, setDetail] = useState('')
   const [goalId, setGoalId] = useState('')
   const [due, setDue] = useState('')
   const [color, setColor] = useState<string | null>(null)
   const [remindAt, setRemindAt] = useState('')
   const [repeat, setRepeat] = useState('')
   const [noteBody, setNoteBody] = useState('')
+  /** Notes typed before there is a task to hang them on. */
+  const [pending, setPending] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   /**
    * How many devices a reminder can actually reach.
@@ -95,13 +96,13 @@ export function TaskSheet({
   useEffect(() => {
     if (!open) return
     setTitle(task?.title ?? fromCard?.title ?? '')
-    setDetail(task?.detail ?? '')
     setGoalId(task?.goal_id ?? '')
     setDue(toLocalInput(task?.due_at ?? null))
     setColor(task?.color ?? null)
     setRemindAt(toLocalInput(existingReminder?.fire_at ?? null))
     setRepeat(existingReminder?.repeat_rule ?? '')
     setNoteBody('')
+    setPending([])
     // `existingReminder?.id` is in the dependency list on purpose. Without it,
     // a sheet opened before `/state` had returned seeded `remindAt` from
     // `undefined` and never re-seeded — and saving then took the
@@ -113,17 +114,33 @@ export function TaskSheet({
     if (!title.trim() || busy || remindError) return
     setBusy(true)
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         title: title.trim(),
-        detail: detail.trim() || null,
         goal_id: goalId || null,
         due_at: fromLocalInput(due),
         color,
         source_card_group: task?.source_card_group ?? fromCard?.group_key ?? null,
       }
+      // Frozen at creation, never on update: a task is a durable object and a
+      // card is a view of somebody else's system. `source_card_group` used to be
+      // the only link, and `ingest.ts` marks a card gone the moment its source
+      // stops returning it — so a task's provenance line disappeared exactly
+      // when the pull request merged.
+      if (!task && fromCard) {
+        body.origin_source = fromCard.sources[0]?.source ?? null
+        body.origin_title = fromCard.title
+        body.origin_why = fromCard.why
+        body.origin_url = fromCard.url
+        body.origin_excerpt = fromCard.excerpt ?? null
+        body.origin_meta = fromCard.meta ?? null
+      }
       const saved = task
         ? await actions.updateTask(task.id, body) as Task
         : await actions.createTask(body) as Task
+
+      // Notes typed before the first save land now, in the order they were typed.
+      for (const p of pending) await actions.createNote({ task_id: saved.id, body: p, color })
+      setPending([])
 
       const fireAt = fromLocalInput(remindAt)
       if (fireAt) {
@@ -146,9 +163,12 @@ export function TaskSheet({
   }
 
   async function addNote() {
-    if (!noteBody.trim() || !task) return
-    await actions.createNote({ task_id: task.id, body: noteBody.trim(), color })
+    const body = noteBody.trim()
+    if (!body) return
     setNoteBody('')
+    // Before the first save there is no task to hang a note on, so it waits.
+    if (!task) return setPending(p => [...p, body])
+    await actions.createNote({ task_id: task.id, body, color })
     await reload()
   }
 
@@ -171,11 +191,16 @@ export function TaskSheet({
         </div>
       }
     >
+      {/* One quiet line, not a promise about durability. The durability is in the
+          `origin_*` columns below, which copy the card rather than pointing at a
+          row the poller garbage-collects. */}
       {fromCard && (
-        <p className="text-xs text-fg-mute mb-3.5 leading-snug">
-          Linked to <span className="text-fg-dim">{fromCard.title.slice(0, 60)}</span>. The task
-          survives even if that message goes away.
-        </p>
+        <div className="flex items-center h-11 border-b border-rule mb-4 min-w-0">
+          <span className="text-sm text-fg-mute w-24 shrink-0">From</span>
+          <span className="text-sm text-fg-dim truncate min-w-0" title={fromCard.title}>
+            {fromCard.title}
+          </span>
+        </div>
       )}
 
       <Field label="Task">
@@ -187,16 +212,9 @@ export function TaskSheet({
         />
       </Field>
 
-      <Field label="Detail">
-        <textarea
-          className={`${inputClass} min-h-[68px] resize-y`} value={detail}
-          onChange={e => setDetail(e.target.value)} placeholder="Optional"
-        />
-      </Field>
-
       {goals.length > 0 && (
         <Field label="Goal">
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-2">
             <Chip active={!goalId} onClick={() => setGoalId('')}>None</Chip>
             {goals.map(g => (
               <Chip key={g.id} active={goalId === g.id} dot={g.color ?? undefined}
@@ -219,7 +237,7 @@ export function TaskSheet({
         tone={remindError ? 'bad' : undefined}
       >
         {remindAt && !remindError && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
+          <div className="flex flex-wrap gap-2 mt-2">
             {[['', 'Once'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly']].map(([v, l]) => (
               <Chip key={v} active={repeat === v} onClick={() => setRepeat(v!)}>{l}</Chip>
             ))}
@@ -240,15 +258,37 @@ export function TaskSheet({
         </div>
       </Field>
 
-      {task && (
-        <div className="mt-1">
-          <div className="text-xs uppercase tracking-[0.07em] text-fg-mute mb-2">
-            Sticky notes
-          </div>
+      {/*
+        Stickies exist at the moment they are wanted.
+        They were gated on `{task && …}`, so a task made from a card got the
+        create sheet — which had no stickies at all, and a `Detail` textarea
+        instead. You had to save, find the task in Up next, tap it, and reopen a
+        sheet with a different set of fields than it had a second earlier. A form
+        whose field list changes on save is a form nobody trusts. Notes typed
+        before the first save are held here and written straight after it.
+      */}
+      <div className="mt-1">
+        <div className="text-eyebrow uppercase text-fg-mute mb-2">Notes</div>
           <div className="space-y-2 mb-2">
-            {task.notes?.map(n => (
+            {pending.map((body, i) => (
+              <div key={`pending:${i}`}
+                className="relative rounded-chip px-3 py-2 text-sm leading-relaxed"
+                style={{
+                  background: `color-mix(in oklab, ${color ?? 'var(--color-fg-mute)'} 12%, var(--color-ink-800))`,
+                  boxShadow: `inset 2px 0 0 ${color ?? 'var(--color-fg-mute)'}`,
+                }}>
+                <span className="whitespace-pre-wrap text-fg-dim pr-5">{body}</span>
+                <button onClick={() => setPending(p => p.filter((_, j) => j !== i))}
+                  className="absolute top-1.5 right-1.5 p-1 text-fg-mute hover:text-bad
+                             transition-colors duration-100"
+                  aria-label="Remove note">
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            {task?.notes?.map(n => (
               <div key={n.id}
-                className="group relative rounded-[10px] px-3 py-2.5 text-sm leading-relaxed"
+                className="group relative rounded-chip px-3 py-2 text-sm leading-relaxed"
                 style={{
                   background: `color-mix(in oklab, ${n.color ?? 'var(--color-accent)'} 12%, var(--color-ink-800))`,
                   boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}`,
@@ -283,17 +323,18 @@ export function TaskSheet({
               </div>
             ))}
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <input
               className={inputClass} value={noteBody}
               onChange={e => setNoteBody(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') void addNote() }}
-              placeholder="Add a note…"
+              placeholder="Add a note"
             />
-            <Button variant="default" onClick={addNote} disabled={!noteBody.trim()}><Plus size={15} /></Button>
+            <Button variant="ghost" onClick={addNote} disabled={!noteBody.trim()} ariaLabel="Add note">
+              <Plus size={14} />
+            </Button>
           </div>
-        </div>
-      )}
+      </div>
 
       {existingReminder && (
         <p className="mt-3 text-sm text-fg-mute flex items-center gap-2">
@@ -325,8 +366,8 @@ function TimeField({
 
   return (
     <div className="mb-4">
-      <div className="text-eyebrow uppercase text-fg-mute mb-1.5">{label}</div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="text-eyebrow uppercase text-fg-mute mb-2">{label}</div>
+      <div className="flex flex-wrap gap-2">
         {PRESETS.map(p => (
           <Chip key={p.id} onClick={() => { onChange(toLocalInput(p.at())); setExact(false) }}>
             {p.label}
@@ -340,7 +381,7 @@ function TimeField({
           onChange={e => onChange(e.target.value)} />
       )}
       {stated && (
-        <p className={`mt-1.5 text-sm ${tone === 'bad' ? 'text-bad' : 'text-fg-dim'}`}>{stated}</p>
+        <p className={`mt-2 text-sm ${tone === 'bad' ? 'text-bad' : 'text-fg-dim'}`}>{stated}</p>
       )}
       {children}
     </div>

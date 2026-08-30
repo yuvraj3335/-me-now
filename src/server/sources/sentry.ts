@@ -138,9 +138,9 @@ export const sentry: SourceAdapter = {
   async status() {
     const { token, via } = await resolveToken('sentry')
     if (!token) {
-      // Sentry supports dynamic client registration, so Connect really is all
-      // it takes — worth saying, because the other two are not like that.
-      return { ok: false, detail: 'Unresolved issues assigned to you, and issues waiting for review. Connect needs no setup.' }
+      // Sentry supports dynamic client registration, so Connect really is one
+      // click. A row states what is true; the button says what to do about it.
+      return { ok: false, detail: 'not connected' }
     }
     try {
       const find = await findIssuesTool()

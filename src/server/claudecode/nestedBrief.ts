@@ -72,3 +72,19 @@ export function withoutBrief(text: string): string | null {
   const head = text.slice(0, m.index).trim()
   return head || null
 }
+
+/**
+ * A one-line title with Wake's own markers scrubbed out of it.
+ *
+ * `withoutBrief` needs a line boundary to find a brief, and a session's recorded
+ * title is one line: a transcript whose first prompt was a Wake brief produced
+ * the card title `Acme sync stopped Packed by Wake`, which is the tool's own
+ * footer arriving as the name of somebody's work.
+ */
+export function titleWithoutBrief(title: string): string {
+  return title
+    .replace(/\s*Packed by Wake\b.*$/i, '')
+    .replace(/\s*##\s*(What this is|What I need|Instruction|Context)\b.*$/i, '')
+    .replace(/\s*A brief from Wake\b.*$/i, '')
+    .trim()
+}

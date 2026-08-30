@@ -1,22 +1,43 @@
 /**
- * Settings, as a status board.
+ * Settings, as a list you scan.
  *
- * Nine sections of label/value rows, in the order he needs them at 7am when
- * something is broken: who he is, what is connected, mail, notifications, the
- * hand-off, the machine, voice, appearance, audit.
+ * One column. No cards, no masonry, no `items-start` grid. Section titles are
+ * eyebrows at the page title's own x; every row is 44px with a hairline under
+ * it; there is one label x and one value x; and every action is ghost text of
+ * the same weight, because Connect and Disconnect are the same decision.
  *
- * What this replaces: nine cards each with a prose subtitle and a second
- * paragraph under nearly every field — the longest a 43-word `WAKE_STT_URL`
- * configuration note, a README printed inside the product — with the state
- * (`connected` / `not connected`) as a small word buried in it. Every mechanism
- * sentence that is worth keeping moved behind the `<details>` disclosure that
- * already existed; the rest is gone.
+ * What this replaces, measured: nine `rounded-panel bg-ink-850 border border-edge
+ * p-4` sections in a three-column grid whose columns ended at y598 / y573 / y733,
+ * leaving 160px and 192px of ragged bottom and a 789×302 hole beside a full
+ * column. In light mode those were nine pure-white cards on a grey page. The
+ * card's own padding put every section title at x=241 against a page title at
+ * x=224, and inside it there were five more left edges — 241, 245, 259, 365, 367
+ * — of which two were two pixels apart, which is one column drawn twice.
+ *
+ * Deleted outright: the MAIL section, which repeated the Gmail row three rows
+ * above it; the OPEN IN CLAUDE section, which exposed four constants nobody can
+ * change; the terminal disclosure and its `CLI_FALLBACK` map, which offered a
+ * shell command as the fix for a state it cannot fix and which the credential
+ * chain would shadow anyway; the two push sentences; the `Which ones`
+ * disclosure; the floating push-test sentence; and all nine `Section` wrappers.
+ *
+ * Three honesty rules the rows keep:
+ *
+ *   1. **`s.detail` renders regardless of `ok`.** It was gated on `s.ok &&`, so
+ *      the diagnosis appeared only when there was nothing to diagnose. Slack's
+ *      `detail` is the provider's own sentence naming the app and the URL that
+ *      fixes it — fetched, held in state, and never painted.
+ *   2. **Connect versus Disconnect is chosen by `hasWakeToken`, never by `ok`.**
+ *      Disconnect deletes an `oauth_tokens` row; if the token came from the
+ *      Claude bridge there is no row, so the click reported success and changed
+ *      nothing. The server has always returned `hasWakeToken` and the UI had
+ *      never read it.
+ *   3. **A source that cannot be connected offers no Connect button.** Gmail's
+ *      could only ever answer 400.
  */
 
 import { useEffect, useState } from 'react'
-import {
-  Activity, Check, ChevronRight, Link2, Loader2, Monitor, Moon, Sun,
-} from 'lucide-react'
+import { Check, ChevronRight, ExternalLink, Link2, Loader2 } from 'lucide-react'
 import { actions } from '../lib/api'
 import type { SourceStatus } from '../lib/types'
 import {
@@ -24,7 +45,7 @@ import {
 } from '../lib/push'
 import { Button, Field, Segmented, Sheet, inputClass } from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
-import { dictationSupported, fmtBytes, recordingSupported } from '../lib/voice'
+import { fmtBytes, recordingSupported } from '../lib/voice'
 import { ago } from '../lib/time'
 import { useTheme, type Theme } from '../lib/theme'
 
@@ -40,16 +61,6 @@ type Overview = {
 
 type Truto = { profiles: string[]; active: any; error?: string }
 
-/**
- * Where each source's shell fallback lives. Kept next to the row it belongs to
- * rather than in prose, and shown only when someone opens the disclosure.
- */
-const CLI_FALLBACK: Record<string, string> = {
-  slack: 'claude mcp add --transport http slack https://mcp.slack.com/mcp\nclaude mcp login slack',
-  sentry: 'claude mcp add --transport http sentry https://mcp.sentry.dev/mcp\nclaude mcp login sentry',
-  gmail: 'claude mcp add --transport http gmail https://gmailmcp.googleapis.com/mcp/v1\nclaude mcp login gmail',
-}
-
 export function Settings() {
   const [sources, setSources] = useState<SourceStatus[]>([])
   const [redirectUri, setRedirectUri] = useState('')
@@ -59,11 +70,11 @@ export function Settings() {
   const [clientFor, setClientFor] = useState<SourceStatus | null>(null)
   const [pushOn, setPushOn] = useState(false)
   const [devices, setDevices] = useState(0)
-  const [msg, setMsg] = useState<string | null>(null)
+  const [pushWord, setPushWord] = useState<string | null>(null)
   /**
-   * A failure to start authorization belongs beside the source that failed. It
-   * used to be written into `msg`, which renders inside Notifications — three
-   * sections down the page — so clicking Connect looked like clicking nothing.
+   * A failure to start authorization belongs beside the source that failed, and
+   * a terminal fallback may only appear under a row that has just failed to
+   * connect — never as standing chrome.
    */
   const [connectError, setConnectError] = useState<{ name: string; text: string } | null>(null)
   const [audit, setAudit] = useState(false)
@@ -72,7 +83,7 @@ export function Settings() {
     await Promise.all([
       actions.connections().then(d => { setSources(d.sources); setRedirectUri(d.redirectUri) }).catch(() => {}),
       fetch('/api/settings').then(r => r.json()).then(setOver).catch(() => {}),
-      fetch('/api/settings/truto').then(r => r.json()).then(setTruto).catch(() => {}),
+      fetch('/api/settings/truto').then(r => r.json()).then(setTruto).catch(() => setTruto({ profiles: [], active: null, error: 'the CLI did not answer' })),
       actions.pushStatus().then(d => setDevices(d.devices.length)).catch(() => {}),
     ])
   }
@@ -95,10 +106,7 @@ export function Settings() {
         if (r.redirectUri) setRedirectUri(r.redirectUri)
         setClientFor(s)
       } else {
-        setConnectError({
-          name: s.name,
-          text: r.detail ?? r.error ?? `Could not start authorization (${r.status ?? 'no response'}).`,
-        })
+        setConnectError({ name: s.name, text: r.detail ?? r.error ?? 'could not start authorization' })
       }
     } catch (e) {
       setConnectError({ name: s.name, text: (e as Error).message })
@@ -108,7 +116,7 @@ export function Settings() {
   }
 
   async function togglePush() {
-    setMsg(null)
+    setPushWord(null)
     if (pushOn) {
       await disablePush()
       setPushOn(false)
@@ -117,212 +125,96 @@ export function Settings() {
     }
     const r = await enablePush()
     setPushOn(r.ok)
-    if (!r.ok) setMsg(r.reason ?? 'Could not enable notifications')
-    else {
-      // Confirming the round trip immediately is the difference between "the
-      // toggle is on" and "this device will actually be woken".
-      const t = await actions.pushTest()
-      setDevices(t.devices)
-      setMsg(t.devices ? `A test reached ${t.devices} device${t.devices > 1 ? 's' : ''}` : 'No device registered yet')
-    }
+    if (!r.ok) return setPushWord(r.reason ?? 'could not enable')
+    // Confirming the round trip immediately is the difference between "the
+    // toggle is on" and "this device will actually be woken".
+    const t = await actions.pushTest()
+    setDevices(t.devices)
   }
-
-  const mailAccount = over?.mail.accounts[0]
-  const gmail = sources.find(s => s.name === 'gmail')
 
   return (
     <div className="pb-24">
-      <header className="flex items-center gap-3 pt-6 pb-4">
+      <header className="pt-4 pb-2">
         <h1 className="text-lg font-medium">Settings</h1>
       </header>
 
-      {/*
-        Three explicit columns, filled by meaning.
+      <Section title="You">
+        <Row label="Email" value={over?.identity.emails[0] ?? '—'} mono />
+        <Row label="GitHub" value={over?.identity.github ?? '—'} mono />
+      </Section>
 
-        Not `lg:columns-2`, which distributes by HEIGHT and can split a card
-        across two columns; and not one grid either, because a CSS grid sizes
-        every row by its tallest tile, so a five-row Sources card leaves a
-        hand's width of dead space beside a two-row You card. Assigning the
-        tiles to columns keeps the reading order — down each column, in the order
-        he needs them at 7am — and leaves no holes.
-      */}
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
-      <div className="grid grid-cols-1 gap-4 content-start min-w-0">
+      <Section title="Sources">
+        {sources.map(s => (
+          <SourceRow
+            key={s.name} s={s} busy={busy === s.name}
+            failure={connectError?.name === s.name ? connectError.text : null}
+            onConnect={() => connect(s)}
+            onDisconnect={() => void actions.disconnect(s.name).then(load)}
+          />
+        ))}
+      </Section>
 
-        <Section title="You">
-          <Row label="Email" value={over?.identity.emails[0] ?? '—'} mono />
-          <Row label="GitHub" value={over?.identity.github ?? '—'} mono />
-        </Section>
-
-        <Section title="Sources">
-          {sources.map(s => (
-            <div key={s.name} className="py-2 border-b border-rule last:border-0 min-w-0">
-              <div className="flex items-center gap-3 min-h-7 min-w-0">
-                <SourceDot source={s.name} size={6} />
-                <span className="text-base w-24 shrink-0 truncate">{SOURCE_LABEL[s.name]}</span>
-                <span className={`text-sm shrink-0 ${stateTone(s)}`}>{stateWord(s)}</span>
-                {s.oauthable && (
-                  <span className="ml-auto shrink-0">
-                    <Button size="sm" variant={s.ok ? 'ghost' : 'default'} disabled={busy === s.name}
-                      onClick={() => (s.ok ? actions.disconnect(s.name).then(load) : connect(s))}>
-                      {busy === s.name ? <Loader2 size={13} className="animate-spin" /> : null}
-                      {s.ok ? 'Disconnect' : 'Connect'}
-                    </Button>
-                  </span>
-                )}
-              </div>
-              {/* The API's real `detail` — `signed in as yuvraj3335`, `7 projects
-                  on this machine` — not a generic `via`. Those are the facts
-                  that confirm the connection is the right one, and they get
-                  their own line because they cannot survive sharing one.
-
-                  Beside the state word and a button, this column was 11px wide
-                  in a 392px tile: `connected (search_issues)` rendered as `c.`
-                  — the page fetching the right fact and then truncating it into
-                  nonsense. Indented 18px, the dot's width plus the gap, so it
-                  hangs under the source name it belongs to. */}
-              {s.ok && s.detail && (
-                <p className="mt-0.5 pl-[18px] text-sm text-fg-mute break-words">{s.detail}</p>
-              )}
-            </div>
-          ))}
-          {connectError && (
-            <p className="text-sm text-warn pt-2">{connectError.text}</p>
-          )}
-          {sources.some(s => !s.ok && CLI_FALLBACK[s.name]) && (
-            <Disclosure label="Connect one from a terminal">
-              <pre className="mt-1 p-2 rounded-control bg-ink-850 border border-edge text-xs
-                              font-mono text-fg-dim overflow-x-auto">
-                {sources.filter(s => !s.ok && CLI_FALLBACK[s.name]).map(s => CLI_FALLBACK[s.name]).join('\n\n')}
-              </pre>
-            </Disclosure>
-          )}
-        </Section>
-
-        </div>
-        <div className="grid grid-cols-1 gap-4 content-start min-w-0">
-
-        <Section title="Mail">
-          <div className="flex items-center gap-3 h-11 min-w-0">
-            <span className="text-base font-mono truncate grow min-w-0">{mailAccount?.address ?? '—'}</span>
-            <span className={`text-sm shrink-0 ${over?.mail.connected ? 'text-ok' : 'text-fg-mute'}`}>
-              {over
-                ? over.mail.connected
-                  ? `connected · ${over.mail.canSend ? 'can send' : 'read only'}`
-                  : 'not connected'
-                : '—'}
-            </span>
-            {over && !over.mail.connected && gmail?.oauthable && (
-              <Button size="sm" variant="default" disabled={busy === 'gmail'} onClick={() => connect(gmail)}>
-                Connect
+      <Section title="Notifications">
+        {/* The row simply does not render where Web Push does not exist. It used
+            to render, off, beside a sentence saying this browser has none. */}
+        {pushSupported() && (
+          <Row
+            label="Push"
+            value={needsHomeScreenInstall()
+              ? 'add Wake to the Home Screen'
+              : pushWord ?? (pushOn ? `on · ${devices} device${devices === 1 ? '' : 's'}` : 'off')}
+            action={needsHomeScreenInstall() ? undefined : (
+              <Button size="sm" variant="ghost" onClick={togglePush}>
+                {pushOn ? 'Turn off' : 'Turn on'}
               </Button>
             )}
-          </div>
-        </Section>
-
-        <Section title="Notifications">
-          <Row label="Push" value={pushOn ? `on · ${devices} device${devices === 1 ? '' : 's'}` : 'off'}
-            tone={pushOn ? 'ok' : undefined} />
-          <div className="flex items-center gap-2 h-11">
-            <Button size="md" variant={pushOn ? 'default' : 'primary'} onClick={togglePush} disabled={!pushSupported()}>
-              {pushOn ? 'Turn off' : 'Turn on'}
-            </Button>
-            {pushOn && (
-              <Button size="md" variant="default" onClick={async () => {
-                const r = await actions.pushTest()
-                setDevices(r.devices)
-                setMsg(r.devices ? `Sent to ${r.devices} device${r.devices > 1 ? 's' : ''}` : 'No devices registered')
-              }}>
-                Send a test
-              </Button>
-            )}
-            {msg && <span className="text-sm text-fg-dim truncate">{msg}</span>}
-          </div>
-          {!pushSupported() && <p className="text-sm text-fg-mute">This browser has no Web Push</p>}
-          {needsHomeScreenInstall() && (
-            <p className="text-sm text-fg-mute">
-              iPhone delivers push only to an installed app — add Wake to the Home Screen first
-            </p>
-          )}
-        </Section>
-
-        <Section title="Open in Claude">
-          <Row label="Target" value={over?.handoff.url ?? '—'} mono />
-          <Row label="Brief limit" value={over ? `${over.handoff.maxChars.toLocaleString()} characters` : '—'} />
-          <Row label="Templates" value={over ? String(over.handoff.templates) : '—'} />
-          <Row label="Sessions seen" value={over ? `${over.handoff.recentSessions} · last 30 days` : '—'} />
-        </Section>
-
-        </div>
-        <div className="grid grid-cols-1 gap-4 content-start min-w-0">
-
-        <Section title="Skills and workspace">
-          <Row
-            label="Skills"
-            value={over
-              ? `${over.skills.total} (${Object.entries(over.skills.byCatalog).map(([k, v]) => `${k} ${v}`).join(' · ')})`
-              : '—'}
           />
-          <Row label="Workspace" value={over ? `${over.workspace.repos} repos · ${over.workspace.root}` : '—'} mono />
-          {/*
-            A row, not a section — and it must be true. This read "no Truto CLI
-            profiles on this machine" about a machine with nine of them, because
-            every CLI invocation threw on its audit write and `settings.ts`
-            swallowed the throw with `.catch(() => [])`.
-          */}
-          {/*
-            `—` while the answer is still coming is indistinguishable from `—`
-            meaning none, and this row in particular spent a release saying "no
-            profiles on this machine" about a machine with 35 of them. Resolving
-            it shells out to the CLI, which takes a second or two, so the wait
-            says so.
-          */}
-          <Row
-            label="Truto CLI"
-            value={truto
-              ? truto.profiles.length
-                ? `${truto.profiles.length} profile${truto.profiles.length === 1 ? '' : 's'}${truto.active?.team ? ` · ${truto.active.team}` : ''}`
-                : (truto.error ?? 'none on this machine')
-              : 'asking the CLI…'}
-            tone={truto && !truto.profiles.length ? 'warn' : undefined}
-          />
-          {!!truto?.profiles.length && (
-            <Disclosure label="Which ones">
-              <p className="mt-1 pl-[19px] text-sm text-fg-mute font-mono break-words">{truto.profiles.join(' · ')}</p>
-            </Disclosure>
-          )}
-        </Section>
+        )}
+      </Section>
 
-        <Section title="Voice">
-          <Row label="Microphone" value={recordingSupported() ? 'available' : 'unavailable'}
-            tone={recordingSupported() ? 'ok' : 'warn'} />
-          <Row label="Dictation" value={dictationSupported() ? 'available' : 'unavailable'}
-            tone={dictationSupported() ? 'ok' : undefined} />
-          <Row label="Transcription" value={over?.voice.stt.available ? 'configured' : 'not configured'}
-            tone={over?.voice.stt.available ? 'ok' : undefined} />
-          <Row label="Stored" value={over ? `${over.voice.storage.count} notes · ${fmtBytes(over.voice.storage.bytes)}` : '—'} />
-          {!!over?.voice.missing && (
-            <Row label="Missing audio" value={String(over.voice.missing)} tone="warn" />
-          )}
-        </Section>
+      <Section title="Appearance">
+        <ThemeChoice />
+      </Section>
 
-        <Section title="Appearance">
-          <ThemeChoice />
-        </Section>
+      <Section title="This machine">
+        <Row label="Workspace"
+          value={over ? `${over.workspace.repos} repos · ${over.workspace.root}` : '—'} mono />
+        <Row label="Skills" value={over ? String(over.skills.total) : '—'}
+          title={over ? Object.entries(over.skills.byCatalog).map(([k, v]) => `${k} ${v}`).join(' · ') : undefined} />
+        {/*
+          `—` while the answer is still coming is indistinguishable from `—`
+          meaning none, and this row spent a release saying "no profiles on this
+          machine" about a machine with 35 of them. It also latched on the
+          loading string for ever when the request failed, because the catch
+          swallowed it and left the value null.
+        */}
+        <Row
+          label="Truto CLI"
+          value={truto
+            ? truto.profiles.length
+              ? `${truto.profiles.length} profile${truto.profiles.length === 1 ? '' : 's'}${truto.active?.team ? ` · ${truto.active.team}` : ''}`
+              : (truto.error ?? 'none')
+            : '…'}
+          title={truto?.profiles.join(' · ')}
+        />
+        <Row
+          label="Voice"
+          value={over
+            ? `${recordingSupported() ? 'microphone available' : 'no microphone'} · ${over.voice.storage.count} note${over.voice.storage.count === 1 ? '' : 's'} · ${fmtBytes(over.voice.storage.bytes)}`
+            : '—'}
+        />
+      </Section>
 
-        <Section title="Audit">
-          <button
-            onClick={() => setAudit(true)}
-            className="w-full flex items-center gap-2 h-11 text-left text-base text-fg-dim
-                       hover:text-fg transition-colors duration-100"
-          >
-            <Activity size={14} className="text-fg-mute" />
-            Open the audit trail
-            <ChevronRight size={14} className="ml-auto text-fg-mute" />
-          </button>
-        </Section>
-        </div>
-      </div>
+      <Section title="Audit">
+        <button
+          onClick={() => setAudit(true)}
+          className="w-full flex items-center h-11 border-b border-rule text-left text-base text-fg-dim
+                     hover:text-fg transition-colors duration-100"
+        >
+          <span className="grow">Audit trail</span>
+          <ChevronRight size={14} className="text-fg-mute" />
+        </button>
+      </Section>
 
       <AuditSheet open={audit} onClose={() => setAudit(false)} />
       <ClientSheet
@@ -337,73 +229,144 @@ export function Settings() {
 
 /* -------------------------------- pieces ---------------------------------- */
 
-/**
- * Three states, not two.
- *
- * `connected` and `the last poll failed` are different problems with different
- * fixes, and a source that has never been connected at all must never render an
- * age — `/api/connections` hands every source the same `lastSync.at`, including
- * the ones with nothing to poll, so the age without `connected` beside it says
- * "synced 1m ago" about a source nobody ever connected.
- */
-function stateWord(s: SourceStatus): string {
-  if (!s.ok) return 'not connected'
-  if (s.lastSync && !s.lastSync.connected) return 'not connected'
-  if (s.lastSync && !s.lastSync.ok) return `sync failed ${ago(s.lastSync.at)}`
-  if (s.lastSync) return `synced ${ago(s.lastSync.at)}`
-  return 'connected'
-}
-
-function stateTone(s: SourceStatus): string {
-  if (!s.ok || (s.lastSync && !s.lastSync.connected)) return 'text-fg-mute'
-  if (s.lastSync && !s.lastSync.ok) return 'text-warn'
-  return 'text-ok'
-}
-
-/**
- * A row that opens.
- *
- * `Which ones` used to be a bare `list-none` summary with no marker and no
- * hover target — a left-aligned fragment under the Truto CLI row that read as
- * something left behind rather than as something to click. The chevron is the
- * whole difference between a control and a stray line of text, and it turns to
- * say which state it is in.
- */
-function Disclosure({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <details className="group">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 h-8 text-sm text-fg-mute
-                          hover:text-fg-dim transition-colors duration-100">
-        <ChevronRight size={13}
-          className="shrink-0 text-fg-mute transition-transform duration-100 group-open:rotate-90" />
-        {label}
-      </summary>
-      {children}
-    </details>
-  )
-}
-
+/** An eyebrow and rows. There is no wrapper, because there is no card. */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-panel bg-ink-850 border border-edge p-4 min-w-0 overflow-hidden">
+    <section className="mt-6 first:mt-0">
       <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{title}</h2>
       {children}
     </section>
   )
 }
 
+/**
+ * One 44px row: label at the page's x, value at x + 96, action right-aligned.
+ *
+ * `Row` used a 112px label column while the Sources rows used 96 and the Mail
+ * row had none at all, which is how one page came to have three label x and
+ * three value x — two of them two pixels apart.
+ */
 function Row({
-  label, value, tone, mono,
-}: { label: string; value: string; tone?: 'ok' | 'bad' | 'warn'; mono?: boolean }) {
+  label, value, tone, mono, action, title,
+}: {
+  label: string; value: string
+  tone?: 'ok' | 'bad' | 'warn'; mono?: boolean
+  action?: React.ReactNode
+  title?: string
+}) {
   const colour = tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-fg-dim'
   return (
-    <div className="flex items-center gap-3 h-11 border-b border-rule last:border-0 min-w-0">
-      <span className="text-sm text-fg-mute w-28 shrink-0">{label}</span>
-      <span className={`text-base truncate min-w-0 ${colour} ${mono ? 'font-mono text-sm' : ''}`} title={value}>
+    <div className="flex items-center h-11 border-b border-rule min-w-0">
+      <span className="text-sm text-fg-mute w-24 shrink-0">{label}</span>
+      <span className={`text-sm truncate min-w-0 grow ${colour} ${mono ? 'font-mono' : ''}`}
+        title={title ?? value}>
         {value}
       </span>
+      {action && <span className="shrink-0 pl-3">{action}</span>}
     </div>
   )
+}
+
+/**
+ * A source, in one 44px line, whatever state it is in.
+ *
+ * It used to be a head row plus an optional second `<p>`, so five rows measured
+ * 45 / 65 / 45 / 65 / 65 — a 20px alternation down a five-row list. The fact
+ * that lived on the second line lives in the value column now, truncated with
+ * the whole of it on `title`, which is where a long provider sentence belongs.
+ */
+function SourceRow({
+  s, busy, failure, onConnect, onDisconnect,
+}: {
+  s: SourceStatus
+  busy: boolean
+  failure: string | null
+  onConnect: () => void
+  onDisconnect: () => void
+}) {
+  const word = stateWord(s)
+  /**
+   * Slack's live state, and the one place `warn` is spent in this product.
+   *
+   * The token is real and was accepted; the Slack *app* is not entitled for MCP.
+   * That is neither "not connected" nor "sync failed", it is a fifth state whose
+   * fix is a toggle in somebody else's console — and the provider wrote the
+   * sentence and the URL for us. Wake fetched it and threw it away.
+   */
+  const links = s.detail?.match(/https?:\/\/\S+/g) ?? []
+  // The LAST url, not the first: the provider's sentence names the endpoint that
+  // refused before it names the console page that fixes it, and only the second
+  // one is somewhere to go.
+  const link = links.at(-1)
+  const detail = s.detail && !s.ok
+    ? s.detail
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/\s*[:.]\s*(?=[.:]|$)/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/^[\s:.]+|[\s:.]+$/g, '')
+        .trim()
+    : null
+
+  return (
+    <>
+      <div className="flex items-center h-11 border-b border-rule min-w-0">
+        <span className="w-24 shrink-0 flex items-center gap-2 min-w-0">
+          <SourceDot source={s.name} size={6} />
+          <span className="text-sm truncate">{SOURCE_LABEL[s.name]}</span>
+        </span>
+        <span className={`text-sm truncate min-w-0 grow ${word.tone}`} title={s.detail || word.text}>
+          {word.text}
+          {detail && <span className="text-fg-mute"> · {detail}</span>}
+        </span>
+        {link && (
+          <a href={link} target="_blank" rel="noreferrer"
+            className="shrink-0 pl-3 inline-flex items-center gap-1 text-sm text-fg-mute
+                       hover:text-fg-dim transition-colors duration-100"
+            title={link}>
+            fix <ExternalLink size={13} />
+          </a>
+        )}
+        {/* Chosen by whether Wake holds its own token, not by whether the last
+            poll worked. And a source Wake cannot obtain a credential for offers
+            nothing at all, because a button that can only 400 is worse than no
+            button. */}
+        {s.oauthable && s.connectable && (
+          <span className="shrink-0 pl-3">
+            <Button size="sm" variant="ghost" disabled={busy}
+              onClick={() => (s.hasWakeToken ? onDisconnect() : onConnect())}>
+              {busy ? <Loader2 size={13} className="animate-spin" /> : null}
+              {s.hasWakeToken ? 'Disconnect' : 'Connect'}
+            </Button>
+          </span>
+        )}
+      </div>
+      {/* Only after a Connect on this row actually failed. */}
+      {failure && (
+        <p className="text-sm text-warn h-11 flex items-center">{failure}</p>
+      )}
+    </>
+  )
+}
+
+/**
+ * Four states, and each one has an owner.
+ *
+ * `not connected` means no credential from any link in the chain. `sync failed`
+ * means a credential that was accepted and a poll that was not. `synced` needs
+ * `ok`, `connected` and a count. The row used to answer `not connected` for a
+ * Slack holding a real, accepted token — flatly wrong, and the opposite of what
+ * the footer on Now said about the same source in the same second.
+ */
+function stateWord(s: SourceStatus): { text: string; tone: string } {
+  if (!s.lastSync?.connected && !s.ok) return { text: 'not connected', tone: 'text-fg-mute' }
+  if (s.lastSync && !s.lastSync.ok) return { text: 'sync failed', tone: 'text-warn' }
+  if (s.lastSync?.ok) {
+    return {
+      text: `synced ${ago(s.lastSync.at)}${s.lastSync.count === null ? '' : ` · ${s.lastSync.count}`}`,
+      tone: 'text-ok',
+    }
+  }
+  return { text: s.ok ? 'connected' : 'not connected', tone: s.ok ? 'text-ok' : 'text-fg-mute' }
 }
 
 function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -415,23 +378,21 @@ function AuditSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
 
   return (
     <Sheet open={open} onClose={onClose} title="Audit" wide>
-      {!data ? (
-        <p className="text-sm text-fg-mute py-6">Reading…</p>
-      ) : (
+      {data && (
         <div className="space-y-6">
           <AuditGroup title="Outbound and hand-offs" rows={data.events} render={(e: any) => (
             <>
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${e.ok ? 'bg-ok' : 'bg-bad'}`} />
-              <span className="font-mono text-xs text-fg-dim shrink-0 w-40 truncate">{e.kind}</span>
+              <span className="font-mono text-sm text-fg-dim shrink-0 w-40 truncate">{e.kind}</span>
               <span className="text-sm text-fg-mute truncate">{e.target ?? e.error ?? ''}</span>
-              <span className="ml-auto tnum text-xs text-fg-mute shrink-0">{ago(e.at)}</span>
+              <span className="ml-auto tnum text-sm text-fg-mute shrink-0">{ago(e.at)}</span>
             </>
           )} />
           <AuditGroup title="Truto CLI" rows={data.commands} render={(r: any) => (
             <>
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.ok ? 'bg-ok' : 'bg-bad'}`} />
-              <span className="font-mono text-xs text-fg-dim truncate">truto {r.argv.slice(0, 4).join(' ')}</span>
-              <span className="ml-auto tnum text-xs text-fg-mute shrink-0">{ago(r.at)}</span>
+              <span className="font-mono text-sm text-fg-dim truncate">truto {r.argv.slice(0, 4).join(' ')}</span>
+              <span className="ml-auto tnum text-sm text-fg-mute shrink-0">{ago(r.at)}</span>
             </>
           )} />
         </div>
@@ -444,9 +405,9 @@ function AuditGroup({ title, rows, render }: { title: string; rows: any[]; rende
   if (!rows?.length) return null
   return (
     <div>
-      <div className="text-eyebrow uppercase text-fg-mute mb-1">{title}</div>
+      <div className="text-eyebrow uppercase text-fg-mute mb-2">{title}</div>
       {rows.slice(0, 40).map((r, i) => (
-        <div key={r.id ?? i} className="flex items-center gap-2 h-8 border-b border-rule last:border-0">{render(r)}</div>
+        <div key={r.id ?? i} className="flex items-center gap-2 h-11 border-b border-rule last:border-0">{render(r)}</div>
       ))}
     </div>
   )
@@ -477,11 +438,11 @@ function ClientSheet({
       <Field label="Redirect URL — add this to the app">
         <button
           onClick={() => { void navigator.clipboard?.writeText(redirectUri); setCopied(true) }}
-          className="w-full flex items-center gap-2 bg-ink-850 border border-edge rounded-control
-                     px-3 h-8 text-left hover:bg-ink-800 transition-colors duration-100"
+          className="w-full flex items-center gap-2 h-11 text-left border-b border-rule
+                     text-fg-mute hover:text-fg-dim transition-colors duration-100"
         >
-          <code className="text-xs font-mono text-fg-dim truncate grow">{redirectUri}</code>
-          {copied ? <Check size={13} className="text-ok shrink-0" /> : <Link2 size={13} className="text-fg-mute shrink-0" />}
+          <code className="text-sm font-mono truncate grow">{redirectUri}</code>
+          {copied ? <Check size={14} className="text-ok shrink-0" /> : <Link2 size={14} className="shrink-0" />}
         </button>
       </Field>
 
@@ -504,16 +465,17 @@ function ClientSheet({
 function ThemeChoice() {
   const { theme, resolved, set } = useTheme()
   const options: Array<{ id: Theme; label: string }> = [
-    { id: 'system', label: theme === 'system' ? `System · ${resolved}` : 'System' },
+    { id: 'system', label: 'System' },
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
   ]
   return (
-    <div className="h-11 flex items-center gap-2">
+    <div className="flex items-center h-11 border-b border-rule">
+      <span className="text-sm text-fg-mute w-24 shrink-0">Theme</span>
+      <span className="text-sm text-fg-dim grow truncate">
+        {theme === 'system' ? `System · ${resolved}` : theme === 'light' ? 'Light' : 'Dark'}
+      </span>
       <Segmented options={options} value={theme} onChange={set} ariaLabel="Theme" />
-      {theme === 'light' ? <Sun size={14} className="text-fg-mute" />
-        : theme === 'dark' ? <Moon size={14} className="text-fg-mute" />
-        : <Monitor size={14} className="text-fg-mute" />}
     </div>
   )
 }

@@ -570,9 +570,69 @@ describe('a source nobody connected is not a healthy sync', () => {
       .toMatch(/SELECT source, MAX\(started_at\) AS at, ok, connected/)
   })
 
-  test('the sync line distinguishes all three states', () => {
+  /**
+   * AMENDED. The three states are the same; the place they are said has moved.
+   *
+   * `SyncLine` was a five-clause 12px paragraph at the foot of Now — measured at
+   * y=1324 in a 900px viewport, wrapping mid-list, beginning its second line
+   * with an orphan interpunct, and ending in amber about a broken source. It is
+   * deleted rather than shortened: failure belongs on the chip you are about to
+   * press, and on the row in Settings where you would go to fix it. Now still
+   * has to be able to tell the three states apart, so the assertion stays and
+   * points at the chip's own title.
+   */
+  test('Now still distinguishes all three states, on the chip', () => {
     const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
     expect(home).toContain('not connected')
     expect(home).toContain('sync failed')
+    expect(home, 'the wrapping five-source paragraph came back').not.toMatch(/function SyncLine/)
+  })
+})
+
+describe('a page has no panels on it', () => {
+  test('nothing on a page wraps itself in a card', () => {
+    // Settings shipped nine `rounded-panel bg-ink-850 border border-edge p-4`
+    // sections in an `items-start` masonry: 160–192px of ragged bottom, a
+    // 789×302 hole beside a full column, every section title inset 17px past the
+    // page title, and — in light mode, where `ink-850` is pure white — nine
+    // white cards on a grey page. A sheet may have an edge. A page may not.
+    for (const f of web.filter(x => x.includes('/pages/'))) {
+      const src = read(f)
+      for (const line of src.split('\n')) {
+        if (line.trim().startsWith('*') || line.trim().startsWith('//')) continue
+        expect(line, `${f}: a page is drawing a panel\n  ${line.trim()}`)
+          .not.toMatch(/rounded-panel[^'"`]*border-edge|border-edge[^'"`]*rounded-panel/)
+      }
+    }
+  })
+
+  test('the page pad has exactly one owner', () => {
+    // Four horizontal page pads were in use on the laptop — 12, 16, 20 and 24 —
+    // plus the table's own `px-2` on top, so the page title sat at x=216 on Now
+    // and x=224 on Settings and every heading moved 8px when you switched tabs.
+    // `.pad-x` is the only thing that may set one.
+    const css = read('src/web/styles.css')
+    expect(css, 'the page pad utility is gone').toContain('.pad-x')
+    for (const f of web.filter(x => x.includes('/pages/'))) {
+      for (const line of read(f).split('\n')) {
+        if (line.trim().startsWith('*') || line.trim().startsWith('//')) continue
+        // 16, 20 and 24 were the page pads. 8 and 12 are a control's own
+        // padding and are not this rule's business.
+        const m = /className[^\n]*?\b((?:sm:|lg:|xl:)?px-[456])\b/.exec(line)
+        if (m) throw new Error(`${f}: ${m[1]} — the page pad is \`.pad-x\`\n  ${line.trim()}`)
+      }
+    }
+  })
+
+  test('a pile with no rows is not rendered', () => {
+    // `Now 0` plus the sentence under it cost 109px of the fold to report a
+    // zero, and three of them stacked cost 331px of an 844px phone to say
+    // nothing at all. The groups are filtered before they are mapped.
+    const home = read('src/web/pages/Home.tsx')
+    expect(home, 'Now went back to rendering every pile whatever is in it')
+      .toMatch(/groups\.filter\(g => g\.shown\.length > 0\)/)
+    expect(home, 'the per-group empty phrase came back').not.toMatch(/emptyWord/)
+    const table = read('src/web/components/CardTable.tsx')
+    expect(table, 'EmptyRow came back').not.toMatch(/export function EmptyRow/)
   })
 })

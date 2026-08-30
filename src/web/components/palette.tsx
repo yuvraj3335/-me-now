@@ -138,7 +138,7 @@ export function Palette({
             className="relative w-full max-w-[560px] rounded-panel bg-ink-850
                        border border-edge overflow-hidden"
           >
-            <div className="flex items-center gap-2.5 px-4 h-12 hairline">
+            <div className="flex items-center gap-2 px-4 h-12 hairline">
               <Search size={15} className="text-fg-mute shrink-0" />
               <input
                 ref={inputRef}
@@ -165,12 +165,12 @@ export function Palette({
                       data-selected={i === sel}
                       onMouseEnter={() => setSel(i)}
                       onClick={() => { onClose(); c.run() }}
-                      className={`w-full flex items-center gap-2.5 px-4 py-2 text-left transition-colors
+                      className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors
                         ${i === sel ? 'bg-ink-800' : 'hover:bg-ink-800/60'}`}
                     >
                       <span className="text-fg-mute shrink-0">{c.icon}</span>
                       <span className="text-sm text-fg truncate">{c.label}</span>
-                      {c.hint && <span className="ml-auto text-xs text-fg-mute truncate max-w-[45%]">{c.hint}</span>}
+                      {c.hint && <span className="ml-auto text-sm text-fg-mute truncate max-w-[45%]">{c.hint}</span>}
                     </button>
                   </div>
                 )
