@@ -868,3 +868,184 @@ silent failures visible immediately, and both are fixed here:
   and reported `ok, 0 rows`, and the sweep then marked every card of that source
   gone. Rate-limiting GitHub's four searches would have wiped the desk and
   reported "synced". A partial poll now keeps its rows and loses its authority.
+
+## 32. A card has a status, and it is stored
+
+**Partially reverses #9.** Piles are computed, never filed — that was the rule,
+and most of it still holds. What broke it is that "done" and "not mine" were
+already filed, as two timestamps pretending to be a classification, and the
+product had no way at all to say *in progress* or *in review*. A desk where the
+only two things you can assert about a piece of work are "gone" and "not gone"
+is a desk that makes you keep the middle in your head.
+
+`card_state` now carries `status`, one of five values: `not_started`,
+`in_progress`, `in_review`, `done`, `wont_do`.
+
+### What survives from #9
+
+The pile is still computed, from the snooze, the manual override and the
+adapter's own claim. It is not a folder and it is not a status. The two are
+orthogonal, and deliberately so: **there is no `parked` status**, because a park
+is a statement about *when he wants to see it*, not about whether the work has
+begun. "In progress, and parked until Monday" is the normal state of half the
+desk, and one column could not have held both facts.
+
+### What changes
+
+Whether something is finished or disowned is `card_state.status`. `done_at` and
+`not_mine` survive as derived values, written by the same code path that writes
+the status and never independently — `done_at` for the hidden-list sort and for
+undo records written before this shipped, `not_mine` because `pile()` still
+reads it. They are maintained, not trusted. The intent is to drop both once no
+stored `undo_json` predates migration 9.
+
+### The back-fill, and what it refuses to guess
+
+`done_at IS NOT NULL` became `done`. `not_mine = 1` became `wont_do`. A park
+kept its park and its snooze moved to `due_at`, because a park always was a
+snooze with a wake time. Everything else became `not_started`.
+
+`acked_at` was left implying nothing, and that was the one real decision in the
+migration. An ack suppressed a notification; it never claimed the work had
+begun. Reading it as `in_progress` would have been the system asserting, about
+most of the desk, something only he can assert — and `in_progress` and
+`in_review` are worth having precisely because they are his claims. They start
+empty. The read path agrees: `statusOf` in `src/server/api.ts` derives a status
+from `done_at` and `not_mine` when a group has no state row at all, and does not
+consult `acked_at` there either.
+
+### Why the old events are still emitted
+
+`POST /cards/:group/status` still logs `card_done`, `card_not_mine` and
+`card_acked` alongside the new `card_status`. Pulse is built out of events, not
+columns — the Cleared chart, both response-time percentiles, both heatmaps and
+the streak are all counts of those three kinds. A status column is a snapshot
+and a snapshot is not a history. Dropping the events would have emptied five
+charts silently, with nothing failing.
+
+---
+
+## 33. Priority is an integer, and normal renders nothing
+
+`0` urgent, `1` high, `2` normal, `3` low. Named once, in
+`src/server/sources/types.ts` and `src/web/lib/types.ts`, so it cannot become
+three lookup tables that disagree about whether high is 1 or 3.
+
+A card starts at `2`, and **a card at `2` draws no mark at all**. Not a grey
+chip, not a dash. Almost every row is normal, so a glyph there is a column the
+eye has to skip on every line to find the two rows that matter — which is the
+opposite of what a priority is for. Only `0` and `1` get a mark.
+
+Priority is also the one field an undo will not touch. `undo_json` snapshots
+every field an undoable action replaced, and no undoable action writes priority,
+so including it would only give Undo a way to clobber a value the action it is
+undoing never saw.
+
+---
+
+## 34. The alert channels are read, not searched
+
+Wake was blind to bot traffic: `slack_search_messages` does not reliably surface
+app posts, and the three channels that carry production alerts are almost
+entirely app posts. They are read directly with `slack_read_channel` now, and
+the tool's shape drove several choices that look arbitrary and are not.
+
+* **`include_bots` goes to search and never to the channel read.** It is not in
+  that tool's schema; channel history is bot-inclusive by construction.
+* **`oldest` and `latest` are always sent together.** With `oldest` alone the
+  server anchors to the *oldest* end of the range and returns founding join
+  messages from the day the channel was created. This is the most dangerous
+  behaviour in the tool, because the result looks like data.
+* **`response_format` is `detailed`.** `concise` discards attachments, and for
+  Datadog and Alertmanager the attachment *is* the message.
+* **Only `#sentry-alerts` emits a subteam token**, so `paged` is a fact about
+  that channel and is false elsewhere rather than unknown.
+* **`#intent-alerts` is not on the list.** Its newest message is fourteen months
+  old and it is marketing intent, not production. A dead channel in the list
+  sits in `settle`'s denominator, where one failed read can mark the whole Slack
+  poll not-ok for nothing.
+* **A recovery emits no card.** `Recovered:` and the green-tick digests are the
+  end of an incident, and a desk that fills up with things that have stopped
+  being true is a desk nobody reads.
+
+A Sentry alert in Slack and the same issue from the Sentry API are one row,
+keyed on the short id (`TRUTO-38`), because they are one thing.
+
+---
+
+## 35. The hand-off still opens a new conversation
+
+**Confirms #26 after re-checking it.** The session picker lists real Claude Code
+transcripts, and it would be natural to assume that picking one resumes it.
+It does not, and cannot:
+
+* `claude.ai/new?q=` opens a *new* conversation. There is no documented URL that
+  targets an existing one, and none was found by inspection.
+* `claude --help` at v2.1.233 has `--resume <id>`, which is a terminal command
+  on the box — not something a link from a phone can reach.
+
+So the picker supplies **context**, not continuity: the chosen session's repo,
+cwd and last exchanges go into the brief, and the brief prints a copyable
+`claude --resume <uuid> --permission-mode bypassPermissions` line for the
+terminal. That is the honest version of the feature. Naming it "resume" in the
+UI would have been the third time this product implied a process it does not
+start.
+
+---
+
+## 36. A credential that cannot refresh is not connected
+
+`resolveToken` used to return the stored access token when a refresh failed. The
+reasoning was that a stale token is better than none. It is not: the caller then
+made a real request with a known-dead credential and got a 401, which surfaced
+as `sync failed · 401 from https://mcp.slack.com/mcp` — a sentence that blames
+the sync for a problem in the grant, and offers no way to fix it.
+
+A refusal is now classified before anything else happens:
+
+* **Terminal** — a 4xx whose body names `invalid_grant`, `invalid_client`,
+  `unauthorized_client` or `invalid_request`. The grant is dead. The stored
+  tokens are cleared, `last_auth_error` records the provider's own word for it,
+  and Settings says `reconnect — invalid_grant`.
+* **Transient** — a 5xx, a network failure, a timeout, unparseable JSON. Nothing
+  is cleared, because nothing has been established. The call returns null and
+  the next poll tries again.
+
+Two columns carry this: `oauth_tokens.last_auth_ok_at` and `.last_auth_error`.
+`ok` alone could never have said it — a source can poll successfully at the same
+moment its refresh token is dead, and it will keep doing so until the access
+token expires.
+
+Refreshes are also single-flighted per server. Five adapters poll in parallel,
+`headers()` resolves a token on every JSON-RPC request, and where the provider
+rotates refresh tokens the losers of that race hold an invalidated one — so the
+stored row could end up an older generation than the provider last issued, which
+is the same dead-credential failure arriving by a different road.
+
+---
+
+## 37. The desk is paged in the browser, not on the wire
+
+Every table in the product pages now, and `GET /api/state` still returns the
+whole desk.
+
+That looks backwards until you ask what the search box is for. Search spans
+every row he has, not the fifty in front of him — a desk you can only search a
+page at a time is a filing cabinet. Paging server-side would mean either
+shipping the query to the server and giving up the instant local filter, or
+searching one page and calling it a search.
+
+The number makes it easy: the desk is around a hundred groups, and each is a
+short object. Filtering, then searching, then slicing a page out of the result
+is a few milliseconds of work on a phone, and the whole payload is smaller than
+one of the icons the page already loads.
+
+The order is load-bearing and is the same everywhere: **filter, then search,
+then page**. Paging first would page a list the reader cannot see the rest of,
+and the page number resets to 1 whenever any axis above it changes — otherwise
+narrowing a filter lands you on an empty page 4 with no way of knowing why.
+The page lives in the URL, like every other axis, so reload and Back both work.
+
+Mail is the exception, and it is a real one rather than an oversight: it already
+pages server-side, against a mailbox that is far too large to hold, and it
+stays that way.
