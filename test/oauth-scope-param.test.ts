@@ -23,22 +23,18 @@ describe('OAuth scope query param', () => {
     expect(formatScopeList('a,b,c', 'sentry')).toBe('a b c')
   })
 
-  test('Slack MCP is asked for granular search scopes, not classic search:read', () => {
-    const scopes = MCP_SERVERS.slack!.scopes ?? ''
+  test('Slack MCP is asked for granular search scopes, and not files:write', () => {
+    const names = (MCP_SERVERS.slack!.scopes ?? '').split(',')
     for (const need of [
       'search:read.public',
       'search:read.private',
       'search:read.im',
       'search:read.mpim',
+      'search:read.users',
+      'search:read.files',
     ]) {
-      expect(scopes, `missing ${need}`).toContain(need)
+      expect(names, `missing ${need}`).toContain(need)
     }
-    // Classic search:read is accepted at authorize time and then Slack MCP
-    // exposes no search tool. A bare `search:read` (no suffix) must not be
-    // in the list — `search:read.public`.startsWith('search:read') is true,
-    // so test the comma-delimited names.
-    const names = scopes.split(',')
-    expect(names).not.toContain('search:read')
-    expect(names).not.toContain('team:read')
+    expect(names).not.toContain('files:write')
   })
 })
