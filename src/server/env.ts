@@ -27,6 +27,17 @@ export const CLAUDE_PROJECTS_DIR = `${CLAUDE_HOME}/projects`
 export const claudeCredentialsPath = () =>
   `${str('WAKE_CLAUDE_HOME', `${homedir()}/.claude`)}/.credentials.json`
 
+/**
+ * The signed-in Slack user, as a constant rather than a discovery.
+ *
+ * Slack MCP publishes it in the search tool's own description, which is still
+ * read at `discoverTools`. But the alert-channel reads happen whether or not a
+ * search tool ever answered, and "who am I" decides which messages are my own
+ * and never worth showing back to me — so it needs a default that does not
+ * depend on a handshake succeeding first.
+ */
+export const ME_SLACK_DEFAULT = 'U09617LRRDF'
+
 /** Who I am, so "is this addressed to me?" is answerable without a model. */
 export const ME = {
   githubLogin: str('WAKE_GITHUB_LOGIN', 'yuvraj3335'),
@@ -35,7 +46,7 @@ export const ME = {
   // it is Wake claiming to be someone it is not.
   emails: str('WAKE_EMAILS', 'yuvraj@truto.one')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
-  slackUserId: str('WAKE_SLACK_USER_ID'), // discovered at runtime if unset
+  slackUserId: str('WAKE_SLACK_USER_ID', ME_SLACK_DEFAULT),
   /** The organisation Fetch's second standing question is about. */
   org: str('WAKE_ORG', 'TrutoEngineering'),
   githubOrg: str('WAKE_GITHUB_ORG', 'trutohq'),
@@ -45,6 +56,54 @@ export const ME = {
 
 export const GMAIL_ACCOUNTS = str('WAKE_GMAIL_ACCOUNTS', ME.emails.join(','))
   .split(',').map(s => s.trim()).filter(Boolean)
+
+/**
+ * The workspace, needed to build a `slack://` link the desktop and phone apps
+ * answer. It is readable out of any `botuser-<TEAM>-<BOT>@slack-bots.com`
+ * address in a channel read, so this is the fallback for the reads that carry
+ * no bot address at all — Alertmanager renders without one.
+ */
+export const SLACK_TEAM_ID = str('WAKE_SLACK_TEAM_ID', 'T04CWR1AM1R')
+
+/**
+ * The user groups whose mention means the page was aimed at my team.
+ *
+ * Two ids, because Datadog pages both: `S06HDT77E1M` is @truto-eng and
+ * `S09475M3UM8` is the second on-call group, whose handle Slack renders
+ * nowhere. A page naming either one is the difference between an alert that is
+ * on me now and one that is merely posted where I can see it.
+ */
+export const SLACK_USERGROUPS = str('WAKE_SLACK_USERGROUPS', 'S06HDT77E1M,S09475M3UM8')
+  .split(',').map(s => s.trim()).filter(Boolean)
+
+export type AlertChannel = {
+  id: string
+  name: string                       // no leading '#'
+  /** 'sentry' | 'datadog' | 'grafana' — selects the body parser + card builder. */
+  family: 'sentry' | 'datadog' | 'grafana'
+}
+
+/**
+ * The channels read directly rather than searched.
+ *
+ * Search cannot see this content: bot search results come back with empty text,
+ * and a `<!subteam^…>` token inside an attachment is not indexed at all — a
+ * search for `truto-eng in:#truto-api-alerts` returns zero rows on a day when
+ * Datadog paged the group twice. So these three are read as history.
+ *
+ * `#intent-alerts` (C07UWPPLSGN) is deliberately absent. Its newest message is
+ * over a year old, it is website-visitor marketing, and every read of it would
+ * sit in `settle`'s denominator where a failure marks the whole Slack run
+ * not-ok for nothing.
+ */
+export const SLACK_ALERT_CHANNELS: AlertChannel[] = [
+  { id: 'C0BERTMS9K4', name: 'sentry-alerts',        family: 'sentry'  },
+  { id: 'C05UPHVT2CQ', name: 'truto-api-alerts',     family: 'datadog' },
+  { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
+]
+
+/** Preferred over `find_organizations`, which costs a round trip to learn one word. */
+export const SENTRY_ORG = str('WAKE_SENTRY_ORG', 'truto')
 
 /** Poll cadence. Jittered per source so they never stampede together. */
 export const POLL_INTERVAL_MS = num('WAKE_POLL_INTERVAL_MS', 3 * 60_000)

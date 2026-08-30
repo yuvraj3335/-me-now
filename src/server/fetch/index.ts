@@ -38,7 +38,7 @@
 import { db, logEvent, now } from './../db'
 import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
-import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME } from './../env'
+import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID } from './../env'
 import { readsLikeAsk } from './../sources/slack'
 import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
@@ -201,7 +201,8 @@ async function collect(name: Connector, reach: Set<string>) {
  * questions about review requests, assignment, authorship and mentions;
  * `involves:` also catches the threads he has actually commented on, which is
  * most of what "named on" means in practice. Sentry's poll asks about issues
- * assigned to him; `subscribed:me` is the pile he is watching.
+ * assigned to him; `assigned_or_suggested:me` widens that to the issues Sentry
+ * itself thinks are his.
  */
 async function viaWake(name: Connector): Promise<RawCard[] | null> {
   if (name === 'slack') {
@@ -228,7 +229,9 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
     return hits.map(h => fromHit('github', h, 'open')).filter((c): c is RawCard => !!c)
   }
   if (name === 'sentry') {
-    const hits = await searchSentry('is:unresolved subscribed:me', FETCH_MAX_ROWS)
+    // No `is:unresolved`: Sentry applies its own status default, and stacking
+    // that qualifier on top narrowed a real answer to an empty one.
+    const hits = await searchSentry('assigned_or_suggested:me', FETCH_MAX_ROWS)
     return hits.map(h => fromHit('sentry', h, 'open')).filter((c): c is RawCard => !!c)
   }
   // Gmail has an adapter and no credential Wake can obtain — Google publishes
@@ -246,12 +249,16 @@ async function viaWake(name: Connector): Promise<RawCard[] | null> {
 function slackCard(h: SearchHit): RawCard | null {
   const text = redact(h.excerpt ?? '').replace(/\s+/g, ' ').trim()
   if (!h.ref || !text) return null
-  const channel = (h.title ?? '').replace(/^#/, '').replace(/^DM\s+/, '')
-  const isDm = /^DM\b/.test(h.title ?? '')
+  // A conversation id beginning `D` is a direct message, and one of those is
+  // thrown away before it becomes a card. `searchSlack` already filters them;
+  // this is the second gate, because the shape of the id is the durable fact
+  // and a title prefix is not.
+  if (h.ref.startsWith('D')) return null
+  const channel = (h.title ?? '').replace(/^#/, '')
   return {
     source: 'slack',
     source_id: h.ref,
-    kind: isDm ? 'dm' : 'mention',
+    kind: 'mention',
     title: text.slice(0, 200),
     why: whyFrom(text, 'waiting'),
     who: h.actor || undefined,
@@ -264,9 +271,9 @@ function slackCard(h: SearchHit): RawCard | null {
     meta: {
       found_by: 'fetch',
       channel,
-      is_dm: isDm,
       channel_id: h.ref.split(':')[0],
       thread_ts: h.ref.split(':')[1],
+      team_id: SLACK_TEAM_ID,
     },
   }
 }
@@ -285,8 +292,8 @@ function promptFor(name: Connector): string {
   const who = `${ME.name} (${ME.emails.join(', ')}, GitHub ${ME.githubLogin})`
   const what: Record<Connector, string> = {
     slack:
-      `Search Slack for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
-      `(a) messages addressed to ${who} — direct messages to him, and messages that mention him by name or handle; ` +
+      `Search Slack for two things in the last ${FETCH_LOOKBACK_DAYS} days, in channels only — never direct messages: ` +
+      `(a) channel messages that mention ${who} by name or handle; ` +
       `(b) threads in ${ME.org} channels where he is named and someone is waiting on an answer.`,
     gmail:
       `Search Gmail for two things in the last ${FETCH_LOOKBACK_DAYS} days: ` +
@@ -340,6 +347,9 @@ const KIND: Record<Connector, string> = {
 function toCard(name: Connector, f: Found): RawCard | null {
   const title = redact(f.title).slice(0, 200)
   if (!title) return null
+  // Same rule as the poller and as `slackCard`: a direct message never becomes
+  // a card, whichever pipe found it.
+  if (name === 'slack' && f.id.startsWith('D')) return null
 
   const evidence = f.evidence ? redact(f.evidence).slice(0, 400) : null
   const ts = f.when ? Date.parse(f.when) : NaN
@@ -357,7 +367,7 @@ function toCard(name: Connector, f: Found): RawCard | null {
   return {
     source: name as SourceName,
     source_id: f.id,
-    kind: name === 'slack' && f.id.startsWith('D') ? 'dm' : KIND[name],
+    kind: KIND[name],
     title,
     why: whyFrom(evidence, f.bucket),
     who: f.who ? redact(f.who).slice(0, 80) : undefined,
@@ -370,7 +380,7 @@ function toCard(name: Connector, f: Found): RawCard | null {
     meta: {
       found_by: 'fetch',
       ...(name === 'slack' && f.id.includes(':')
-        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], is_dm: f.id.startsWith('D') }
+        ? { channel_id: f.id.split(':')[0], thread_ts: f.id.split(':')[1], team_id: SLACK_TEAM_ID }
         : {}),
       ...(suspicious.suspicious ? { untrusted: suspicious.reasons.join('; ') } : {}),
     },

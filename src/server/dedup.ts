@@ -15,7 +15,21 @@ const GH_URL = /github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/(?:pull|issue
 /** "trutohq/truto#2034" and bare "#2034" when a repo is already in context. */
 const GH_SHORT = /\b([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)#(\d+)\b/g
 const SENTRY_URL = /sentry\.io\/(?:organizations\/[^/]+\/)?issues\/(\d+)/gi
-const TRUTO_SENTRY = /\bTRUTO-\d+\b/gi
+/**
+ * Sentry short ids are base36, not decimal: `TRUTO-38`, `TRUTO-2D`, `TRUTO-W`,
+ * `TRUTO-APP-1BY`. A `TRUTO-\d+` pattern misses most of them outright, and the
+ * `-APP` branch has to be tried *first* or `TRUTO-APP-1BY` is captured as
+ * `TRUTO-A` — a reference to an issue that does not exist. The `i` flag is gone
+ * with it: a lowercase `truto-38` in prose is a word, not an id, and the push
+ * site still upper-cases what it finds.
+ *
+ * The boundary is spelled out rather than `\b`, because `_` is a word character
+ * and the Cursor triage bot writes the id italic — `_TRUTO-38_`. Under `\b`
+ * there is no boundary on either side of that, so the one id that message is
+ * *about* was the one id invisible to the parser, and the first id it did see
+ * was whatever other issue the prose happened to cross-reference.
+ */
+const TRUTO_SENTRY = /(?<![0-9A-Za-z])TRUTO(?:-APP)?-[0-9A-Z]+(?![0-9A-Za-z])/g
 const SLACK_ARCHIVE = /slack\.com\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})/gi
 
 /** Strip the noise that makes the same conversation look like many subjects. */
@@ -162,6 +176,28 @@ export function extractRefs(text: string, contextRepo?: string): Ref[] {
 export const extractRefsFromElidable = (text: string, contextRepo?: string): Ref[] =>
   extractRefs(withoutElidedTail(text), contextRepo)
 
+/**
+ * Refs from an alert body. Deliberately blind to GitHub: a Cursor triage
+ * message links the *fixing PR*, which is a different unit of work. Letting
+ * that rank-0 ref in both merges the alert into the PR's card and relabels
+ * the group `gh:trutohq/truto#2037`, so the alert stops being findable as
+ * TRUTO-38 and inherits the PR's state. The PR still arrives on its own
+ * from the GitHub adapter.
+ */
+export function extractAlertRefs(text: string): Ref[] {
+  const out: Ref[] = []
+  const seen = new Set<string>()
+  const push = (r: Ref) => {
+    const k = `${r.t}:${r.v}`
+    if (!seen.has(k)) { seen.add(k); out.push(r) }
+  }
+
+  for (const m of text.matchAll(SENTRY_URL)) if (m[1]) push({ t: 'sentry', v: m[1] })
+  for (const m of text.matchAll(TRUTO_SENTRY)) push({ t: 'sentry', v: m[0].toUpperCase() })
+  for (const m of text.matchAll(SLACK_ARCHIVE)) push({ t: 'slackthread', v: `${m[1]}:${m[2]}.${m[3]}` })
+  return out
+}
+
 /* ------------------------------- union-find ------------------------------- */
 
 class DSU {
@@ -221,7 +257,15 @@ export function groupCards(cards: RawCard[]): Map<string, string> {
       // A subject that was cut short is a worse label than the same subject
       // whole, even though both are `subject` refs — half a title in a group key
       // is a group key nobody can read.
-      const rank = REF_RANK[r.t] + (r.t === 'subject' && elidedPrefix(r.v) ? 0.5 : 0)
+      // The same rule applied to Sentry: one issue carries both a short id and
+      // an opaque numeric id, and with equal ranks the tiebreak below is
+      // lexicographic — so `sentry:7700748352` beat `sentry:TRUTO-38` and
+      // labelled the group with the number nobody can look up. The numeric ref
+      // stays: it is what actually merges the Slack alert with the row the
+      // Sentry API returns.
+      const rank = REF_RANK[r.t]
+        + (r.t === 'subject' && elidedPrefix(r.v) ? 0.5 : 0)
+        + (r.t === 'sentry' && /^\d+$/.test(r.v) ? 0.5 : 0)
       const cand = { rank, key: `${r.t}:${r.v}` }
       const cur = bestByRoot.get(root)
       if (!cur || cand.rank < cur.rank || (cand.rank === cur.rank && cand.key < cur.key)) {
@@ -246,6 +290,7 @@ export type MyState = {
   snoozed_until?: number | null
   not_mine?: number
   done_at?: number | null
+  status?: string | null
 }
 
 /**
@@ -253,6 +298,9 @@ export type MyState = {
  * a snooze expires on its own and the card returns to where the rules put it.
  */
 export function pile(card: { pile: Pile }, state: MyState | undefined, at = Date.now()): Pile | 'hidden' {
+  // Status is the authoritative claim about the work; `done_at` and `not_mine`
+  // are the two columns it grew out of and are kept in sync beside it.
+  if (state?.status === 'done' || state?.status === 'wont_do') return 'hidden'
   if (state?.not_mine) return 'hidden'
   if (state?.done_at) return 'hidden'
   if (state?.snoozed_until && state.snoozed_until > at) return 'parked'

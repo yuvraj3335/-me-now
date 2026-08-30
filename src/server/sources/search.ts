@@ -10,8 +10,9 @@
  * All of it is read-only. Nothing in this file can post, reply or modify.
  */
 
-import { runSearch, discoverTools, readThread, clean } from './slack'
+import { runSearch, discoverTools, readThread, readAlertChannel, clean } from './slack'
 import { sessionFor as gmailSession } from './gmail'
+import { gmailThreadUrl } from '../mail/gmail'
 import { getSession as sentrySession, findIssuesTool, orgSlug, parseSentryIssues } from './sentry'
 import { GMAIL_ACCOUNTS } from '../env'
 import { plainText } from '../mail/sanitize'
@@ -32,9 +33,12 @@ export async function searchSlack(query: string, limit = 15): Promise<SearchHit[
   const t = await discoverTools()
   if (!t.search) throw new Error('Slack is connected but exposes no search tool')
   const hits = await runSearch(t.search, query, limit)
-  return hits.map(h => ({
+  // A direct message is dropped before it can become a hit, for the same reason
+  // it is dropped before it can become a card: it is a conversation, not a piece
+  // of work, and there is nothing to do about one from here.
+  return hits.filter(h => !h.isDm).map(h => ({
     source: 'slack',
-    title: h.isDm ? `DM ${h.channelName || h.channelId}` : `#${h.channelName || h.channelId}`,
+    title: `#${h.channelName || h.channelId}`,
     actor: h.fromName || h.fromId,
     excerpt: clean(h.text),
     url: h.permalink,
@@ -42,6 +46,28 @@ export async function searchSlack(query: string, limit = 15): Promise<SearchHit[
     // `channel:ts` is the same reference the dedup engine keys threads on, so a
     // hit here can be handed straight to slack_thread.
     ref: h.channelId && h.ts ? `${h.channelId}:${h.ts}` : undefined,
+  }))
+}
+
+/**
+ * One alert channel, on demand.
+ *
+ * Search cannot answer questions about these channels — bot rows come back with
+ * empty text — so the Search page reads them the same way the poll does rather
+ * than reporting an empty result that is really an unanswerable question.
+ */
+export async function searchSlackChannel(channelId: string, sinceMs: number): Promise<SearchHit[]> {
+  const t = await discoverTools()
+  if (!t.readChannel) throw new Error('Slack is connected but exposes no channel-history tool')
+  const hits = await readAlertChannel(t.readChannel, channelId, sinceMs)
+  return hits.map(h => ({
+    source: 'slack',
+    title: `#${h.channelName || h.channelId}`,
+    actor: h.fromName || h.fromId,
+    excerpt: clean(h.text),
+    url: h.permalink,
+    ts: h.epochMs,
+    ref: `${h.channelId}:${h.ts}`,
   }))
 }
 
@@ -68,7 +94,11 @@ export async function searchGmail(query: string, limit = 15): Promise<SearchHit[
           excerpt: plainText(t.snippet ?? m.snippet) || undefined,
           ts: Date.parse(m.date ?? t.date ?? '') || undefined,
           ref: t.threadId ?? t.id,
-          url: t.threadId ? `https://mail.google.com/mail/u/0/#all/${t.threadId}` : undefined,
+          // The same builder the poller uses. This site used to hard-code `/u/0/`,
+          // so one thread carried two different URLs depending on which path
+          // produced it -- and `0` is whichever inbox Google ranks first, which
+          // is not necessarily his.
+          url: t.threadId ? gmailThreadUrl(account, t.threadId) : undefined,
         })
       }
     } catch (e) {

@@ -32,6 +32,25 @@ describe('latestFinishedRuns', () => {
     })
   })
 
+  test('a partial poll that landed rows is still a failed run', () => {
+    // The failure this whole alert path exists to make impossible: three of four
+    // Slack queries answered, one alert channel could not be read, seven cards
+    // landed — and the row must say `ok: 0` with the reason. A source that keeps
+    // its count and loses its `ok` is what stops the sweep from deleting the
+    // alerts nobody managed to ask about, and stops the desk from rendering a
+    // green "synced 2m ago" over a channel that was never read.
+    db.query(
+      `INSERT INTO sync_runs (source, started_at, finished_at, ok, connected, count, error)
+       VALUES ('slack', 400, 410, 0, 1, 7, '1 of 4 queries failed: slack channel read returned object, not text')`,
+    ).run()
+
+    const slack = latestFinishedRuns().find(r => r.source === 'slack')
+    expect(slack!.ok).toBe(0)
+    expect(slack!.connected).toBe(1)
+    expect(slack!.count).toBe(7)
+    expect(slack!.error).toContain('1 of 4 queries failed')
+  })
+
   test('in-flight and fetch: rows are ignored', () => {
     db.query(
       `INSERT INTO sync_runs (source, started_at, finished_at, ok, connected, count, error)

@@ -100,6 +100,21 @@ describe('the two pipes land on one desk without fighting', () => {
       .toContain('clean(h.text)')
   })
 
+  test('the questions Fetch asks are the ones that return rows', () => {
+    const src = readFileSync('src/server/fetch/index.ts', 'utf8')
+    // `is:unresolved` was the reason Sentry answered nothing: Sentry applies its
+    // own status default, and stacking that qualifier on top narrowed a real
+    // answer to an empty one.
+    expect(src, 'the Sentry question went back to is:unresolved')
+      .toContain("searchSentry('assigned_or_suggested:me'")
+    expect(src, 'a status qualifier crept back into the Sentry question')
+      .not.toMatch(/searchSentry\('[^']*is:unresolved/)
+    // Direct messages are not a thing Wake collects, on either pipe.
+    expect(src).not.toContain('is_dm')
+    expect(src, 'the standing Slack question started asking for direct messages again')
+      .toContain('never direct messages')
+  })
+
   test('a collision with a poll row refreshes the sighting and nothing else', () => {
     // Identity dedup, with pipe 1 winning: it has a live credential and a
     // three-minute cadence, and Fetch is a manual snapshot.
