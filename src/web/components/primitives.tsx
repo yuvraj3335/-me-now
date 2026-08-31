@@ -1253,14 +1253,32 @@ export function rowStateClass({ selected, active, focused, unseen }: RowState = 
  * not redundant with the observer — a `ResizeObserver` delivers on an animation
  * frame, and a hidden tab produces none, so the rail would come back from the
  * background still describing the width it had when it left.
+ *
+ * `moved` is the same question asked of the other edge — is there anything
+ * *behind* this scroller — and it exists because the phone desk pins its Title
+ * column and marks it with a 1px edge. That edge is honest only once the table
+ * has actually been scrolled away from its start; drawn unconditionally it is a
+ * vertical line through the middle of a table nobody has touched, which is what
+ * shipped and what a phone screenshot shows. Both answers come off one listener
+ * and one read, because they are two facts about one scroll position and a
+ * second hook would be a second chance for them to disagree.
  */
-export function useRail<T extends HTMLElement>(): { ref: RefObject<T | null>; spill: boolean } {
+export function useRail<T extends HTMLElement>(): {
+  ref: RefObject<T | null>
+  /** Something past the right edge. */
+  spill: boolean
+  /** Something behind the left edge — this has been scrolled off its start. */
+  moved: boolean
+} {
   const ref = useRef<T>(null)
   const [spill, setSpill] = useState(false)
+  const [moved, setMoved] = useState(false)
 
   const read = () => {
     const el = ref.current
-    if (el) setSpill(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
+    if (!el) return
+    setSpill(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
+    setMoved(el.scrollLeft > 0)
   }
 
   useEffect(() => {
@@ -1279,5 +1297,5 @@ export function useRail<T extends HTMLElement>(): { ref: RefObject<T | null>; sp
 
   useEffect(read)
 
-  return { ref, spill }
+  return { ref, spill, moved }
 }

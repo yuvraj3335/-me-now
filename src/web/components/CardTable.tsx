@@ -38,7 +38,9 @@
  * And every row swipes left. `Done`, `Status` and `Delete` under a finger, a
  * trackpad or a mouse drag, without opening anything — see `components/swipe.tsx`
  * for why the drawer is a clip window pinned to the last cell rather than a
- * translated row.
+ * translated row. One row declines the finger and only the finger: the phone
+ * row, whose table needs that axis to show its own columns. `CardLine` argues
+ * it where it is decided.
  *
  * Below 1024px it is still a table, and that is the reversal this file's last
  * comment argued against. "Four columns in 390px is a diagram of a table" was
@@ -56,7 +58,7 @@ import type { Card, CardStatus } from '../lib/types'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { fromLocalInput, toLocalInput } from '../lib/time'
 import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
-import { CountBadge, Select, rowStateClass } from './primitives'
+import { CountBadge, Select, rowStateClass, useRail } from './primitives'
 import { cardKind, contextLine, KindGlyph } from './kinds'
 import { SOURCE_LABEL } from './sources'
 import { PriorityGlyph, isSettled } from './status'
@@ -508,18 +510,30 @@ function DueCell({ card, onDue, children }: {
  * from the laptop's.
  *
  * `Status` holds the same control the table does and its longest option is
- * still `Not started`, so it cannot go below the desk's own floor by much.
- * `Where` holds `15five — Roopi`, which is what the phone row was missing
- * altogether. `Due` holds `Overdue 12d`. Title takes what is left and is the
- * only elastic column, exactly as on the laptop.
+ * still `Not started`. `Where` holds `15five — Roopi`, which is what the phone
+ * row was missing altogether. `Due` holds `Overdue 12d`. Title takes what is
+ * left and is the only elastic column, exactly as on the laptop.
  *
- * 356 fixed plus a 184 floor under Title is 540, against the 343 a 375px phone
+ * 368 fixed plus a 184 floor under Title is 552, against the 343 a 375px phone
  * leaves inside the page pad. **That difference is the feature.** The columns
  * are drawn at a width where they can be read and the table is moved to reach
  * them, rather than every column being squeezed to 68px so that all four fit
  * and none of them says anything.
+ *
+ * Status is 144 and not the 132 it shipped at, and the twelve pixels are a
+ * coarse pointer's. `styles.css` raises every `<select>` to 16px under
+ * `@media (pointer: coarse)` — the fix for iOS zooming the page on focus and
+ * never zooming back — so the phone renders this control two points larger than
+ * any desktop window ever will, at any width. Measured with that rule live:
+ * `Not started` is 90.4px against the 86px of text room a 132px column leaves
+ * after 16px of cell gap and the select's own 28px of padding and chevron well,
+ * so the phone read `Not start…` on every row. This file already spends a
+ * paragraph on that exact failure at 116px on the laptop — *a truncated status
+ * is not a status* — and it came back on the one device the rule applies to.
+ * 144 leaves 98px for a 90.4px word. A wider column costs nothing here: the
+ * table scrolls, so the price is 12px of travel rather than 12px off Title.
  */
-export const PHONE_W = { status: 132, where: 136, due: 88 }
+export const PHONE_W = { status: 144, where: 136, due: 88 }
 
 /** What Title wants on a phone. Below this a two-word title starts eliding. */
 export const PHONE_TITLE_MIN = 184
@@ -563,14 +577,14 @@ function PhoneCols() {
  * Horizontally, Title is pinned exactly as the cells beneath it are, or the
  * heading and its column would part company on the first flick. It takes the
  * page's own ground rather than `groundOf` — a heading has no row state to
- * carry — and the same 1px shadow edge, so the pinned column reads as one
- * column from its heading down.
+ * carry — and the same `pin-edge`, so the pinned column reads as one column
+ * from its heading down and grows its edge at the same moment the rows do.
  */
 function PhoneHead() {
   return (
     <thead>
       <tr className="border-b border-edge">
-        <th className={`${HEAD} sticky left-0 z-10 bg-ink-900 shadow-[1px_0_0_0_var(--color-rule)]`}
+        <th className={`${HEAD} sticky left-0 z-10 bg-ink-900 pin-edge`}
           scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
         <th className={HEAD} scope="col">Where</th>
@@ -580,38 +594,6 @@ function PhoneHead() {
     </thead>
   )
 }
-
-/**
- * A horizontal scroller and a horizontal swipe in one row, kept apart on
- * purpose.
- *
- * They are the same gesture to a browser: a finger travelling left across a row
- * either pans the table or opens the drawer, and whichever of them claims the
- * touch first takes it for the whole stream. Left alone they fight, and the way
- * they lose is silent — the drawer opens a third of the way and the table
- * lurches, or neither moves.
- *
- * So the axis is decided by **which cell the finger lands on**, which is the one
- * thing `touch-action` can express per element:
- *
- *   * The **Title cell keeps `pan-y`** — the policy `styles.css` already puts on
- *     every `[data-swipe='pan-y'] > td` — so the browser takes the page's
- *     vertical scroll and hands the app the horizontal axis. A swipe starts on
- *     the row's identity, which is where a thumb naturally lands and the one
- *     part of the row that is always on screen.
- *   * **Every other cell overrides to `manipulation`**, which is both pans and
- *     pinch without the double-tap zoom delay, so the browser scrolls the table.
- *     A pointer that starts there and is taken over for a pan is delivered to
- *     the row as `pointercancel`, which `useSwipe` already handles — the drawer
- *     does not half-open and then stick.
- *
- * The declaration has to be inline because a class cannot outrank the
- * stylesheet's `> td` rule without another selector nobody else needs, and
- * because `touch-action` is not inherited — the `<select>` inside the Status
- * cell falls back to `auto`, which is right: it stops the row's pointer events
- * itself, so there is no gesture there to protect.
- */
-const PANS = { touchAction: 'manipulation' } as const
 
 /**
  * The ground a row is painted in, as a colour rather than as a class.
@@ -744,7 +726,34 @@ export function CardLine({
   const where = contextLine(card)
   const name = titleOf(card)
   const unseen = card.activity.count > 0
-  const swipe = useSwipe(card.group_key, 3)
+  /*
+   * A horizontal scroller and a horizontal swipe in one row, and only one of
+   * them can have the axis. Here it is the table, and that is the whole of the
+   * phone-scroll fix.
+   *
+   * They are the same gesture to a browser: a finger travelling left across a
+   * row either pans the table or opens the drawer, and whichever claims the
+   * touch first takes it for the whole stream. This was decided per cell —
+   * Title kept `pan-y` for the drawer, the other four overrode to
+   * `manipulation` for the table — on the theory that a reader aims at the
+   * column whose gesture he wants. He does not, and the split failed in the one
+   * direction that matters. Measured on the deployed site at 390px: the
+   * scroller could scroll (clientWidth 358 against scrollWidth 540, nothing in
+   * the ancestor chain clipping it) and Title — pinned, widest, always on
+   * screen, and exactly where a thumb lands — computed `touch-action: pan-y`,
+   * which hands the browser the vertical axis only. The columns this table
+   * exists to draw at a readable width were the ones a phone could not reach,
+   * while a laptop trackpad scrolled it perfectly well through `useSwipe`'s own
+   * `wheel` handler and made the whole thing look fixed.
+   *
+   * One policy for the whole row now, and no cell overrides it: `manipulation`
+   * through `[data-swipe='manipulation'] > td`, plus `useSwipe` declining a
+   * touch outright so there is never a frame where both are moving. Nothing
+   * here becomes unreachable — a tap opens the row, a long press peeks it,
+   * `Status` is a control in its own column, and the drawer is still there for
+   * the mouse and the trackpad on the narrow laptop that renders this table.
+   */
+  const swipe = useSwipe(card.group_key, 3, 'manipulation')
   const press = useLongPress(() => onPeek(card))
 
   return (
@@ -792,11 +801,14 @@ export function CardLine({
         The right edge is a `box-shadow` rather than a border: under
         `border-collapse` the table paints the collapsed borders, not the cell,
         so a border on a pinned cell stays behind at the x it was collapsed at
-        while the cell travels.
+        while the cell travels. It is `pin-edge` rather than the shadow written
+        out here, because an edge on a pinned column is only true while the
+        table is scrolled away from its start — see `styles.css`, and the
+        vertical line down the middle of a phone that this replaces.
       */}
       <td
         className={`${CELL} ${ROW_TITLE} sticky left-0 z-10
-                    shadow-[1px_0_0_0_var(--color-rule)] ${focused ? 'row-cursor' : ''}
+                    pin-edge ${focused ? 'row-cursor' : ''}
                     ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
         style={{ backgroundColor: `var(--color-${groundOf(selected, focused, unseen)})` }}
         title={name}>
@@ -813,7 +825,7 @@ export function CardLine({
         </span>
       </td>
 
-      <td className="py-2 pr-4 align-middle" style={PANS}>
+      <td className="py-2 pr-4 align-middle">
         <Select
           value={card.status}
           options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
@@ -824,21 +836,20 @@ export function CardLine({
       </td>
 
       {/* `15five — Roopi`, not `#15five-truto`. See `contextLine`. */}
-      <td className={`${CELL} ${ROW_SECOND}`} style={PANS} title={where ?? undefined}>
+      <td className={`${CELL} ${ROW_SECOND}`} title={where ?? undefined}>
         {where ?? '—'}
       </td>
 
       {/* Read-only, unlike the laptop's. A deadline is set in the detail, which
           is one tap away and has room for a time of day; an 88px column on a
           phone has room for neither. */}
-      <td className={`${CELL} ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}
-        style={PANS}>
+      <td className={`${CELL} ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}>
         {words ?? '—'}
       </td>
 
       {/* `z-20`, above the pinned Title cell's `z-10`: the drawer is the one
           thing on this row that is supposed to cover the row. */}
-      <td className="sticky right-0 z-20 w-0 p-0 align-middle" style={PANS}>
+      <td className="sticky right-0 z-20 w-0 p-0 align-middle">
         <SwipeDrawer
           dx={swipe.dx} width={swipe.width} onClose={swipe.close}
           {...drawerFor(card, actions)}
@@ -875,6 +886,17 @@ export function CardLine({
  * order, so an open swipe drawer would be read through 32px of gradient at
  * exactly the end where `Delete` sits. The cut-off column and the scrollbar say
  * the same thing without painting over a control.
+ *
+ * It does take `useRail`'s other answer. `data-moved` says the table has been
+ * scrolled off its start, and it is the one thing that makes the pinned Title
+ * column's right edge honest: without it the edge is painted at `scrollLeft: 0`
+ * as well, where there is nothing behind the column for it to mark, and what a
+ * phone showed was a full-height vertical line through a table nobody had
+ * touched. One listener on the scroller answers it for the heading and all
+ * twenty rows, because it is one fact about one scroll position — see
+ * `.pin-edge` in `styles.css`.
+ *
+ * The rows inside it hand the browser both axes; `CardLine` says why.
  */
 export function PhoneTable({
   rows, selectedKey, cursorKey, actions,
@@ -886,10 +908,15 @@ export function PhoneTable({
   actions: RowAction
 }) {
   const [peek, setPeek] = useState<Card | null>(null)
+  const scroller = useRail<HTMLDivElement>()
 
   return (
     <>
-      <div className="overflow-x-auto overscroll-x-contain">
+      <div
+        ref={scroller.ref}
+        data-moved={scroller.moved || undefined}
+        className="overflow-x-auto overscroll-x-contain"
+      >
         <table className="w-full table-fixed border-collapse" style={{ minWidth: PHONE_MIN }}>
           <PhoneCols />
           <PhoneHead />

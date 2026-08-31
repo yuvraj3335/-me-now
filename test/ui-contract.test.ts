@@ -21,6 +21,22 @@ const walk = (dir: string): string[] =>
 const web = walk('src/web')
 const read = (f: string) => readFileSync(f, 'utf8')
 
+/**
+ * A file with its comments removed.
+ *
+ * Several of these contracts ban a *string* — a word the product no longer
+ * says, a URL it must not send anybody to, a command it must not print. The
+ * files that had those things usually explain in prose why they no longer do,
+ * and a note about history is not a label. So anything scanning for a banned
+ * string reads this rather than `read`.
+ */
+const codeOf = (f: string) =>
+  read(f)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter(l => !l.trim().startsWith('//'))
+    .join('\n')
+
 describe('voice never commits anything', () => {
   test('a dictation handler only ever writes into a field', () => {
     // The rule: a transcript lands in an input, and a human still presses the
@@ -324,20 +340,23 @@ describe('the shell reaches everywhere from both places', () => {
   })
 
   test('an open card does not cover the phone bar', () => {
-    // The detail sheet is `fixed bottom-0 z-50` at 55dvh, and the bar is 53px
+    // The detail sheet was `fixed bottom-0 z-50` at 55dvh, and the bar is 53px
     // at `bottom-0` under it: `elementFromPoint` returned something other than
     // the button at all six destinations, and the screenshots show no bar at
-    // all. Desk → Mail cost a dismissal first. This is a push sheet — the list
-    // stays live underneath it — so the shell has to stay live under that.
+    // all. Desk → Mail cost a dismissal first.
+    //
+    // The detail is a full page now rather than a sheet, and the rule survives
+    // that intact: it fills everything above `--nav-h` and nothing below it.
+    // `inset-0` is the one-word way to undo this, so it is the one word pinned.
     const css = read('src/web/styles.css')
     expect(css, 'the strip the bar owns is no longer measured anywhere')
       .toMatch(/--nav-h:/)
     const home = read('src/web/pages/Home.tsx')
-    const sheet = home.slice(home.indexOf('function PushDetail('))
-    expect(sheet, 'the sheet went back to sitting on the bottom edge')
+    const page = home.slice(home.indexOf('function DetailPage('))
+    expect(page, 'the phone detail went back to sitting on the bottom edge')
       .toMatch(/bottom: 'var\(--nav-h\)'/)
-    expect(sheet, 'the sheet can grow over the bar again')
-      .toMatch(/maxHeight: '[^']*--nav-h/)
+    expect(page, 'the phone detail covers the tab bar again')
+      .not.toMatch(/\binset-0\b/)
   })
 
   test('the filter and the open row both live in the URL', () => {
@@ -400,20 +419,61 @@ describe('nothing waits on a frame in a hidden document', () => {
   })
 })
 
-describe('the hand-off has to be a real link', () => {
-  test('Open in Claude is an anchor, not a scripted window.open', () => {
-    // This is the whole reason the flow has two steps. On iOS,
-    // `https://claude.ai/…` is a universal link and only a genuine link
-    // navigation hands it to the Claude app; `window.open(url)` after an await
-    // lands in Safari instead, which is exactly what this change was for.
+describe('the hand-off reaches a session, not a chat', () => {
+  /**
+   * AMENDED, deliberately — and this one was asserting the bug.
+   *
+   * It used to require that the commit be a real `<a href={link.url}>` with a
+   * `target="_blank"`, on sound reasoning about a destination that is no longer
+   * the destination: `https://claude.ai/…` is a universal link on iOS, and only
+   * a genuine link navigation hands it to the Claude app, so `window.open`
+   * after an await landed in Safari instead.
+   *
+   * All of that was true of the Claude **chat** surface, which is a different
+   * product from Claude Code: a new conversation every time, no repository, no
+   * tools, nothing to resume. The commit now POSTs to `/api/claude/terminals`,
+   * which starts or resumes a real session on this box, and navigates to the
+   * page showing it. There is no URL to put on a link, so the shape the old
+   * assertion pinned would now have to be faked to satisfy it.
+   *
+   * What replaces it is the thing that was actually worth guarding: nothing on
+   * this surface may send him to claude.ai, and nothing may hand him a command
+   * line to run himself.
+   */
+  test('the commit opens a Claude Code session on this box', () => {
     const sheet = read('src/web/components/launch.tsx')
-    // An anchor with a real href and target=_blank, not a button that navigates.
-    // The variable name is not the contract; the element is.
-    const anchor = /<a\b[\s\S]{0,400}?href=\{[^}]*\.url\}[\s\S]{0,400}?target="_blank"/
-    expect(sheet, 'the Open control is no longer a real link').toMatch(anchor)
-    expect(sheet, 'the hand-off went back to a scripted open').not.toMatch(/window\.open\s*\(/)
-    // preventDefault on that click would cancel the navigation the link exists for.
-    expect(sheet, 'the hand-off cancels its own navigation').not.toMatch(/preventDefault/)
+
+    // The one call, with the edited brief. `openTerminalAndGo` records the
+    // hand-off, writes the brief back to the pack file and starts the session.
+    expect(sheet, 'the sheet no longer starts a session')
+      .toMatch(/openTerminalAndGo\(\{\s*packId,\s*brief\s*\}\)/)
+
+    // Not both. `POST /packs/:id/open` does the same recording and starts its
+    // own session, so calling it as well would leave two running for one brief.
+    expect(codeOf('src/web/components/launch.tsx'), 'the sheet starts two sessions for one brief')
+      .not.toMatch(/launchApi\.open\(/)
+
+    for (const f of web) {
+      expect(codeOf(f), `${f}: something still sends him to the Claude chat surface`)
+        .not.toContain('claude.ai')
+    }
+  })
+
+  test('no surface prints a command for him to run', () => {
+    // The defined failure of this work: a UI whose final act is a
+    // `claude --resume <uuid>` line to copy and paste into a terminal he has to
+    // go and find. Wake resumes the session itself now, so the string has no
+    // reason to be built anywhere in the browser.
+    //
+    // Read with the comments removed, like the dead-words scan below and for
+    // the same reason: three files explain in prose what this product used to
+    // print, and a note about history is not a label.
+    for (const f of web) {
+      const src = codeOf(f)
+      expect(src, `${f}: a resume command came back`).not.toMatch(/claude --resume/)
+      expect(src, `${f}: something is offering to copy a resume command`)
+        .not.toMatch(/resumeCommand|Copy resume/)
+    }
   })
 
   /**
@@ -431,9 +491,22 @@ describe('the hand-off has to be a real link', () => {
    * So the ban is gone and the invariant it was standing in for is written down
    * instead: exactly one spawn site, non-interactive, read-only, bounded. Every
    * clause below is a way Fetch could quietly turn into an agent.
+   *
+   * AMENDED AGAIN. There is a second spawn site now — `claudecode/terminal.ts`,
+   * which starts the interactive session the launch sheet commits to. That is
+   * not a hole in DECISIONS #26; it is the sentence #26 was actually about. The
+   * ban existed because a headless `claude` has no terminal, so nobody sees its
+   * output and nobody can answer its permission prompts. This one is a real
+   * terminal on a real pty that the operator is looking at, which is the exact
+   * condition #26 asked for and could not previously be met.
+   *
+   * So the list is two named files rather than one, and each is pinned to being
+   * what it claims: the collector may never become interactive, and the terminal
+   * may never become headless.
    */
   test('Fetch is the only thing that starts a model, and it starts a bounded read-only one', () => {
     const COLLECTOR = 'src/server/fetch/claude.ts'
+    const TERMINAL = 'src/server/claudecode/terminal.ts'
     const spawnSites: string[] = []
 
     for (const f of walk('src/server')) {
@@ -446,13 +519,21 @@ describe('the hand-off has to be a real link', () => {
         /Bun\.spawn(?:Sync)?\(\s*\[\s*['"`]claude/.test(src)
       if (startsProcesses && namesTheBinary) spawnSites.push(f)
 
-      // `env.ts` declares it, the collector uses it, and that is the whole list.
-      if (f === COLLECTOR || f.endsWith('src/server/env.ts')) continue
-      expect(src, `${f}: a second file reaches for the claude binary`).not.toContain('CLAUDE_BIN')
+      // `env.ts` declares it; the collector and the terminal are the two files
+      // allowed to use it, and that is the whole list.
+      if (f === COLLECTOR || f === TERMINAL || f.endsWith('src/server/env.ts')) continue
+      expect(src, `${f}: a third file reaches for the claude binary`).not.toContain('CLAUDE_BIN')
     }
 
-    expect(spawnSites, 'the claude binary is spawned somewhere other than Fetch\'s collector')
-      .toEqual([COLLECTOR])
+    expect(spawnSites.sort(), 'the claude binary is spawned somewhere new')
+      .toEqual([TERMINAL, COLLECTOR].sort())
+
+    // The terminal's own half of the bargain: interactive, and watched. A
+    // session started with `--print` is the headless process DECISIONS #26
+    // banned, wearing this file's name.
+    const terminal = read(TERMINAL)
+    expect(terminal, 'the interactive session went headless')
+      .not.toMatch(/'--print'|"--print"/)
 
     const collector = read(COLLECTOR)
 
@@ -527,21 +608,98 @@ describe('the brief is reviewable before it goes', () => {
   const sheet = read('src/web/components/launch.tsx')
 
   test('the text handed over is the text in the editor', () => {
-    // Wake renders a first draft; what goes is what was approved. A link built
-    // from anything other than the edited field would make the review theatre.
-    expect(sheet).toMatch(/handoffFor\(brief,/)
-    expect(sheet).toMatch(/launchApi\.open\(packId, brief\)/)
+    // Wake renders a first draft; what goes is what was approved. A session
+    // started from anything other than the edited field would make the review
+    // theatre.
+    //
+    // AMENDED. This used to read `handoffFor(brief,` and `launchApi.open(packId,
+    // brief)` — the two calls that built a `claude.ai/new?q=<brief>` URL and
+    // recorded the hand-off after the tab had opened. Both are gone, and the
+    // first of them was the bug: it pinned the *chat* surface in place. What it
+    // was actually protecting is unchanged and is pinned here instead — the
+    // state variable the textarea writes is the state variable the commit
+    // sends, and one call does it.
+    expect(sheet, 'the editor stopped being the source of what is sent')
+      .toMatch(/onChange=\{e => setBrief\(e\.target\.value\)\}/)
+    expect(sheet, 'the commit stopped carrying the edited brief')
+      .toMatch(/openTerminalAndGo\(\{[^}]*\bbrief\b[^}]*\}\)/)
+  })
+
+  test('the brief is not measured against a budget that no longer exists', () => {
+    // `N / 12,000` and `Trimmed to 12,000` were true of a URL a browser will
+    // refuse past a length. A brief handed to a process on this box is passed
+    // whole, so a counter under the field would be a number measuring nothing —
+    // on the one surface whose entire job is to be read before it is trusted.
+    expect(sheet, 'the sheet is building a chat URL again')
+      .not.toContain("from '../../shared/handoff'")
+    const spoken = codeOf('src/web/components/launch.tsx')
+    for (const dead of ['maxChars', 'link.trimmed', 'Trimmed to', 'handoffFor']) {
+      expect(spoken, `the URL budget came back to the sheet: ${dead}`).not.toContain(dead)
+    }
   })
 
   test('the brief and the instruction can both be dictated', () => {
     expect([...sheet.matchAll(/<Mic\b/g)].length, 'a Mic went missing').toBeGreaterThanOrEqual(2)
   })
 
-  test('the count comes from the same code the link does', () => {
-    // Two implementations of "how much fits" drift, and the failure is the worst
-    // kind: the editor says it all fits and the link quietly carries less.
-    expect(sheet).toContain("from '../../shared/handoff'")
+  test('the shared handoff arithmetic still has exactly one implementation', () => {
+    // The sheet no longer counts anything, but `src/shared/handoff.ts` is still
+    // on the wire and `/state` still serves its config. While that is true the
+    // rule it was written for holds: one implementation of "how much fits",
+    // rather than one on each side quietly disagreeing.
     expect(read('src/server/claudecode/handoff.ts')).toContain("from '../../shared/handoff'")
+  })
+})
+
+/**
+ * The two lists on the sheet that are not lists of the same kind of thing.
+ *
+ * Both of these are rules about what a *shape* says. A flat list of eleven rows
+ * says "pick one of eleven jobs", and a count printed off an array says "this is
+ * all of it" — neither is a sentence anybody wrote, and neither can be caught by
+ * reading the rendered screen, because in both cases the wrong version looks
+ * completely normal.
+ */
+describe('the sheet does not lie with its shape', () => {
+  const sheet = read('src/web/components/launch.tsx')
+
+  test('a voice template is not an eleventh thing to investigate', () => {
+    // Selecting `Humanizer` must visibly not deselect `Customer incident`. The
+    // list has always been multi-select; what was missing was any sign of it,
+    // and eleven identical rows is the sign pointing the other way.
+    expect(sheet, 'the picker stopped splitting the voice rows out')
+      .toMatch(/kind === 'voice'/)
+    expect(sheet, 'the voice rows lost the heading that says what they are')
+      .toMatch(/Voice, worn over the above/)
+
+    // And it degrades to exactly what it replaced. `kind` is optional on the
+    // wire — `/state` may not forward it yet — so absent has to read as
+    // `investigation`, which means testing for the absence of `voice` rather
+    // than for the presence of the other value.
+    expect(sheet, 'an absent kind stopped reading as an investigation')
+      .toMatch(/kind !== 'voice'/)
+    // A heading over nothing is worse than no heading.
+    expect(sheet, 'the voice heading can be printed with no rows under it')
+      .toMatch(/voice\.length > 0/)
+  })
+
+  test('the size of a thread is Slack’s number, not the length of the array', () => {
+    // Only the newest twenty replies are stored per card. `replies.length` is
+    // what Wake holds; `reply_total` is how many there are. Printing the first
+    // as the second reports a forty-message thread as a twenty-message one, and
+    // nothing on screen says which number is being read.
+    expect(sheet, 'the reply count went back to counting the array')
+      .toMatch(/reply_total/)
+    expect(sheet, 'a count is being taken off the stored replies')
+      .not.toMatch(/messageWord\([^)]*replies\.length/)
+  })
+
+  test('a row with no replies renders nothing at all', () => {
+    // Not an empty state, not a placeholder, not a `0 replies` line. The parent
+    // is already an attachment above, so a section here would be a heading over
+    // a fact that is on screen twice.
+    expect(sheet, 'the Slack section stopped filtering out threads with nothing under them')
+      .toMatch(/threads\.filter\(t => t\.replies\.length > 0\)/)
   })
 })
 
@@ -1152,16 +1310,16 @@ describe('reading a row is what clears it', () => {
       .not.toMatch(/resting=\{!selectedKey\}/)
   })
 
-  test('and the phone sheet says it too', () => {
-    // The sheet is gated on `selectedKey`, which is still set in every case
+  test('and the phone page says it too', () => {
+    // The page is gated on `selectedKey`, which is still set in every case
     // `shown` falls back to the top row — so a `CardDetail` rendered here
     // without `resting` acknowledges a card nobody opened, at the width he
     // actually reads on. Every viewport below the pane width takes this path.
-    const sheet = home.slice(home.indexOf('function PushDetail('))
-    expect(sheet, 'the sheet stopped passing the flag through to the detail')
+    const page = home.slice(home.indexOf('function DetailPage('))
+    expect(page, 'the phone page stopped passing the flag through to the detail')
       .toMatch(/<CardDetail[^>]*resting=\{resting\}/)
-    expect(home, 'the desk stopped telling the sheet it is resting')
-      .toMatch(/<PushDetail card=\{shown\} resting=\{!selected\}/)
+    expect(home, 'the desk stopped telling the phone page it is resting')
+      .toMatch(/<DetailPage card=\{shown\} resting=\{!selected\}/)
   })
 
   test('nothing else on the desk acknowledges anything', () => {

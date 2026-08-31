@@ -145,6 +145,32 @@ export function setParam(key: string, value: string | null) {
   sync()
 }
 
+/* ---------------------------- the terminal -------------------------------- */
+
+/**
+ * `/terminal/<session-id>`, the one destination that is not a tab.
+ *
+ * A real path rather than a query parameter or a fragment, because a live Claude
+ * Code session is a place: it is deep-linkable, it is what a push notification
+ * about a session should point at, and it renders full-viewport with the rails
+ * and the phone tab bar gone. `#card/` is a detail *of* a page; this is not.
+ *
+ * Parsed here rather than in `App.tsx` so the shape of the URL is written down
+ * once, next to every other rule about what this product's addresses mean.
+ */
+const TERMINAL = '/terminal/'
+
+export function terminalIdOf(path: string): string | null {
+  if (!path.startsWith(TERMINAL)) return null
+  try {
+    // A trailing slash is the same place, not a different one.
+    const id = decodeURIComponent(path.slice(TERMINAL.length)).replace(/\/+$/, '')
+    return id || null
+  } catch {
+    return null
+  }
+}
+
 /* --------------------------- the open detail ------------------------------ */
 
 const CARD = 'card/'

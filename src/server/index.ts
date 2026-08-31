@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { api } from './api'
 import { boot } from './boot'
+import { terminalSocket, websocket } from './claudecode/terminalSocket'
 import { originGuard, sweepConfirmations } from './security'
 import { HOST, PORT, POLL_INTERVAL_MS, PUBLIC_URL, REMINDER_TICK_MS, IS_DEV } from './env'
 import { ingest } from './ingest'
@@ -38,6 +39,18 @@ app.get('/healthz', c =>
     uptime: Math.round(process.uptime()),
   }),
 )
+
+/**
+ * The terminal socket, mounted above `/api` rather than inside it.
+ *
+ * A WebSocket upgrade cannot travel through Hono's normal response path — Bun
+ * has to see the upgrade on the way in, which is why `createBunWebSocket`
+ * returns a `websocket` handler that belongs on the serve options at the bottom
+ * of this file rather than on a router. Registering the route here, before
+ * `app.route('/api', …)`, is what puts it in front of the sub-app that would
+ * otherwise answer the same path with a 404.
+ */
+app.route('/', terminalSocket)
 
 app.route('/api', api)
 
@@ -114,7 +127,7 @@ if (!process.env.WAKE_NO_SCHEDULER) {
 
 const b = boot()
 console.log(`workspace: ${b.repos} repos, ${b.skills} skills indexed`)
-console.log(`hand-off: ${b.handoff}`)
+console.log(`claude code: ${b.terminal}`)
 
 console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${IS_DEV ? '  [dev]' : ''}`)
 
@@ -128,4 +141,12 @@ console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${
  * and the result is polled, so nothing depends on this; it is raised anyway
  * because a slow poll of five sources is the same shape of request.
  */
-export default { port: PORT, hostname: HOST, fetch: app.fetch, idleTimeout: 255 }
+/**
+ * `websocket` is not optional decoration.
+ *
+ * Bun routes an upgraded socket's open/message/close events through the handler
+ * on *this object*, not through anything the Hono route returned. Without this
+ * key the upgrade succeeds and then nothing ever arrives — a terminal that
+ * connects, renders an empty screen and never reports why.
+ */
+export default { port: PORT, hostname: HOST, fetch: app.fetch, websocket, idleTimeout: 255 }

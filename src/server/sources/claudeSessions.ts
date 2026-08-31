@@ -573,10 +573,26 @@ export const claudeSessions: SourceAdapter = {
     const cards: RawCard[] = []
     // The card pile is the one caller that wants the poll lookback applied.
     const window = Math.min(LOOKBACK_DAYS, SESSION_WINDOW_DAYS)
-    for (const { file: f, info: s } of scanSessions(MAX_SESSIONS, window)) {
+    /*
+     * Which of these is running right now, from Claude Code's own per-process
+     * files rather than from a transcript's mtime.
+     *
+     * The two are genuinely different facts and the desk needs both. An mtime
+     * says a session was *written to* recently, which a finished session
+     * satisfies just as well as a live one — so "he came back to this five
+     * minutes ago and it is still open" had no representation anywhere in the
+     * card pile, and a session becoming live again moved nothing. `activity_at`
+     * in `api.ts` reads `meta.live_at` for exactly that trigger.
+     */
+    const live = liveSessions()
 
-      // A stub or a one-shot question is not work you are in the middle of.
-      if (s.userTurns < MIN_TURNS && !s.title) continue
+    for (const { file: f, info: s } of scanSessions(MAX_SESSIONS, window)) {
+      const running = live.get(s.id) ?? null
+
+      // A stub or a one-shot question is not work you are in the middle of —
+      // unless it is open on this machine at this moment, which settles the
+      // question the turn count was being used to guess at.
+      if (!running && s.userTurns < MIN_TURNS && !s.title) continue
 
       const { cwd, project: projectName } = placeOf(s, f)
       const prompt = cleanPrompt(s.lastPrompt)
@@ -633,10 +649,33 @@ export const claudeSessions: SourceAdapter = {
           session_id: s.id,
           cwd,
           branch: s.branch,
+          /*
+           * Open on this machine right now, and since when.
+           *
+           * `live_at` is the process's own start time rather than `Date.now()`,
+           * which matters for the sort: a live session re-stamped on every poll
+           * would pin itself to the top of the desk for as long as it stayed
+           * open, and would say "just now" about a conversation nobody has
+           * touched since breakfast. The start time is fixed for the life of the
+           * process, so the row moves up once — when the session became live —
+           * and then sits still.
+           */
+          live: !!running,
+          live_at: running?.startedAt || null,
           // The mode it was actually last running under, so the brief can say
           // so rather than assume. Wake's own default is a separate claim.
           permission_mode: s.permissionMode,
-          resume_cmd: `claude --resume ${s.id}`,
+          /*
+           * No `resume_cmd` here, deliberately.
+           *
+           * This used to carry `claude --resume <id>` and the detail pane
+           * printed it for him to copy into a terminal he had to go and find.
+           * A session is reachable from the browser now — `/terminal/<id>`, on
+           * a laptop and on a phone — so a shell line is both redundant and the
+           * worse of the two answers, and a card that offers it is a card
+           * teaching the wrong route. `session_id` above is what a link is
+           * built from, and it is all the UI needs.
+           */
           turns: s.userTurns,
           pr: s.pr,
         },

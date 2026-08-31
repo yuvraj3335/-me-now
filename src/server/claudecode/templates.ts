@@ -22,6 +22,15 @@
  * QA lead — because the failure these replace was one voice doing a shallow
  * pass on six different questions.
  *
+ * One row in this list is not an investigation at all. `humanizer` is a *voice*
+ * template: it says nothing about what to find out and everything about how the
+ * last message reads. It is meant to be worn over one of the others, which is
+ * why its own text opens by saying so — `buildPack` concatenates the selected
+ * instructions in the order they were clicked, and nothing in this file gets to
+ * reorder that list. A section that governs only the reply therefore has to
+ * announce what it governs, or a session that meets it above `Customer
+ * incident` reads it as the first step of the investigation. See `kind` below.
+ *
  * **1,200 characters each, hard.** The instruction is inlined into the brief and
  * the brief is trimmed at `HANDOFF_MAX_CHARS`; three long ones selected together
  * push the packed Slack and Sentry evidence out of the link, which is exactly
@@ -40,6 +49,21 @@ export type Template = {
   id: string
   label: string
   blurb: string
+  /**
+   * What selecting this row actually does.
+   *
+   * `investigation` is every original row: it says what to establish, who to
+   * put on it, and what to hand back. `voice` says none of that — it governs
+   * the wording of the message that leaves at the end, and is meant to be worn
+   * over an investigation rather than instead of one.
+   *
+   * Optional, and absent means `investigation`, because that is what all ten
+   * rows predating this field are and restating it ten times would be noise.
+   * The distinction lives on the type rather than in the blurb's prose so the
+   * picker can render a modifier as a modifier, instead of as an eleventh thing
+   * to investigate that happens to be about words.
+   */
+  kind?: 'investigation' | 'voice'
   /** Item kinds this template is built to receive, in the order it wants them. */
   slots: SlotKind[]
   /** Repository name to default the working directory to, if it is present. */
@@ -245,13 +269,32 @@ DO NOT. Refresh credentials, mint tokens, or change the account. Report only.`,
   {
     id: 'continue-session',
     label: 'Continue earlier work',
-    blurb: 'Carry a session already underway on the DevBox into a fresh conversation.',
+    blurb: 'Pick a session up where it stopped, in the repository it stopped in.',
     slots: ['session', 'task', 'note'],
     defaultRepo: null,
     skills: [],
-    instruction: `Pick up the work below. It comes from a Claude Code session on my machine, quoted here as context.
+    /*
+     * This instruction used to open by telling the session it was not itself.
+     *
+     * "You are not resuming that session and you cannot: a link opens a new
+     * conversation, so the transcript is not loaded" was true of the hand-off
+     * that shipped this template — a `claude.ai/new?q=` link, which really did
+     * start a stranger every time. It is now false, and it is false in the worst
+     * possible place: this text is the first message *inside* the resumed
+     * session, so a session that had the whole transcript above it was being
+     * told, in its own words, that it had none.
+     *
+     * The replacement does not assert the opposite either, because both cases
+     * are still real: pick a session and the brief lands in that session with
+     * its history above it; pick a new conversation and the same session's tail
+     * arrives quoted, in the same repository. One sentence cannot know which, so
+     * this asks rather than claims — and "check what you can actually see" is
+     * the right first move under either, which is why it reads as one
+     * instruction instead of two branches.
+     */
+    instruction: `Pick up the work below. It comes from a Claude Code session on this machine, in the repository named above.
 
-You are not resuming that session and you cannot: a link opens a new conversation, so the transcript is not loaded — only what is quoted below is. Treat it as a handover note from someone who has stopped talking, not as a conversation you are still in. If the work turns on something that would have been in the part I did not send, say so and ask instead of reconstructing it.
+You may be that session, resumed — with everything above this message already yours — or a new one in the same working directory, holding only what is quoted here. Look before you answer: if the earlier turns are above you, use them; if all you have is the quote, treat it as a handover note from someone who has stopped talking and say so. Do not reconstruct from memory what you cannot see, and do not re-ask me for anything that is in front of you.
 
 ESTABLISH. Where it got to, in your own words, before you carry on. If your reading differs from what the last prompt implies, say so — that gap is usually the reason the session stopped.
 
@@ -269,6 +312,54 @@ DO NOT. Redo work the quote shows is already done, and do not commit or push.`,
     defaultRepo: null,
     skills: [],
     instruction: NO_REPASTE,
+  },
+  {
+    /**
+     * The last row, because it is the last thing that happens.
+     *
+     * Every template above ends in a draft — "draft reply", "the reply text, in
+     * my voice", "a short brief for me, then the reply" — and every one of them
+     * spends its 1,200 characters on the finding rather than on the sentence.
+     * So the sentence came back in whatever register the model reaches for by
+     * default, which is a blog post with a greeting on it. This row is the
+     * register, kept in one place, selectable on top of any of them.
+     *
+     * It sits below `Blank` in the picker on purpose. The list above it is a
+     * list of jobs and you pick one; this is not another job, and putting it in
+     * the middle of them would read as though choosing it meant not choosing
+     * `Customer incident`.
+     */
+    id: 'humanizer',
+    label: 'Humanizer',
+    kind: 'voice',
+    blurb: 'How the reply reads, not what to look into. Wear it over any template above.',
+    // Every kind, like `blank`, and for the inverse reason: `blank` accepts
+    // anything because it assumes nothing, this accepts anything because what
+    // is attached has no bearing on how a sentence should sound.
+    slots: ['card', 'task', 'mail', 'slack', 'sentry', 'notion', 'github', 'session', 'note'],
+    defaultRepo: null,
+    // A skill, not a second copy of the rules. The instruction below stands on
+    // its own — a box without this catalog still gets the whole voice — and the
+    // skill is where the longer version lives: the worked before/after pairs
+    // that will not fit in 1,200 characters.
+    skills: ['humanizer-voice'],
+    // Not NO_REPASTE. That clause promises the identifiers are below and offers
+    // a repository to work in, and neither half has anything to say to a
+    // template whose entire subject is a sentence. What it keeps is the promise
+    // that matters here: I am not being asked to write it myself.
+    instruction: `Do not ask me to re-paste anything. Do not ask me to write the reply myself — write it.
+
+VOICE. This section governs the words I will send, and nothing else. It replaces nothing else in this brief: the rest still says what to investigate, and none of it is softened. Where the work ends in a reply or an explanation, this is how it reads.
+
+OBJECTIVE. Write what I paste into Slack. A person typed it, to someone waiting. Not a blog post, not a status report.
+
+HOW IT READS. Short sentences. One idea each. The plainest word that is still exact. The fact, then the cause if it is known, then the next step. Nothing else. If the cause is not known, say that in one sentence and say what happens next — do not pad the gap.
+
+SUBAGENTS. A QA lead to read the draft back and cut any sentence that is not a fact, a cause or a next step.
+
+DELIVER. The message itself, ready to paste, and nothing around it.
+
+DO NOT. No headings, no bullet-point essay, no greeting, no sign-off, no apology padding, no jargon, no filler. Never: "happy to help", "great question", "as an AI", "I hope this helps", "let me know if you have any questions", "circle back", "reach out", "deep dive", "leverage", "utilize".`,
   },
 ]
 

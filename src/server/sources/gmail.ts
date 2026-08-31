@@ -122,7 +122,28 @@ export const gmail: SourceAdapter = {
         const senderRaw = plainText(th.sender ?? last?.sender ?? last?.from)
         const snippet = plainText(th.snippet ?? last?.snippet)
         const body = plainBody(last?.plaintextBody ?? '')
-        const ts = Date.parse(th.date ?? last?.date ?? '') || Date.now()
+        /*
+         * When the newest thing on this thread happened.
+         *
+         * `th.date` is the thread's own stamp and is *usually* its newest
+         * message. "Usually" is not good enough for the number the desk sorts
+         * on: a payload that stamps a thread with the date it *started* leaves a
+         * conversation answered this morning sitting under one nobody has
+         * touched since Tuesday, and there is nothing on the row to say why.
+         * The messages array is already in hand — it is what `activity` in
+         * `api.ts` counts replies out of — so the newest of it is read directly
+         * rather than trusted to be the same fact by another name.
+         *
+         * The trailing `0` is not decoration: `Math.max()` of nothing is
+         * `-Infinity`, and a thread whose messages all carry unparseable dates
+         * would land on the desk stamped before the epoch.
+         */
+        const ts =
+          Math.max(
+            Date.parse(th.date ?? last?.date ?? '') || 0,
+            ...msgs.map(m => Date.parse(m.date ?? '') || 0),
+            0,
+          ) || Date.now()
 
         // Directly addressed beats bulk: a thread with me in To: is on me, a
         // thread I am merely cc'd on is not.

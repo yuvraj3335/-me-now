@@ -27,7 +27,7 @@ const card = (over: Partial<Card>): Card => ({
   group_key: 'slackthread:C04D9HKDWAV:1787812499.720579',
   pile: 'now', title: 'a thread', why: 'you were mentioned in #truto',
   url: 'https://truto.slack.com/archives/C1/p1', kind: 'mention',
-  ts: 1_787_812_499_720, first_seen_at: 1_787_000_000_000,
+  ts: 1_787_812_499_720, activity_at: 1_787_812_499_720, first_seen_at: 1_787_000_000_000,
   status: 'not_started', priority: 2, due_at: null,
   activity: { count: 0, tagged: false, at: null },
   meta: {}, sources: [], state: null, tasks: [], ...over,

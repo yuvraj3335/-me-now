@@ -286,6 +286,77 @@ export const HANDOFF_PARAM = str('WAKE_HANDOFF_PARAM', 'q')
 export const HANDOFF_MAX_CHARS = num('WAKE_HANDOFF_MAX_CHARS', 12_000)
 
 /* -------------------------------------------------------------------------- */
+/* The terminal — where a brief actually lands                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three binaries a live session needs, and why each one is here.
+ *
+ * `tmux` holds the session. It is the only piece that survives Wake restarting,
+ * the browser closing and the network going away, and it is what lets a laptop
+ * and a phone look at one screen at the same time. Writing that ourselves would
+ * be a worse tmux.
+ *
+ * `python3` is the pseudo-terminal — see `ptybridge.py` for why a native module
+ * is not an option on this runtime.
+ *
+ * `CLAUDE_BIN` is the same one Fetch borrows, and it is still allowed to be
+ * empty. Empty means "this machine cannot start a session", which the terminal
+ * routes answer with a 503 naming the missing piece rather than a stack trace.
+ */
+export const TMUX_BIN = str('WAKE_TMUX_BIN', 'tmux')
+export const PYTHON_BIN = str('WAKE_PYTHON_BIN', 'python3')
+
+/**
+ * A tmux server of Wake's own, not the operator's.
+ *
+ * `tmux -L wake` is a separate socket with a separate server and a separate
+ * session namespace. It buys two things that are worth the flag on every call:
+ * `list-sessions` can only ever return sessions Wake started, so "which sessions
+ * may this API touch" is answered by the socket rather than by a name filter
+ * somebody could spoof; and a `kill-server` here can never take down the tmux
+ * he is personally working in.
+ */
+export const TERMINAL_TMUX_SOCKET = str('WAKE_TMUX_SOCKET', 'wake')
+
+/**
+ * The prefix a Wake-started tmux session's name carries.
+ *
+ * Belt as well as braces. The socket already isolates them; this makes a name
+ * that arrived in a request visibly wrong rather than merely unmatched, and it
+ * is what `sessionIdFromTmuxName` reads back.
+ */
+export const TERMINAL_NAME_PREFIX = 'wake-'
+
+/**
+ * The size a session is born at, before a browser says otherwise.
+ *
+ * Not a guess about a screen — a floor. tmux fixes a detached session's window
+ * at whatever it was created with, and Claude Code lays out its boxes against
+ * that, so a session created at 80x24 renders a cramped screen for the seconds
+ * before the first attach resizes it. 120x34 is a laptop, which is the shape
+ * most of these are read on first.
+ */
+export const TERMINAL_COLS = num('WAKE_TERMINAL_COLS', 120)
+export const TERMINAL_ROWS = num('WAKE_TERMINAL_ROWS', 34)
+
+/** Where the size files a resize is passed through live. One per attachment. */
+export const TERMINAL_SIZE_DIR = str('WAKE_TERMINAL_SIZE_DIR', `${DATA_DIR}/terminals`)
+
+/**
+ * Claude Code's own config, read for exactly one fact: has this directory been
+ * trusted yet.
+ *
+ * Read-only, and deliberately so. A directory Claude Code has never seen makes
+ * it show a one-time "Is this a project you trust?" dialog before the session
+ * starts, and the honest thing to do about that is *say so* on the way in — not
+ * to write `hasTrustDialogAccepted: true` into somebody's config on their
+ * behalf. Answering a trust prompt is the operator's to do, and the terminal is
+ * a real terminal, so he can.
+ */
+export const CLAUDE_CONFIG_PATH = str('WAKE_CLAUDE_CONFIG', `${homedir()}/.claude.json`)
+
+/* -------------------------------------------------------------------------- */
 /* Voice                                                                      */
 /* -------------------------------------------------------------------------- */
 

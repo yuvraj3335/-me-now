@@ -97,6 +97,22 @@ export type Card = {
   url: string
   kind: string
   ts: number
+  /**
+   * When this row last had something happen on it, and the reason it sits where
+   * it does. The desk is ordered `pinned → pile → activity_at DESC`, on every
+   * surface, and that is the whole of it — nothing in the browser re-derives it.
+   *
+   * Computed on the server as the union of every member's `ts` with the
+   * per-message facts the card carries: a Slack reply's ts, a Gmail message's,
+   * `meta.last_reply_at`, and `meta.live_at` for a Claude Code session that is
+   * open on this machine right now. See `activityAt` in `src/server/api.ts` for
+   * the per-source table.
+   *
+   * `ts` is set to the same number. They are one clock on purpose: a row at the
+   * top of the list printing an age from three days ago, with nothing on screen
+   * to explain the gap, is two facts where there should be one.
+   */
+  activity_at: number
   first_seen_at: number
   /**
    * What has landed on this since he last looked at it, computed once on the

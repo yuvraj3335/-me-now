@@ -68,8 +68,15 @@ export type SwipeBind = {
  *     pan mid-gesture and cancelled. `none` gives the row's whole gesture to the
  *     app, which is what framer's own drag wants anyway; it costs nothing,
  *     because `pan-x` had already given up vertical scrolling on those rows.
+ *
+ * `manipulation` is the third, and it is a row that *loses* this argument on
+ * purpose: a row inside a table that scrolls sideways. There the horizontal
+ * axis is the only way to reach half the columns, so the browser gets it and a
+ * finger scrolls the table. See the phone desk in `CardTable.tsx` and the rule
+ * in `styles.css` for the measurement behind that, and `takesTouch` below for
+ * the half of it a stylesheet cannot say.
  */
-export type SwipeTouch = 'pan-y' | 'none'
+export type SwipeTouch = 'pan-y' | 'none' | 'manipulation'
 
 /**
  * Bind a row to the gesture.
@@ -81,6 +88,26 @@ export function useSwipe(
 ) {
   const width = swipeWidth(actionCount)
   const open = useOpenSwipe() === key
+
+  /**
+   * Whether a finger on this row is this gesture's at all.
+   *
+   * The stylesheet says which axes the browser may claim, and that is most of
+   * the answer — but it is a race rather than a rule. A row that yields both
+   * axes still receives `pointerdown` and the first `pointermove`, and a fast
+   * flick can deliver twenty pixels of travel in that first move: the drawer
+   * engages, the browser then decides the same touch is scrolling the table,
+   * and both are true for the frame or two before `pointercancel` lands. A
+   * drawer flashing open under a scroll is the exact failure this file's
+   * engagement threshold exists to prevent, arriving from the other side. So on
+   * those rows a touch is never a swipe, said once, in the only place that can
+   * see what kind of pointer this is.
+   *
+   * A mouse and a pen are untouched, which is what keeps the drawer working on
+   * the narrow laptop that renders the same table — and a trackpad never came
+   * through here at all, it comes through `wheel` below.
+   */
+  const takesTouch = touch !== 'manipulation'
 
   const [dx, setDx] = useState(0)
   /** The offset as of this instant, for handlers that fire between renders. */
@@ -254,6 +281,9 @@ export function useSwipe(
     onPointerDown: e => {
       // Secondary buttons are a context menu's business, not a drawer's.
       if (e.button > 0) return
+      // And a finger on a row whose table scrolls sideways belongs to the
+      // table, not to this. See `takesTouch`.
+      if (!takesTouch && e.pointerType === 'touch') return
       from.current = { x: e.clientX, y: e.clientY, base: dxRef.current }
       axis.current = 'undecided'
       engaged.current = false

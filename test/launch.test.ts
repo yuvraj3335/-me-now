@@ -595,15 +595,31 @@ describe('the instructions direct the work', () => {
     expect(t.instruction.toLowerCase()).toContain('do not guess an environment')
   })
 
-  test('continue-session says why it is not a resume', () => {
+  test('continue-session never tells a resumed session it was not resumed', () => {
     const t = getTemplate('continue-session')!
-    expect(t.instruction).toContain('not resuming')
-    expect(t.instruction, 'it asserts it without saying why').toContain('new conversation')
+    // This text is the first message *inside* the session it describes. The old
+    // version opened "You are not resuming that session and you cannot", which
+    // was true of the `claude.ai/new?q=` hand-off and is now false — and false
+    // in the worst place, since a session with its whole transcript above it was
+    // being told in its own words that it had none. DECISIONS.md #39.
+    expect(t.instruction).not.toContain('not resuming')
+    expect(t.instruction).not.toContain('and you cannot:')
+    expect(t.instruction).not.toContain('new conversation')
+    expect(t.blurb).not.toContain('fresh conversation')
+
+    // It does not assert the opposite either: picking a session resumes it,
+    // picking a new conversation quotes it into a fresh one in the same
+    // repository, and one sentence cannot know which. So it tells the session to
+    // look rather than to believe.
+    expect(t.instruction).toContain('Look before you answer')
+    expect(t.instruction).toContain('resumed')
   })
 })
 
 /* ---------------------------------------------------------------------------
- * A session is context, not continuity. DECISIONS.md #35.
+ * A session is continuity now, because there is a terminal to have it in.
+ * DECISIONS.md #39, which reverses #35 — see test/terminal.test.ts for the
+ * refusals that decide which sessions may actually be resumed.
  * ------------------------------------------------------------------------- */
 
 describe('how the brief says to run it', () => {
@@ -623,19 +639,24 @@ describe('how the brief says to run it', () => {
     expect(body).toContain('Apply file edits without asking')
   })
 
-  test('a chosen session travels as context, with the command to rejoin it', () => {
+  test('a chosen session is resumed, and the brief says so instead of printing a command', () => {
     const built = buildPack({ template: 'continue-session', items: [], sessionId: SESSION_ID })
     if ('error' in built) throw new Error(built.error)
     expect(built.sessionId).toBe(SESSION_ID)
 
     const body = readFileSync(built.packPath, 'utf8')
     expect(body).toContain(SESSION_ID)
-    expect(body).toContain(`claude --resume ${SESSION_ID} --permission-mode bypassPermissions`)
     // Read off the transcript, not echoed from the request.
     expect(body).toContain('/Users/me/work/truto')
     expect(body).toContain('fix/thing')
-    // The one sentence that keeps the feature honest.
-    expect(body).toContain('You are not resuming it')
+    // What replaced "You are not resuming it". The brief is now that
+    // conversation's next turn, and it is delivered to a process Wake started.
+    expect(body).toContain('next turn')
+    // The assertion this test used to make in reverse. A line for a human to
+    // copy into a terminal he has to go and find is the failure the terminal
+    // exists to remove, so its absence is the thing worth pinning.
+    expect(body).not.toContain('claude --resume')
+    expect(body).not.toContain('--permission-mode bypassPermissions')
   })
 
   test('a pack with no session says nothing about resuming one', () => {
@@ -643,17 +664,20 @@ describe('how the brief says to run it', () => {
     if ('error' in built) throw new Error(built.error)
     const body = readFileSync(built.packPath, 'utf8')
     expect(body).not.toContain('--resume')
-    expect(body).not.toContain('You are not resuming it')
+    expect(body).not.toContain('session:')
   })
 
-  test('a session id this machine has never seen still gets its command', () => {
-    // The transcript may live on another box. The id and the resume line are
-    // valid there; the directory and the branch are not invented.
+  test('a session id this machine has never seen is named, and not invented around', () => {
+    // The transcript may live on another box. The id is a true fact about where
+    // the work was; the directory and the branch are not guessed, and the
+    // terminal route refuses that id separately and by name.
     const built = buildPack({ template: 'blank', items: [], sessionId: 'cccccccc-0000-4000-8000-000000000009' })
     if ('error' in built) throw new Error(built.error)
     const body = readFileSync(built.packPath, 'utf8')
-    expect(body).toContain('--resume cccccccc-0000-4000-8000-000000000009')
-    expect(body).not.toContain('- it ran in:')
+    expect(body).toContain('cccccccc-0000-4000-8000-000000000009')
+    expect(body).toContain('not on this machine')
+    expect(body).not.toContain('- it runs in:')
+    expect(body).not.toContain('claude --resume')
   })
 })
 

@@ -43,7 +43,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  ArrowUpRight, Check, ChevronDown, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
+  ArrowUpRight, Check, ChevronDown, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
 import type { Card, CardPriority, CardStatus } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
@@ -59,11 +59,12 @@ import { PriorityGlyph, StatusGlyph, isSettled } from './status'
 import { openTarget } from '../lib/appLinks'
 import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
 import { openLaunch } from '../lib/launch'
+import { openTerminalAndGo } from '../lib/terminal'
 import { cardContext, cardTitle, repoHintFor, templatesFor } from '../lib/cardContext'
 import { toast } from '../lib/toast'
 
 export function CardDetail({
-  card, onClose, onMakeTask, resting,
+  card, onClose, onMakeTask, resting, backProvided,
 }: {
   card: Card
   onClose: () => void
@@ -74,15 +75,30 @@ export function CardDetail({
    * nothing and acknowledges nothing.
    */
   resting?: boolean
+  /**
+   * The surface around this one already carries the way back, so this must not
+   * draw a second one.
+   *
+   * The cross exists because a pane has no other exit: it sits inside the desk,
+   * beside the list, and nothing above it says how to leave. The phone renders
+   * the same component as a page under a `‹ Desk › Slack › …` path, and there
+   * the cross is a second dismissal a few pixels from the first, which is the
+   * shape of every "which one of these closes it" question a person should
+   * never have to ask. `onClose` is unchanged either way and every caller still
+   * passes it — a settled card still shuts the pane from `setStatus`, and the
+   * page's own back control calls the same `closeDetail`.
+   */
+  backProvided?: boolean
 }) {
-  const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
   /** The Due calendar's disclosure. Closed on every card — see the Due row. */
   const [dueOpen, setDueOpen] = useState(false)
+  /** A session is being started, which is a request and can be refused. */
+  const [opening, setOpening] = useState(false)
   const still = useStill()
 
   useEffect(() => {
-    setCopied(false); setExpanded(false); setDueOpen(false)
+    setExpanded(false); setDueOpen(false); setOpening(false)
   }, [card.group_key])
 
   /**
@@ -166,7 +182,7 @@ export function CardDetail({
 
   const kind = cardKind(card)
   const claude = card.sources.find(s => s.source === 'claude')
-  const resume = claude?.meta?.resume_cmd as string | undefined
+  const sessionId = claude?.meta?.session_id as string | undefined
   const { href, app } = openTarget(card)
   const external = href.startsWith('http')
 
@@ -209,9 +225,11 @@ export function CardDetail({
                           ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
             {titleOf(card)}
           </h2>
-          <Button variant="ghost" size="sm" onClick={onClose} title="Close" ariaLabel="Close">
-            <X size={14} />
-          </Button>
+          {!backProvided && (
+            <Button variant="ghost" size="sm" onClick={onClose} title="Close" ariaLabel="Close">
+              <X size={14} />
+            </Button>
+          )}
         </div>
         {/* One line, and `why` appears on it exactly once. It used to be here and
             again as the last row of the fact table below. */}
@@ -355,18 +373,44 @@ export function CardDetail({
           </div>
         )}
 
-        {/* One mono line and a copy glyph. It was a filled, bordered 32px box —
-            `bg-ink-850`, which is pure white on a light page. */}
-        {resume && (
-          <button
-            onClick={() => { void navigator.clipboard?.writeText(resume); setCopied(true) }}
-            className="mt-6 w-full flex items-center gap-2 h-11 text-left border-b border-rule
-                       text-fg-mute hover:text-fg-dim transition-colors duration-100"
-          >
-            <code className="text-sm font-mono truncate grow">{resume}</code>
-            {copied ? <Check size={14} className="text-ok shrink-0" />
-                    : <Copy size={14} className="shrink-0" />}
-          </button>
+        {/*
+          A session is a place, and this is the way to it.
+
+          What stood here was one mono line — `claude --resume 9f2c…` — and a
+          copy glyph, which is an instruction rather than a control: it asks him
+          to find a terminal, get to the right box, paste, and be the transport
+          himself. It was the honest answer while it was the only one, and it is
+          not the only one any more. `/terminal/<id>` attaches to the real
+          session over tmux, on the laptop and on the phone, so the line is
+          gone rather than kept as a fallback — a shell command sitting under a
+          button that already works is a second, worse route with nothing to
+          recommend it, and the one a reader reaches for at 7am.
+
+          It is in the body rather than in the action bar because the bar's four
+          are what a person does to a *card* — open it, brief Claude on it, make
+          a task of it, finish it — and this is the card's own subject. On the
+          phone the body is the page, so it is a 44px target either way.
+
+          `openTerminalAndGo` starts the session and navigates in one step, on
+          purpose: see `lib/terminal.ts` for why those must not be separated. It
+          throws the server's own sentence, which is exactly what a toast wants.
+        */}
+        {sessionId && (
+          <div className="mt-6">
+            <Button
+              variant="secondary" size="md" className="w-full" disabled={opening}
+              onClick={() => {
+                setOpening(true)
+                void openTerminalAndGo({ sessionId })
+                  .catch(e => {
+                    setOpening(false)
+                    toast(e instanceof Error ? e.message : 'that session would not open')
+                  })
+              }}
+            >
+              <SquareTerminal size={14} /> {opening ? 'Opening…' : 'Open session'}
+            </Button>
+          </div>
         )}
 
         <SeenIn card={card} />

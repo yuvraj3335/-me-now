@@ -20,6 +20,7 @@ import {
   SLACK_ALERT_CHANNELS, SLACK_TEAM_ID, SLACK_THREAD_READS, SLACK_USERGROUPS, type AlertChannel,
 } from '../env'
 import { extractRefs, extractAlertRefs } from '../dedup'
+import { isDmChannel } from '../../shared/slackThread'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 import {
   namesUser, parentTs, parseThreadRead, slackTsToMs,
@@ -804,8 +805,12 @@ export function bucketHits(hits: SlackHit[], me: string): Map<string, ThreadBuck
   const out = new Map<string, ThreadBucket>()
   for (const h of hits) {
     // A direct message is thrown away before it can become a card, on the same
-    // two tells the adapter has always used.
-    if (h.isDm || h.channelId.startsWith('D')) continue
+    // two tells the adapter has always used. The channel-id half is
+    // `isDmChannel` from `src/shared/slackThread.ts` rather than an inline
+    // `startsWith('D')`, because this refusal now has to hold in two more
+    // places: the route that reads stored threads back out, and the parser for
+    // a link somebody pastes. One predicate is what stops the three drifting.
+    if (h.isDm || isDmChannel(h.channelId)) continue
     if (me && h.fromId === me) continue
 
     const parent = parentTs(h)
@@ -1109,19 +1114,35 @@ export function readOrder(buckets: Iterable<ThreadBucket>): ThreadBucket[] {
 
 /* ------------------------------ adapter ------------------------------- */
 
+/**
+ * Every argument the mention search is asked with, as a value.
+ *
+ * Pulled out of the call so `include_bots` is something a test can hold rather
+ * than a literal buried in an await. It is the one argument here that is a
+ * *product* decision rather than a transport detail: the tool defaults it to
+ * false, paired live runs on this deployment showed no behavioural delta, and a
+ * search that excludes bots by default is a search that can go quiet the day
+ * the default is honoured — which for this desk means the alert bots, the
+ * triage bot and every integration that speaks in a channel simply stop
+ * existing, with a green sync line over the silence.
+ *
+ * Nothing downstream of the poll re-asks Slack anything, so nothing downstream
+ * can reintroduce it either: the thread route serves stored cards, and
+ * `readAlertChannel` reads history, which is bot-inclusive by construction and
+ * has no such flag to get wrong.
+ */
+export const searchArgs = (query: string, limit: number) => ({
+  query,
+  sort: 'timestamp',
+  sort_dir: 'desc',
+  limit,
+  include_bots: true,
+  include_context: false,
+  response_format: 'detailed',
+})
+
 export async function runSearch(tool: string, query: string, limit = 20): Promise<SlackHit[]> {
-  const r = await getSession().callJson<any>(tool, {
-    query,
-    sort: 'timestamp',
-    sort_dir: 'desc',
-    limit,
-    // The search tool defaults this to false. Paired live runs on this
-    // deployment showed no behavioural delta, but a search that excludes bots
-    // by default is a search that can go quiet the day the default is honoured.
-    include_bots: true,
-    include_context: false,
-    response_format: 'detailed',
-  })
+  const r = await getSession().callJson<any>(tool, searchArgs(query, limit))
   const md = typeof r === 'string' ? r : (r as any)?.results
   // A payload we cannot read is a failed query, not an empty workspace. Swallowed
   // into `[]` it reaches `settle` as a success, and the sweep then marks every
