@@ -138,6 +138,63 @@ describe('confirmation tokens', () => {
 })
 
 /* ---------------------------------------------------------------------------
+ * The socket that opens a shell.
+ *
+ * `originGuard()` returns early on any non-mutating method, and a WebSocket
+ * upgrade is a GET — so the four lines in `terminalSocket.ts` are the *entire*
+ * cross-origin defence on the one URL in this product that opens a writable
+ * channel into a running Claude Code session. A page on any other site can open
+ * a socket to it and the browser attaches the Access cookie exactly as it would
+ * same-origin, because Access proves who is asking and not which page asked.
+ *
+ * That guard had no test. Deleting it left `bun test` green and `tsc` clean, so
+ * CI and `wake-deploy` would both have shipped the deletion.
+ * ------------------------------------------------------------------------- */
+
+import { terminalSocket } from '../src/server/claudecode/terminalSocket'
+
+describe('the terminal socket refuses a stranger', () => {
+  const socket = new Hono()
+  // Mounted at '/' exactly as `index.ts` mounts it: the route inside carries
+  // the full `/api/claude/...` path itself.
+  socket.route('/', terminalSocket)
+  const SESSION = 'aaaaaaaa-1111-4111-8111-111111111111'
+  const attach = (headers: Record<string, string>) =>
+    socket.fetch(new Request(
+      `http://localhost:8585/api/claude/terminals/${SESSION}/socket`,
+      { headers },
+    ))
+
+  test('a cross-origin page may not attach to a session', async () => {
+    const r = await attach({ origin: 'https://evil.example' })
+    expect(r.status).toBe(403)
+    expect((await r.json() as { error: string }).error).toContain('may not attach')
+  })
+
+  test("Wake's own origin gets past the origin check", async () => {
+    // It does not get a socket — there is no tmux in a test run, so this stops
+    // at "not running on this machine". That is the point: it is past the
+    // origin gate and refused for a reason that is about the session.
+    const r = await attach({ origin: ALLOWED_ORIGINS[0]! })
+    expect(r.status).not.toBe(403)
+  })
+
+  test('a request with no Origin at all is not a browser, and is allowed through', async () => {
+    // `websocat` on the box and this suite land here, and both are already
+    // behind Access or in-process — the same allowance `originGuard` makes.
+    const r = await attach({})
+    expect(r.status).not.toBe(403)
+  })
+
+  test('an id that is not a session id is refused before anything is attached', async () => {
+    const r = await socket.fetch(new Request(
+      'http://localhost:8585/api/claude/terminals/not-a-uuid/socket',
+    ))
+    expect(r.status).toBe(400)
+  })
+})
+
+/* ---------------------------------------------------------------------------
  * The write door.
  *
  * `DECISIONS.md` §7 said "a test asserts exactly one module calls it". It did

@@ -44,6 +44,17 @@ fi
 # and silently discarding that is worse than refusing to deploy.
 git merge --ff-only "origin/$BRANCH"
 
+# And back out of it if the commit does not survive verification.
+#
+# Without this the checkout stayed on the bad commit: `set -e` killed the script
+# at the failing typecheck, so `dist/` and the running unit were still the old
+# build — but HEAD was the new one, which made `local_sha` equal `remote_sha` on
+# every later tick, so the timer exited 0 in silence and never reported again.
+# The box then sat on unverified code until something restarted the unit, at
+# which point it booted a commit that had never passed a check. Rolling back
+# means the next tick sees the move again, tries again, and logs again.
+trap 'echo "wake-deploy: ${remote_sha:0:8} failed verification — rolling back to ${local_sha:0:8}" >&2; git reset --hard "$local_sha" >/dev/null 2>&1 || true' ERR
+
 "$BUN" install --frozen-lockfile
 "$BUN" run typecheck
 "$BUN" test
@@ -60,6 +71,10 @@ git merge --ff-only "origin/$BRANCH"
 # So the promise is kept by keeping a copy. On success the copy is dropped; on
 # failure it goes back and the service is never restarted, so the box carries on
 # serving the build it already had.
+# Verification passed, so the commit stays whatever happens next; from here the
+# dist/ copy below is what a failure is answered with.
+trap - ERR
+
 if [ -d dist ]; then
   rm -rf dist.prev
   cp -a dist dist.prev

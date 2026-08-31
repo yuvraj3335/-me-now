@@ -778,6 +778,31 @@ describe('both themes stay complete', () => {
     }
   })
 
+  test('@theme holds the dark values, which is what it says it holds', () => {
+    /*
+     * Names were compared here and values were not, and five had drifted: the
+     * four source hues and `--color-bad` sat a shade dimmer in `@theme` than in
+     * the dark block whose values the file says these are — `#b58ee0` against
+     * `#c2a3e8`, and so on. The comment at the top of `@theme` is unambiguous
+     * ("The values here are the dark ones, which is what a first paint before
+     * any script runs will use"), so either the values follow it or the comment
+     * is a lie about the one paint nobody can see happening.
+     */
+    const declared = (marker: string, end: string) => {
+      const at = css.indexOf(marker)
+      const body = css.slice(at, css.indexOf(end, at))
+      return new Map([...body.matchAll(/(--color-[a-z0-9-]+)\s*:\s*([^;]+);/g)]
+        .map(m => [m[1]!, m[2]!.trim()] as const))
+    }
+    const inTheme = declared('@theme {', '\n}')
+    const inDark = declared(":root[data-theme='dark'] {", '\n  }')
+
+    const drifted = [...inTheme].filter(([t, v]) => inDark.get(t) !== v)
+      .map(([t, v]) => `${t}: @theme ${v} vs dark ${inDark.get(t)}`)
+    expect(drifted, 'a token in @theme no longer matches the dark value it claims to be')
+      .toEqual([])
+  })
+
   test('the five statuses are in @theme too, and are five', () => {
     // The status hues are the ones that matter most at first paint: they are
     // the only tokens on the desk that carry *state* rather than chrome, so a

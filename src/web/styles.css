@@ -77,15 +77,15 @@
   --color-row-new: #1b1509;
   --color-row-sel: #22232f;
 
-  --color-src-slack:  #b58ee0;
-  --color-src-github: #8fa4c4;
-  --color-src-gmail:  #d98a86;
-  --color-src-sentry: #d4869f;
+  --color-src-slack:  #c2a3e8;
+  --color-src-github: #9db1ce;
+  --color-src-gmail:  #e29d99;
+  --color-src-sentry: #dd9ab0;
   --color-src-claude: #a3a3b0;
 
   --color-ok:   #6bd39a;
   --color-warn: #ee8b45;
-  --color-bad:  #e08282;
+  --color-bad:  #ef9494;
   /*
     The ink that goes ON a solid `ok` or `bad` fill.
 
@@ -299,7 +299,7 @@
     /* Ink on a filled `bad` surface — the danger button. `bad` is a text colour
        everywhere else, and a destructive control that is only red *text* is
        indistinguishable from a disabled one. */
-    --color-on-ok:  #14141a;    /* 12.4:1 on ok */
+    --color-on-ok:  #14141a;    /* 10.0:1 on ok */
     --color-on-bad: #14141a;    /*  7.6:1 on bad */
 
     /* Five statuses, five hues — see the note in `@theme`. All above this
@@ -343,7 +343,7 @@
     --color-accent:      #e9a23b;
     --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
     --color-accent-soft: #fdf1dd;
-    --color-on-accent:   #241703;  /* 9.0:1 on the accent */
+    --color-on-accent:   #241703;  /* 8.1:1 on the accent */
     --color-scrim:       #14141a;
 
     --color-src-slack:  #6d3fa0;
