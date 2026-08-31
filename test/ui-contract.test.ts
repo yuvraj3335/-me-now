@@ -1082,14 +1082,20 @@ describe('the count and the highlight are one fact', () => {
   const table = read('src/web/components/CardTable.tsx')
 
   test('both are keyed on the same expression', () => {
-    // `+2` and the amber edge answer the same question, so they are drawn from
-    // the same predicate. Two predicates is how they come to disagree, and a
-    // row wearing an edge with no number on it is unreadable.
+    // `+2` and the row's warm wash answer the same question, so they are drawn
+    // from the same predicate. Two predicates is how they come to disagree, and
+    // a row wearing the wash with no number on it is unreadable.
     const uses = [...table.matchAll(/card\.activity\.count\s*(?:>|<=)\s*0/g)]
-    expect(uses.length, 'the badge and the edge stopped sharing a predicate')
+    expect(uses.length, 'the badge and the wash stopped sharing a predicate')
       .toBeGreaterThanOrEqual(3)
-    expect(table, 'the edge is no longer the 2px inset the docblock reserved')
-      .toMatch(/inset 2px 0 0 var\(--color-accent\)/)
+    // The mark used to be a 2px inset on the first cell, which at a glance read
+    // as a rendering seam rather than as news. It is a full-row wash now, and
+    // it is `rowStateClass({ unseen })` that paints it — on both layouts, from
+    // one place, so the desktop row and the phone row cannot drift apart.
+    expect(table, 'the row no longer says it has news')
+      .toMatch(/rowStateClass\(/)
+    expect(table, 'the wash is not keyed on the activity count')
+      .toMatch(/unseen:\s*card\.activity\.count\s*>\s*0/)
   })
 
   test('the browser never recomputes what the server counted', () => {

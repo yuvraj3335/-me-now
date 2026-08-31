@@ -65,6 +65,18 @@
      light mode would brighten the page instead of receding it. */
   --color-scrim:       #08080a;
 
+  /*
+    Two row grounds, because a row has more states than the ink scale has steps.
+
+    `row-new` is the wash on a row with something new on it, and `row-sel` is the
+    row the pane is showing. They are separate tokens rather than another rung of
+    `ink-*` because the two facts they carry are not the same *kind* of fact —
+    see the note over `rowStateClass` in `primitives.tsx` for why one is a hue
+    and the other is a lightness.
+  */
+  --color-row-new: #1b1509;
+  --color-row-sel: #22232f;
+
   --color-src-slack:  #b58ee0;
   --color-src-github: #8fa4c4;
   --color-src-gmail:  #d98a86;
@@ -175,6 +187,48 @@
     --color-ink-800: #17171c;   /* row hover, button hover */
     --color-ink-700: #1e1e25;   /* row keyboard focus, pressed */
     --color-ink-600: #33333d;   /* scrollbars and grabbers only — never text */
+    /*
+      The two row grounds, and the one number that decides whether they work.
+
+      Every state a row can be in used to be drawn out of the same three ink
+      steps, and those steps are 8% apart in luminance — `ink-800` (hover) and
+      `ink-700` (pressed) measure 1.08:1 against each other, which is not a
+      difference anybody sees at a glance across a 20-row table. That is the
+      whole reason a selected row and a hovered row looked identical: they were
+      not merely assigned the same token, there was no *third* token they could
+      have been assigned that would have read as different.
+
+      So these two are not another rung of the same ladder. `row-sel` is a real
+      lightness step — 15% above hover, cool, and it means "this is the row the
+      pane is showing". `row-new` is the same lightness as hover and a different
+      HUE, because "something arrived here" is not a degree of the same thing as
+      "your pointer is here"; it is a different fact and it gets a different
+      channel. Warm reads as new without spending the accent, which is the point:
+      forty unread rows may not be forty amber marks.
+
+      The floors this file states are measured against the PAGE, and every row
+      state has always eroded them a little — `fg-mute` on the existing `ink-800`
+      hover is 6.5:1, not 7.2:1. These hold that same line: `fg-mute` measures
+      6.6:1 on `row-new` and 5.7:1 on `row-sel`, and the title, which is `fg` and
+      `fg-dim`, stays above 13:1 and 8:1 on both.
+    */
+    --color-row-new: #1b1509;   /* 6.6:1 for fg-mute — warm, same lightness as hover */
+    --color-row-sel: #22232f;   /* 5.7:1 for fg-mute — cool, 15% above hover */
+
+    /*
+      The one thing in the product that casts a shadow, and why it is not in
+      `@theme`.
+
+      Elevation here is an edge on a flat surface, and that works right up to
+      the moment a surface opens over another surface of its own ink: a `Menu`
+      dropped over a `Sheet` is `ink-850` on `ink-850`, where an edge alone
+      draws a rectangle rather than a raised thing. It is declared here and not
+      in `@theme` deliberately — a `--color-*` there would generate `bg-shadow`
+      and `text-shadow` utilities, and this is not a colour anything may be
+      painted in. It is only ever read by `.raised`.
+    */
+    --color-shadow: rgb(0 0 0 / 0.55);
+
 
     /* The structure the whole design leans on, and it was too faint to be it.
        `rule` measured 1.32:1 dark and 1.21:1 light against the page — 21 of 255
@@ -232,6 +286,13 @@
     --color-ink-800: #eeeef2;
     --color-ink-700: #e5e6ec;
     --color-ink-600: #c2c2ce;
+    /* See the dark block. Warm and cool, one step off the page each way; the
+       shadow is far weaker here because a shadow on an off-white page is read
+       at a fraction of the alpha it needs on a near-black one. */
+    --color-row-new: #faf2e4;
+    --color-row-sel: #e2e6f2;
+    --color-shadow: rgb(20 20 26 / 0.14);
+
 
     --color-rule: #c8c8d3;      /* 1.55:1 — was #e2e2e8 at 1.21:1, i.e. invisible */
     --color-edge: #b2b2c1;      /* 1.96:1 — was #d2d2dc at 1.40:1 */
@@ -275,6 +336,10 @@
       --color-ink-800: #eeeef2;
       --color-ink-700: #e5e6ec;
       --color-ink-600: #c2c2ce;
+    --color-row-new: #faf2e4;
+    --color-row-sel: #e2e6f2;
+    --color-shadow: rgb(20 20 26 / 0.14);
+
 
       --color-rule: #c8c8d3;
       --color-edge: #b2b2c1;
@@ -360,17 +425,6 @@
   }
 
   input, textarea, select, button { font: inherit; letter-spacing: inherit; }
-
-  /*
-    iOS zooms the page when a field smaller than 16px takes focus, and never
-    zooms back out. The usual fix is `maximum-scale=1` in the viewport, which
-    also disables pinch-zoom for everyone — trading an annoyance for an
-    accessibility failure. Raising the field's own size on touch instead fixes
-    the cause and leaves zoom alone.
-  */
-  @media (pointer: coarse) {
-    input, textarea, select { font-size: max(16px, 1em); }
-  }
 
   /* Scrollbars: present, not loud. */
   * { scrollbar-width: thin; scrollbar-color: var(--color-ink-600) transparent; }
@@ -567,6 +621,57 @@
   }
 
   /*
+    A menu row and a calendar cell, at the size a thumb actually needs.
+
+    Neither can use `.hit`. That draws a 44px box *outside* the control, and
+    both of these live inside a scroller that would clip it — in a list, every
+    row's collar would overlap its neighbours' anyway, so the last one drawn
+    would take the taps. A row that already spans the full width of its panel
+    has no reason to fake its height; it just has one. 36 to a mouse, 44 to a
+    finger, and a calendar cell 32/40 because seven of them have to fit across
+    343px of phone.
+  */
+  .menu-row { min-height: 36px; }
+  .cal-cell { min-height: 32px; }
+  @media (any-pointer: coarse) {
+    .menu-row { min-height: 44px; }
+    .cal-cell { min-height: 40px; }
+  }
+
+  /*
+    The one raised thing in the product.
+
+    Everything else here is elevated by a 1px edge on a flat surface, and that
+    holds right up to the moment a surface opens over another surface of its own
+    ink. A `Menu` inside a `Sheet` is `ink-850` on `ink-850`: the edge is still
+    drawn, but what it draws is a rectangle, not a thing in front of another
+    thing. This is the exception and it is deliberately small — two offsets, no
+    blur beyond what a real edge would cast, and no second surface may reach for
+    it without the same argument. It is not `shadow-2xl`, and it is not glass.
+  */
+  .raised {
+    box-shadow: 0 1px 2px var(--color-shadow), 0 12px 28px -10px var(--color-shadow);
+  }
+
+  /*
+    Where the keyboard cursor is, painted as a background rather than a border.
+
+    This has to work on a `<tr>`, an `<li>` and a `<button>` from one class,
+    because the desk, the phone list, Mail and Sessions are those three elements
+    between them. A `<tr>` under `border-collapse` paints neither its own border
+    nor its own box-shadow — which is why the desk's activity edge had to live
+    on the row's first `<td>` — but it does paint its own BACKGROUND, and a
+    gradient with a hard stop is a background. One class, three element types,
+    no per-caller trick.
+
+    2px, at the row's leading edge, in the accent: there is exactly one cursor
+    on a screen, so this is one amber mark and the budget survives it.
+  */
+  .row-cursor {
+    background-image: linear-gradient(to right, var(--color-accent) 2px, transparent 2px);
+  }
+
+  /*
     Wake is a working surface, not a reading column. `column` survives for the
     two places a measured line length is genuinely right — a single honest error,
     a form — and everything else fills the shell.
@@ -594,4 +699,43 @@
     background: color-mix(in oklab, var(--color-fg) 5%, transparent);
     border-radius: var(--radius-chip);
   }
+}
+
+/*
+  ---------------------------------------------------------------------------
+  Outside every layer, and being outside is the entire fix.
+
+  iOS zooms the page when a field smaller than 16px takes focus and never zooms
+  back out. The usual answer is `maximum-scale=1` in the viewport meta, which
+  disables pinch-zoom for everyone — trading an annoyance for an accessibility
+  failure, and `index.html` says so. Raising the field's own size on touch fixes
+  the cause instead and leaves zoom alone.
+
+  That rule was here already. It did nothing, for two years, because it was
+  written inside `@layer base`. Tailwind v4 opens with
+
+      @layer properties, theme, base, components, utilities;
+
+  and puts `.text-base { font-size: var(--text-base) }` — 14px — in `utilities`.
+  Layer order beats specificity and beats source order: a later layer wins, whole
+  stop, so `.text-base` (utilities) outranked `input { … }` (base) no matter how
+  specific the selector was or what media query wrapped it. Every field carrying
+  `inputClass` resolved to 14px on a phone and every focus zoomed the page.
+  Verified against the built stylesheet: the coarse-pointer rule sat at byte
+  9599 inside `@layer base{`, `.text-base` at 21246 inside `@layer utilities{`.
+
+  Declarations that are in NO layer sort above every layer — that is the one
+  rung the cascade puts above `utilities` without `!important`, and `!important`
+  is spent elsewhere in this file and is not being spent again here. So the rule
+  moves out of `@layer base` and stays exactly as it was written.
+
+  What it costs: on a touch device every input, textarea and select is at least
+  16px, including the ones a component deliberately painted at 13. That is the
+  intent, not a side effect — the painted box is set by the wrapper and by
+  `.hit-native` in either case, so the boxes do not move, only the glyphs inside
+  them grow to a size the platform will not zoom to read.
+  ---------------------------------------------------------------------------
+*/
+@media (pointer: coarse) {
+  input, textarea, select { font-size: max(16px, 1em); }
 }
