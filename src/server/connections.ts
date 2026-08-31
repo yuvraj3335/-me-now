@@ -171,8 +171,40 @@ connections.get('/callback', async c => {
   }
 })
 
+/**
+ * Give back the grant, keep the app.
+ *
+ * `oauth_tokens` is one row per server and it holds two unrelated things: the
+ * *credential* Wake was granted, and the *application* that grant was made
+ * against — `client_id` and `client_secret`. `DELETE FROM oauth_tokens` took
+ * both, and for Slack that is the expensive half: Slack publishes no dynamic
+ * client registration, so those two values are ones he went to api.slack.com,
+ * created an app for, and pasted into the sheet by hand. Disconnecting sent him
+ * back there. `Settings.tsx` already names this as a cost worth avoiding, in the
+ * comment on the button that decides between Disconnect and Reconnect — it just
+ * had no way to avoid it once the button was pressed.
+ *
+ * So the credential columns are cleared and the registration stays. Reconnect
+ * then goes straight to the consent screen, which is the whole difference
+ * between "I revoked this" and "I have never set this up".
+ *
+ * And the cached MCP session goes with it, which is the same reason the connect
+ * callback resets it twenty lines up: `HttpTransport` holds an `Mcp-Session-Id`
+ * established under the credential being revoked here, and `discoverTools`
+ * holds that session's tool surface for thirty minutes. Without this the
+ * process keeps replaying a handshake made with a token the operator has just
+ * taken away.
+ */
 connections.post('/:server/disconnect', c => {
-  db.query(`DELETE FROM oauth_tokens WHERE server = ?`).run(c.req.param('server'))
+  const server = c.req.param('server')
+  db.query(
+    `UPDATE oauth_tokens
+        SET access_token = NULL, refresh_token = NULL, expires_at = NULL,
+            scope = NULL, last_auth_ok_at = NULL, last_auth_error = NULL, updated_at = ?
+      WHERE server = ?`,
+  ).run(now(), server)
+  if (server === 'slack') resetSlackSession()
+  if (server === 'gmail') resetGmailSessions()
   return c.json({ ok: true })
 })
 

@@ -49,4 +49,38 @@ describe('stateWord', () => {
     expect(word.text).toContain('· 4')
     expect(word.tone).toBe('text-ok')
   })
+
+  /*
+   * `last_auth_error` holds two different kinds of thing, and only one of them
+   * outranks a working poll.
+   *
+   * A provider's own refusal — `invalid_grant`, `token_revoked` — is recorded
+   * with the tokens cleared, so it always arrives here with `ok: false`. A
+   * transient failure is recorded with the grant deliberately left intact
+   * (`refresh.test.ts` pins that a 500 keeps the refresh token), and nothing
+   * clears the field until some later refresh succeeds — which never happens
+   * while the access token is still valid. Reading any non-null value as
+   * terminal therefore pinned a healthy source to `reconnect — …` for the rest
+   * of that token's life.
+   */
+  test('a stale transient error does not overrule a source that is working', () => {
+    const word = stateWord(row({
+      hasWakeToken: true,
+      ok: true,
+      lastAuthError: 'refresh failed: 500 upstream is having a bad minute',
+      lastSync: { ok: 1, connected: 1, at: Date.now() - 60_000, count: 4, error: null },
+    }))
+    expect(word.text, 'a working source was told to reconnect').not.toContain('reconnect')
+    expect(word.text).toMatch(/^synced /)
+  })
+
+  test('a refusal still speaks when the source really is refusing', () => {
+    const word = stateWord(row({
+      hasWakeToken: false,
+      ok: false,
+      lastAuthError: 'invalid_grant',
+    }))
+    expect(word.text).toBe('reconnect — invalid_grant')
+    expect(word.tone).toBe('text-warn')
+  })
 })

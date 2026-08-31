@@ -53,3 +53,31 @@ export function useOverlay(open: boolean) {
     }
   }, [open])
 }
+
+/**
+ * How much of the bottom of the screen the tab bar already owns.
+ *
+ * A panel that opens *downward* — the `Menu` dropdown, the desk's
+ * `StatusPicker` — decides between opening down and flipping up by asking how
+ * much room is below its trigger. Both asked `window.innerHeight`, which is the
+ * bottom of the *viewport* and not the bottom of the usable page: below `sm`
+ * the last `--nav-h` of that viewport is the tab bar. Since both panels render
+ * `fixed` at `z-[55]` and the bar is `z-30`, the panel wins the paint and the
+ * failure is not that it disappears — it is that a picker offered five statuses
+ * with the last two lying across Desk, Mail and Work, and on a phone with a
+ * home indicator the bottom row sits in the strip iOS reserves for its own
+ * gesture.
+ *
+ * Measured off the bar itself rather than read from `--nav-h`, because that
+ * token is `calc(53px + max(env(safe-area-inset-bottom), 0px))` and a custom
+ * property holding a `calc()` does not resolve to a number through
+ * `getComputedStyle().getPropertyValue()` — it comes back as the text. The
+ * element knows its own height, including whatever the device puts under it,
+ * and it is `display: none` from `sm` up, where `getBoundingClientRect()`
+ * answers 0 and the desktop rail is not in the way of anything.
+ */
+export function navStrip(): number {
+  if (typeof document === 'undefined') return 0
+  const bar = document.querySelector('[data-navbar]')
+  return bar ? bar.getBoundingClientRect().height : 0
+}

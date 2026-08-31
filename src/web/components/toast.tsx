@@ -25,7 +25,15 @@ export function ToastBar() {
           animate={{ opacity: 1, y: 0 }}
           exit={still ? undefined : { opacity: 0, y: 12 }}
           transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-          className="fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] sm:bottom-6
+          /* Above the tab bar, off the bar's own measurement rather than a
+             second copy of it. This was `calc(4.5rem + env(safe-area-inset-bottom))`
+             — 72px plus the indicator, against a bar that is 53 plus the same
+             indicator, so it cleared by 19px by arithmetic nobody could check
+             from here and would have stopped clearing at all the day the bar
+             changed height. `--nav-h` is the strip the bar actually owns
+             (`styles.css`), and the gap above it is the only number this
+             component still has an opinion about. */
+          className="fixed inset-x-0 bottom-[calc(var(--nav-h)+1rem)] sm:bottom-6
                      z-[70] flex justify-center px-4 pointer-events-none"
         >
           <div className="pointer-events-auto flex items-center gap-3 max-w-[min(30rem,100%)]

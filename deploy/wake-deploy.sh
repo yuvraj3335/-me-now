@@ -47,7 +47,34 @@ git merge --ff-only "origin/$BRANCH"
 "$BUN" install --frozen-lockfile
 "$BUN" run typecheck
 "$BUN" test
-"$BUN" run build
+
+# The paragraph at the top of this file promises that a failed build leaves the
+# previous dist/ in place. It did not: `vite.config.ts` sets `emptyOutDir`, so
+# `vite build` clears dist/ before it writes anything, and a build that dies
+# after that point — a rollup resolution error tsc cannot see, a full disk, an
+# OOM — leaves an empty directory and a service serving nothing. Typecheck and
+# the suite catch most of it first, which is why this has never been the failure
+# that woke anyone; it is still the one case where a bad push costs the dark
+# screen on someone's phone that this script exists to prevent.
+#
+# So the promise is kept by keeping a copy. On success the copy is dropped; on
+# failure it goes back and the service is never restarted, so the box carries on
+# serving the build it already had.
+if [ -d dist ]; then
+  rm -rf dist.prev
+  cp -a dist dist.prev
+fi
+
+if ! "$BUN" run build; then
+  echo "wake-deploy: build failed on ${remote_sha:0:8} — restoring the previous dist/"
+  if [ -d dist.prev ]; then
+    rm -rf dist
+    mv dist.prev dist
+  fi
+  exit 1
+fi
+
+rm -rf dist.prev
 
 systemctl --user restart wake
 echo "wake-deploy: restarted on ${remote_sha:0:8}"

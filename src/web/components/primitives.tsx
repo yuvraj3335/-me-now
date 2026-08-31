@@ -5,7 +5,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useStill } from '../lib/motion'
-import { useOverlay } from '../lib/overlay'
+import { navStrip, useOverlay } from '../lib/overlay'
 import { toLocalInput, fromLocalInput } from '../lib/time'
 import { PAGE_TITLE } from '../lib/typography'
 import { WakeMark } from './WakeMark'
@@ -187,7 +187,21 @@ function place(el: HTMLElement, align: 'start' | 'end'): Anchor {
   const r = el.getBoundingClientRect()
   const vw = window.innerWidth
   const vh = window.innerHeight
-  const below = vh - r.bottom - MENU_GAP - MENU_MARGIN
+  /*
+   * The floor is the tab bar's top edge, not the viewport's bottom.
+   *
+   * `below` decides both how tall this panel may be and whether it opens
+   * downward at all, and measuring it to the bottom of the viewport counted the
+   * phone's own tab bar as free space — so a menu opened from a low trigger
+   * drew its last rows across Desk, Mail and Work. `navStrip` is 0 from `sm`
+   * up, where the bar is `display: none` and the rail is beside the page rather
+   * than under it, so this changes nothing on a laptop.
+   *
+   * Only `below` moves. The `up` branch positions with a viewport-relative
+   * `bottom`, so it keeps the real `vh` — subtracting the bar there would lift
+   * an upward menu off its own trigger by the height of the bar.
+   */
+  const below = (vh - navStrip()) - r.bottom - MENU_GAP - MENU_MARGIN
   const above = r.top - MENU_GAP - MENU_MARGIN
   const up = below < 176 && above > below
 

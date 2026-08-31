@@ -110,6 +110,10 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
   const survivors: RawCard[] = []
   for (const [, cards] of fetched) survivors.push(...cards)
 
+  // Kept, not just counted: these rows take part in the grouping below, so when
+  // the grouping moves one of them it has to be written back. See the loop at
+  // the end of the transaction.
+  const stored: any[] = []
   for (const row of liveCards()) {
     // A source that failed this round keeps its cards; one that succeeded and
     // asked all of its questions is authoritative, and anything it no longer
@@ -118,6 +122,7 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
     const run = report.sources.find(s => s.source === row.source)
     const supersededByPoll = fetched.has(row.source) && run?.ok && run.authoritative && row.found_by === 'poll'
     if (supersededByPoll) continue
+    stored.push(row)
     survivors.push(asRaw(row))
   }
 
@@ -161,6 +166,28 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
 
         if (prev && prev.group_key !== gk) migrateState(prev.group_key, gk)
       }
+    }
+
+    /*
+     * A polled row can merge two groups that were separate a second ago, and the
+     * stored cards have to follow.
+     *
+     * The grouping above runs over `survivors` — this round's cards *and* every
+     * live row — precisely so that something arriving now can join something
+     * stored days ago. The write loop above only walks `fetched`, so until this
+     * loop existed only the newly polled card learned the merged key: the older
+     * row kept its old one, and one thing stayed two rows on the desk, with two
+     * `card_state` rows and two separate "already seen" baselines behind them.
+     *
+     * `fetch/index.ts` has carried this loop since the day Fetch could merge
+     * groups. The poller can do exactly the same thing every three minutes and
+     * was missing it — so this is that fix, on the path that runs the most.
+     */
+    for (const row of stored) {
+      const gk = groups.get(cardId(row))
+      if (!gk || gk === row.group_key) continue
+      db.query(`UPDATE cards SET group_key = ? WHERE id = ?`).run(gk, cardId(row))
+      migrateState(row.group_key, gk)
     }
 
     /*

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The deploy script's copy of the last good build, while a new one is running.
+dist.prev/
 .data/
 *.sqlite
 *.sqlite-wal

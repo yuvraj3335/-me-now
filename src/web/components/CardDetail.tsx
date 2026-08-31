@@ -183,6 +183,20 @@ export function CardDetail({
   const kind = cardKind(card)
   const claude = card.sources.find(s => s.source === 'claude')
   const sessionId = claude?.meta?.session_id as string | undefined
+  /*
+   * Whether that session is still running, which decides whether it can be
+   * opened at all.
+   *
+   * The card pile carries every Claude session in the window, live or finished
+   * — `claudeSessions.ts` sets `meta.live` from the per-process registry as it
+   * builds the row — and this button offered `Open session` on all of them. A
+   * finished one went to `POST /terminals`, which used to hand the id to
+   * `claude --resume`, which is where "this session has been archived" reached
+   * his phone. The server refuses that now, so leaving the button would just
+   * move the failure into a toast. The fact needed to not draw it at all was
+   * already on the card.
+   */
+  const sessionLive = claude?.meta?.live === true
   const { href, app } = openTarget(card)
   const external = href.startsWith('http')
 
@@ -405,7 +419,7 @@ export function CardDetail({
           purpose: see `lib/terminal.ts` for why those must not be separated. It
           throws the server's own sentence, which is exactly what a toast wants.
         */}
-        {sessionId && (
+        {sessionId && sessionLive && (
           <div className="mt-6">
             <Button
               variant="secondary" size="md" className="w-full" disabled={opening}

@@ -78,6 +78,40 @@ describe('templates', () => {
       }
     }
   })
+
+  /*
+   * The names that cannot come back.
+   *
+   * Ten of eleven templates once named skills that no receiving session could
+   * load. They live under `~/work/Cursor-skills/.cursor/skills`, which is not
+   * `~/.claude/skills` — what a launched Claude Code reads — and the failure was
+   * silent in both directions: `resolveSkillId` passes an unknown name through
+   * untouched rather than dropping it, so nothing ever complained, and the
+   * packed briefs show a session handed three of them going and loading an
+   * unrelated skill instead.
+   *
+   * This cannot be checked against the real catalogs, and deliberately: the
+   * suite points `WAKE_SKILLS_*` at empty fixtures precisely so it passes the
+   * same way on a laptop with eleven sibling checkouts and on CI with none. So
+   * what is pinned is the specific set that was wrong, which is the thing that
+   * actually regressed, and it costs nothing to extend when another is found.
+   */
+  test('no template names a skill only the old Cursor tree has', () => {
+    const UNLOADABLE = [
+      'truto-cli-toolbelt',
+      'truto-safe-admin-operator',
+      'truto-mapping-tester',
+      'truto-sync-job-validator',
+      'truto-account-health-auditor',
+      'truto-customer-issue-debugger',
+    ]
+    for (const t of TEMPLATES) {
+      for (const s of t.skills) {
+        expect(UNLOADABLE, `${t.id} names ${s}, which the receiving session cannot load`)
+          .not.toContain(s)
+      }
+    }
+  })
 })
 
 describe('which repository a brief may name', () => {

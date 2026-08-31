@@ -739,6 +739,61 @@ describe('both themes stay complete', () => {
   const light = tokensIn(":root[data-theme='light'] {")
   const system = tokensIn(":root:not([data-theme]) {")
 
+  /*
+   * `@theme` needs its own reader, and the reason is a real trap.
+   *
+   * The three blocks above are nested inside `@layer base`, so each one closes
+   * on `\n  }`. `@theme` is a top-level at-rule and closes on `\n}` at column
+   * zero — so handing it to `tokensIn` does not fail, it silently runs past its
+   * own closing brace and reads the next block's tokens as if they were its
+   * own. A test that overshoots into the answer it is checking against is worse
+   * than no test, which is why this is a separate function rather than an
+   * argument.
+   */
+  const themeTokens = (() => {
+    const at = css.indexOf('@theme {')
+    if (at === -1) throw new Error('styles.css no longer has an @theme block')
+    const body = css.slice(at, css.indexOf('\n}', at))
+    return new Set([...body.matchAll(/(--color-[a-z0-9-]+)\s*:/g)].map(m => m[1]!))
+  })()
+
+  test('@theme carries the palette the themes then re-answer', () => {
+    /*
+     * `@theme` is the first paint. It is what a token resolves to before any
+     * `data-theme` attribute is on the html element, and in Tailwind v4 it is
+     * also the only block that turns a custom property into a utility class —
+     * so a token declared only in the theme blocks is usable through `var()`
+     * and not as a class name.
+     *
+     * The rule is therefore one-directional: everything `@theme` declares must
+     * exist in all three themes, or first paint shows a colour no theme ever
+     * corrects. The converse is allowed, and `--color-shadow` is the one that
+     * uses the allowance — it is read exactly once, as `var(--color-shadow)`
+     * inside `.raised`, and never as a utility, so it has no business
+     * generating one.
+     */
+    for (const [name, block] of [['dark', dark], ['light', light], ['system', system]] as const) {
+      expect([...themeTokens].filter(t => !block.has(t)), `declared in @theme but not ${name}`)
+        .toEqual([])
+    }
+  })
+
+  test('the five statuses are in @theme too, and are five', () => {
+    // The status hues are the ones that matter most at first paint: they are
+    // the only tokens on the desk that carry *state* rather than chrome, so a
+    // status missing here is a row that says nothing until the theme lands.
+    const statuses = ['idle', 'live', 'review', 'done', 'drop']
+      .map(s => `--color-status-${s}`)
+    for (const t of statuses) {
+      expect(themeTokens.has(t), `${t} is missing from @theme`).toBe(true)
+    }
+    const at = css.indexOf('@theme {')
+    const body = css.slice(at, css.indexOf('\n}', at))
+    const values = statuses.map(t => body.match(new RegExp(`${t}\\s*:\\s*([^;]+);`))?.[1]?.trim())
+    expect(new Set(values).size, `two statuses share a colour in @theme: ${values.join(', ')}`)
+      .toBe(statuses.length)
+  })
+
   test('every colour exists in light, dark, and the system fallback', () => {
     // A token added to one block and forgotten in another does not error — it
     // silently inherits the other theme's value, which is how a light-mode page

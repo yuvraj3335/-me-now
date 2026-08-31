@@ -112,10 +112,23 @@ export function useConfirmation(token: string, kind: ConfirmKind, payload: unkno
   return { ok: true }
 }
 
-/** Housekeeping: expired tokens are noise, and a stale row is a confusing read. */
+/**
+ * Housekeeping: expired tokens are noise, and a stale row is a confusing read.
+ *
+ * `AND state != 'used'` was here, which excluded exactly the rows this exists to
+ * remove. `useConfirmation` marks a token `used` the moment it is spent, so
+ * every approved send and every approved delete left a row that no sweep could
+ * ever match — the one table in the product that only ever grew, one row per
+ * thing he confirmed, for as long as the box runs.
+ *
+ * The cutoff does all the work that clause was reaching for. A token past
+ * `expires_at` cannot be spent again whatever its state: `useConfirmation`
+ * checks expiry and single use before anything else, so there is nothing left to
+ * protect a day-old row for.
+ */
 export function sweepConfirmations(): number {
   const r = db
-    .query(`DELETE FROM confirmations WHERE expires_at < ? AND state != 'used'`)
+    .query(`DELETE FROM confirmations WHERE expires_at < ?`)
     .run(now() - 24 * 3.6e6)
   return Number((r as { changes?: number }).changes ?? 0)
 }

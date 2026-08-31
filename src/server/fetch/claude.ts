@@ -111,6 +111,31 @@ export async function askTheBox(connector: string, prompt: string): Promise<BoxR
     '--model', FETCH_MODEL,
     '--output-format', 'json',
     '--max-turns', String(FETCH_MAX_TURNS),
+    /*
+     * `--allowed-tools` grants; it does not confine. That distinction was the
+     * whole of a real hole here.
+     *
+     * The list above is an *approval* list — "do not stop and ask about these"
+     * — and on its own it says nothing about what else the session may reach.
+     * Everything else came from `~/.claude/settings.json`, which this operator
+     * has set to `"defaultMode": "bypassPermissions"`, so a collector whose
+     * entire job is to read a Slack channel was starting with the full built-in
+     * tool surface and no prompt on any of it. The input that collector then
+     * reads is other people's messages: exactly the text `untrusted.ts` exists
+     * because Wake cannot vouch for.
+     *
+     * `--restricted` is Claude Code's own answer and it closes both halves in
+     * one flag: it drops Bash, the other code-running tools and WebFetch, it
+     * *ignores user, project and local settings files* — which is what takes
+     * `bypassPermissions` off the table — it refuses that mode outright, and it
+     * confines the file tools to the working directory, which is already
+     * `FETCH_RUN_DIR` and deliberately neither the checkout nor home.
+     *
+     * MCP servers are untouched by it (only `--strict-mcp-config` would skip
+     * them), and MCP tools are the only things `READ_TOOLS` names — so the
+     * collector keeps exactly the reach it was always supposed to have.
+     */
+    '--restricted',
     '--allowed-tools', tools.join(','),
   ]
 

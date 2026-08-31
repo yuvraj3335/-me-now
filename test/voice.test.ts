@@ -12,6 +12,7 @@ import {
   deleteNote, getNote, listNotes, notePath, saveNote, sttStatus, storageUsed, transcribe, updateNote, verifyStorage,
 } from '../src/server/voice/store'
 import { VOICE_MAX_BYTES } from '../src/server/env'
+import { voice } from '../src/server/voice/router'
 
 const bytes = (n: number) => new Uint8Array(n).fill(7).buffer
 
@@ -105,5 +106,56 @@ describe('housekeeping', () => {
     if (!saved.ok) return
     updateNote(saved.note.id, { task_id: 'task-1' })
     expect(listNotes({ taskId: 'task-1' }).map(n => n.id)).toContain(saved.note.id)
+  })
+
+  /*
+   * And detached again, which is the half that did not work through the API.
+   *
+   * `PATCH /api/voice/:id` read every field as `b.field ?? undefined`, and
+   * `updateNote` drops keys that are `undefined` — so an explicit `null`, which
+   * the route's own body type declares as legal and which is the only way to
+   * say "take this off the task", arrived as an empty patch. The route answered
+   * 200 having changed nothing. The store was always able to do it, and this is
+   * the store half; the router now tells absent from null with `in`.
+   */
+  test('a note can be detached again by clearing the field', async () => {
+    const saved = await saveNote({ data: bytes(64), mime: 'audio/webm' })
+    if (!saved.ok) return
+    updateNote(saved.note.id, { task_id: 'task-2' })
+    expect(getNote(saved.note.id)!.task_id).toBe('task-2')
+
+    updateNote(saved.note.id, { task_id: null })
+    expect(getNote(saved.note.id)!.task_id, 'the note could not be detached').toBeNull()
+    expect(listNotes({ taskId: 'task-2' }).map(n => n.id)).not.toContain(saved.note.id)
+  })
+})
+
+/**
+ * The router's half: absent means "leave it", `null` means "clear it".
+ *
+ * These are two different requests and `?? undefined` collapsed them into one.
+ */
+describe('patching a note over the API', () => {
+  test('an explicit null clears the field, and an absent key does not', async () => {
+    const saved = await saveNote({ data: bytes(64), mime: 'audio/webm' })
+    if (!saved.ok) return
+    updateNote(saved.note.id, { task_id: 'task-3', title: 'a title' })
+
+    const patch = (body: unknown) => voice.request(`/${saved.note.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    // Absent: the title is untouched.
+    await patch({ transcript: 'words' })
+    expect(getNote(saved.note.id)!.title).toBe('a title')
+
+    // Explicit null: the field is cleared.
+    const r = await patch({ task_id: null })
+    expect(r.status).toBe(200)
+    expect(getNote(saved.note.id)!.task_id, 'null was read as "leave it alone"').toBeNull()
+    // And nothing else went with it.
+    expect(getNote(saved.note.id)!.title).toBe('a title')
   })
 })

@@ -415,11 +415,23 @@ function SourceRow({
         {s.oauthable && s.connectable ? (
           <span className="shrink-0 pl-2">
             <Button size="sm" variant="ghost" disabled={busy}
-              onClick={() => (s.hasWakeToken && s.ok && !s.lastAuthError ? onDisconnect() : onConnect())}>
+              onClick={() => (s.hasWakeToken && s.ok ? onDisconnect() : onConnect())}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : null}
               {/* A refused grant has already had its tokens cleared, so there is
-                  nothing left to disconnect — the honest offer is Connect. */}
-              {!s.hasWakeToken ? 'Connect' : s.lastAuthError ? 'Reconnect' : s.ok ? 'Disconnect' : 'Reconnect'}
+                  nothing left to disconnect — the honest offer is Connect.
+
+                  `lastAuthError` is deliberately *not* consulted here any more.
+                  A terminal refusal nulls the tokens, so it arrives at the
+                  `Connect` branch above on `hasWakeToken` alone; the only way to
+                  reach this line holding a token is a **transient** failure —
+                  a 5xx, a DNS blip, a rate limit — which `creds.ts` records
+                  without touching the grant. Reading that as terminal put a
+                  working source on `Reconnect` permanently, because nothing
+                  clears the field until some later refresh succeeds and no
+                  refresh runs at all while the access token is still valid.
+                  What the source can do right now is `ok`, and that is what
+                  this asks. */}
+              {!s.hasWakeToken ? 'Connect' : s.ok ? 'Disconnect' : 'Reconnect'}
             </Button>
           </span>
         ) : (
@@ -478,7 +490,22 @@ function SourceRow({
  * will keep doing so until the access token expires.
  */
 export function stateWord(s: SourceStatus): { text: string; tone: string; detail?: string } {
-  if (s.lastAuthError) {
+  /*
+   * A recorded refusal only outranks everything else while the source is
+   * actually refusing.
+   *
+   * `last_auth_error` holds two different kinds of thing. A terminal one — the
+   * provider's own `invalid_grant` or `token_revoked` — comes with the tokens
+   * cleared, so `ok` is false and this branch is the whole story. A transient
+   * one — a 5xx, an HTML error page, a rate limit — is recorded with the grant
+   * left intact, on purpose, and `refresh.test.ts` pins that. Nothing clears
+   * the field except a later successful refresh, and no refresh runs while the
+   * access token is still valid, so one bad minute at the provider used to
+   * leave a perfectly healthy source reading `reconnect — 500 …` for the rest
+   * of the token's life. `ok` is the live answer; a stale reason does not get
+   * to overrule it.
+   */
+  if (s.lastAuthError && !s.ok) {
     return { text: `reconnect — ${s.lastAuthError}`, tone: 'text-warn' }
   }
   // A token Wake holds is connected. Live MCP failure is sync failed, never
@@ -613,8 +640,14 @@ function ClientSheet({
         </button>
       </Field>
 
+      {/* No `autoFocus`, for the reason `TaskSheet`, `Home` and `Work` all give
+          in their own words: below `sm` this is a bottom sheet, and focusing a
+          field as it opens raises the keyboard into a panel that is still
+          animating, so iOS scrolls the sheet to keep the caret visible and the
+          first thing he sees is the middle of a form. The field is one tap
+          away, and the tap is his. */}
       <Field label="Client ID">
-        <input className={inputClass} value={id} onChange={e => setId(e.target.value)} autoFocus
+        <input className={inputClass} value={id} onChange={e => setId(e.target.value)}
           placeholder="1234567890.1234567890" />
       </Field>
       <Field label="Client secret">

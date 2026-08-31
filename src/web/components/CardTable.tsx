@@ -69,6 +69,7 @@ import { SOURCE_LABEL } from './sources'
 import { PriorityGlyph, StatusChip, isSettled } from './status'
 import { SwipeDrawer, useSwipe } from './swipe'
 import { dueWords, ROW_META, ROW_SECOND, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
+import { navStrip } from '../lib/overlay'
 
 export type RowAction = {
   /** Open the detail. The row's own click, and the phone row's whole left half. */
@@ -421,7 +422,18 @@ function anchorFor(el: HTMLElement): PickerAt {
   const r = el.getBoundingClientRect()
   const vw = window.innerWidth
   const vh = window.innerHeight
-  const below = vh - r.bottom - PICKER_GAP - PICKER_MARGIN
+  /*
+   * Measured to the top of the tab bar, not to the bottom of the viewport —
+   * see `place()` in `primitives.tsx`, which had the same bug for the same
+   * reason. It matters more here: this picker is the phone desk's only visible
+   * status control, it is on every row including the ones at the bottom of the
+   * list, and it does not scroll, so a downward panel that overshoots puts
+   * `Done` and `Won't do` on top of the tab bar. `navStrip` is 0 from `sm` up.
+   *
+   * `vh` itself stays real, because the flipped-up branch positions with a
+   * viewport-relative `bottom`.
+   */
+  const below = (vh - navStrip()) - r.bottom - PICKER_GAP - PICKER_MARGIN
   const above = r.top - PICKER_GAP - PICKER_MARGIN
   const width = Math.min(Math.max(r.width, PICKER_MIN_W), vw - PICKER_MARGIN * 2)
   const left = Math.min(Math.max(r.left, PICKER_MARGIN), vw - width - PICKER_MARGIN)
@@ -876,69 +888,127 @@ function PhoneHead() {
 
 
 /**
- * How long a press has to be held before it is a peek, and how far it may drift.
+ * How close together two taps have to be to be one gesture, and how far apart
+ * they may land.
  *
- * 8px is deliberately *under* `SWIPE_ENGAGE_PX`, so a gesture that is going to
- * become a swipe has already cancelled the peek before the swipe itself
- * engages; a scroll cancels it on the first frame that moves. 450ms is long
- * enough that a tap can never reach it and short enough that a deliberate hold
- * does not feel broken.
+ * 280ms is the window every platform's own double-tap uses, and it is also the
+ * price: on a touch pointer the *first* tap cannot open anything until the
+ * window has closed, because until then it is still possibly the first half of
+ * a peek. That cost is paid once, deliberately, and only by touch — see
+ * `useDoubleTap`.
+ *
+ * 24px of slop rather than the long press's 8: two deliberate taps from a thumb
+ * do not land on the same pixel, and this is a row 44px tall, so a pair that
+ * drifts half a finger is still obviously one gesture.
  */
-const PEEK_MS = 450
-const PEEK_SLOP = 8
+const DOUBLE_TAP_MS = 280
+const DOUBLE_TAP_SLOP = 24
 
 /**
- * Long-press, which this product did not have.
+ * Double-tap, which replaces the long press this product used to peek with.
  *
- * Three things it must not be, and each one is a real failure it would
- * otherwise have: it must not fire on a **scroll** (the finger is down for as
- * long as you like while the page moves), it must not fire on a **swipe** (the
- * drawer is already the row's gesture), and it must not fire on a **tap** — and
- * the tap is the subtle one, because a press that has already peeked still
- * produces a `click` on release, which would open the pane the peek exists to
- * avoid opening. `ate` is what swallows that click, in the capture phase,
- * before the row's own handler sees it.
+ * The long press was the wrong gesture on the one device it existed for. A
+ * finger resting on a row for 450ms is what *scrolling* looks like before the
+ * scroll starts, so the peek fired on hesitation; it collided with iOS's own
+ * selection magnifier, which is why the row needed `WebkitTouchCallout: none`
+ * to defend it; and it was undiscoverable, because nothing on a row says it can
+ * be held. Double-tap is the gesture a phone already spends on "show me more of
+ * this", and the row is already a tap target, so it is the same target twice.
+ *
+ * **What it must not be**, and each is a real failure otherwise:
+ *
+ *  * It must not fire on a **swipe**. It cannot: the drawer eats the click in
+ *    the capture phase, so `onClick` below never runs on a gesture that opened
+ *    the drawer, and a `pointerdown` cancels any open that was already pending.
+ *  * It must not **zoom the page**. Two rapid taps are exactly what iOS Safari
+ *    magnifies on. Two things stop it, because one of them is not enough: every
+ *    row computes a non-`auto` `touch-action` (`pan-y`, or `manipulation` in
+ *    the table band — see `styles.css`), which is what actually suppresses
+ *    double-tap zoom, and the second tap additionally calls `preventDefault`,
+ *    which is the belt to that pair of braces.
+ *  * A **single tap must still open the pane**. It does, one window later.
+ *
+ * **Why only touch.** A mouse pays nothing for opening a row — the pane is a
+ * click away and closing it is another click — so making every laptop click
+ * wait 280ms to find out whether a second one is coming would be a real cost
+ * for a preview that device does not need. A pointer that is not a finger opens
+ * immediately and never peeks, and that is the whole of the difference.
  */
-function useLongPress(onPeek: () => void) {
+function useDoubleTap(onPeek: () => void, onOpen: () => void) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const from = useRef<{ x: number; y: number } | null>(null)
-  const fired = useRef(false)
+  const last = useRef<{ x: number; y: number; t: number } | null>(null)
+  const touch = useRef(false)
+  /**
+   * Set while this row's peek is on screen, so the tap that puts it away is not
+   * also the tap that opens the card.
+   *
+   * `RowPeek` is `pointer-events-none` — that is the promise that it can never
+   * trap a thumb — so the tap that dismisses it lands on the row underneath.
+   * Without this that tap armed the pane, and dismissing a peek meant opening
+   * the very card the peek exists to avoid opening, acknowledging it on the
+   * way. A ref rather than the `peeking` prop because the panel's own
+   * `pointerdown` listener has already closed it by the time the `click`
+   * arrives: the render says `false` while the gesture is still the peek's.
+   */
+  const peeked = useRef(false)
 
   const clear = () => {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
   }
 
-  // A row that leaves mid-press must not peek from the grave.
+  // A row that leaves between the two taps must not open from the grave.
   useEffect(() => clear, [])
 
   return {
     onPointerDown(e: React.PointerEvent) {
       // Secondary buttons belong to the context menu, same rule the swipe keeps.
       if (e.button > 0) return
-      fired.current = false
-      from.current = { x: e.clientX, y: e.clientY }
+      touch.current = e.pointerType === 'touch'
+      /*
+       * Any new press cancels the open the previous tap armed, and that one
+       * line is what keeps the swipe honest. If this press becomes the second
+       * tap, the click below peeks instead; if it becomes a swipe, the drawer
+       * eats the click and *nothing* happens — where without this the row would
+       * open by itself a quarter-second after a swipe the reader had already
+       * moved on from.
+       */
+      clear()
+    },
+    onPointerCancel() { clear() },
+    onClick(e: React.MouseEvent) {
+      // The tap that dismisses a peek does that and nothing else.
+      if (peeked.current) {
+        peeked.current = false
+        e.preventDefault()
+        return
+      }
+
+      if (!touch.current) { onOpen(); return }
+
+      const prev = last.current
+      const near = prev
+        && e.timeStamp - prev.t <= DOUBLE_TAP_MS
+        && Math.abs(e.clientX - prev.x) <= DOUBLE_TAP_SLOP
+        && Math.abs(e.clientY - prev.y) <= DOUBLE_TAP_SLOP
+
+      if (near) {
+        // The second tap of a pair is the one the browser would have zoomed on.
+        e.preventDefault()
+        last.current = null
+        clear()
+        peeked.current = true
+        onPeek()
+        return
+      }
+
+      last.current = { x: e.clientX, y: e.clientY, t: e.timeStamp }
       clear()
       timer.current = setTimeout(() => {
         timer.current = null
-        fired.current = true
-        onPeek()
-      }, PEEK_MS)
-    },
-    onPointerMove(e: React.PointerEvent) {
-      const start = from.current
-      if (!start || !timer.current) return
-      if (Math.abs(e.clientX - start.x) > PEEK_SLOP || Math.abs(e.clientY - start.y) > PEEK_SLOP) clear()
-    },
-    onPointerUp() { from.current = null; clear() },
-    onPointerCancel() { from.current = null; clear() },
-    /** True — and the click is eaten — when this press already peeked. */
-    ate(e: React.MouseEvent) {
-      if (!fired.current) return false
-      fired.current = false
-      e.preventDefault()
-      e.stopPropagation()
-      return true
+        last.current = null
+        onOpen()
+      }, DOUBLE_TAP_MS)
     },
   }
 }
@@ -965,14 +1035,16 @@ function useLongPress(onPeek: () => void) {
  * scrolled to, and it costs the layout nothing because it has no width.
  */
 export function CardLine({
-  card, selected, focused, actions, onPeek,
+  card, selected, focused, actions, onPeek, peeking,
 }: {
   card: Card
   selected: boolean
   focused: boolean
   actions: RowAction
   /** Show the peek for this row. The pane is still a tap away and unaffected. */
-  onPeek: (c: Card) => void
+  onPeek: (c: Card | null) => void
+  /** Whether this row is the one being peeked. The panel is drawn on it. */
+  peeking: boolean
 }) {
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
@@ -1014,25 +1086,30 @@ export function CardLine({
    * drawer opens, on the same finger, without lifting it.
    */
   const swipe = useSwipe(card.group_key, 3, 'manipulation')
-  const press = useLongPress(() => onPeek(card))
+  const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
+  const row = useRef<HTMLTableRowElement | null>(null)
+  const peekAbove = usePeekAbove(peeking, row)
 
   return (
     <tr
-      ref={swipe.bind.ref}
+      ref={n => { row.current = n; swipe.bind.ref(n) }}
       /* Both gestures read the same pointer stream. The swipe goes first in
          every one of these because it is the one that can claim the pointer;
-         the press only ever cancels itself. */
-      onPointerDown={e => { swipe.bind.onPointerDown(e); press.onPointerDown(e) }}
-      onPointerMove={e => { swipe.bind.onPointerMove(e); press.onPointerMove(e) }}
-      onPointerUp={e => { swipe.bind.onPointerUp(e); press.onPointerUp() }}
-      onPointerCancel={e => { swipe.bind.onPointerCancel(e); press.onPointerCancel() }}
-      onClickCapture={e => { if (press.ate(e)) return; swipe.bind.onClickCapture(e) }}
+         the tap only ever cancels its own pending open. */
+      onPointerDown={e => { swipe.bind.onPointerDown(e); tap.onPointerDown(e) }}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={e => { swipe.bind.onPointerCancel(e); tap.onPointerCancel() }}
+      /* The drawer still eats the click a swipe produces, and that is also what
+         stops a swipe being read as half of a double tap: `onClick` never runs. */
+      onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
-      /* `WebkitTouchCallout` beside the gesture's own style: without it iOS
-         answers a long press on a row of text with its own selection magnifier,
-         over the peek that press was asking for. */
+      /* `WebkitTouchCallout` beside the gesture's own style. The long press it
+         was defending against is gone, but the callout is not about the peek —
+         a press-and-hold on a row of text still raises iOS's selection
+         magnifier over a row whose whole job is to be tapped. */
       style={{ ...swipe.bind.style, WebkitTouchCallout: 'none' }}
-      onClick={() => actions.onOpen(card)}
+      onClick={tap.onClick}
       aria-selected={selected}
       className={`cursor-pointer border-b border-rule
         ${rowStateClass({ selected, focused, unseen })}`}
@@ -1101,6 +1178,28 @@ export function CardLine({
           dx={swipe.dx} width={swipe.width} onClose={swipe.close}
           {...drawerFor(card, actions)}
         />
+        {/* The peek hangs off this same 0px cell, for the same reason the
+            drawer does: `touch-action` is not the only thing a `<tr>` refuses
+            to be — it is not a reliable containing block either, and the Title
+            cell cannot hold it because `CELL` carries `truncate`, whose
+            `overflow: hidden` would clip the panel to one line of one column.
+            `right-0` on a cell pinned to the right edge of what is visible puts
+            the panel's right edge there too.
+
+            `top-0` rather than `bottom-full`: hanging it above the row reads
+            better everywhere except the one row it has to work on, because the
+            scroller's `overflow-x-auto` computes `overflow-y: auto` with it, so
+            a panel lifted above the *first* row is clipped by the box it grew
+            out of. Anchored to the row's own top edge it starts exactly where
+            the row starts, at every scroll position, and it carries the title
+            itself so the row it covers is still named. */}
+        {peeking && (
+          <RowPeek
+            card={card}
+            onClose={() => onPeek(null)}
+            className={`absolute right-0 z-30 w-[min(88vw,26rem)] ${peekAbove ? 'bottom-full mb-1' : 'top-0'}`}
+          />
+        )}
       </td>
     </tr>
   )
@@ -1191,18 +1290,51 @@ export function PhoneTable({
                 focused={c.group_key === cursorKey}
                 actions={actions}
                 onPeek={setPeek}
+                peeking={peek?.group_key === c.group_key}
               />
             ))}
           </tbody>
         </table>
       </div>
-      {peek && <Peek card={peek} onClose={() => setPeek(null)} />}
     </>
   )
 }
 
 /**
- * What a long press answers with.
+ * Roughly how tall the peek gets: a source line, two lines of title, the why,
+ * and three clipped lines of excerpt. Only used to choose a side, so it is a
+ * bound rather than a measurement — being 20px out picks the same side.
+ */
+const PEEK_H = 200
+
+/**
+ * Which side of the row the peek hangs off.
+ *
+ * `top-0` reads best and is what a row near the top gets. It is wrong for a row
+ * near the *bottom*: the panel grows downward from the row's own top edge, so on
+ * the last screenful it runs under the phone's tab bar — measured at 390px, a
+ * row at y=666 put 55px of panel, which is exactly the excerpt, behind the six
+ * tabs. Moving the whole thing above the tab bar is what the old portal did and
+ * is the thing this pass removed, so the answer is not to move it off the row;
+ * it is to hang it off the row's other edge, where on a low row there is a whole
+ * screen of room.
+ *
+ * Measured when the peek opens rather than on every render, because the only
+ * moment the answer matters is the moment it appears.
+ */
+function usePeekAbove(peeking: boolean, of: { current: HTMLElement | null }): boolean {
+  const [above, setAbove] = useState(false)
+  useEffect(() => {
+    if (!peeking) return
+    const r = of.current?.getBoundingClientRect()
+    if (!r) return
+    setAbove(r.top + PEEK_H > window.innerHeight - navStrip())
+  }, [peeking, of])
+  return peeking && above
+}
+
+/**
+ * What a double tap answers with, on the row it was aimed at.
  *
  * Deliberately *not* the detail. The pane is what a tap opens and it is a place
  * you go — it takes the screen, it acknowledges the card, and coming back is a
@@ -1212,17 +1344,32 @@ export function PhoneTable({
  * about it is committed — it does not acknowledge, it does not select, and it
  * does not change the URL.
  *
- * `pointer-events-none` is the whole of that promise, expressed once: the panel
+ * **It is drawn on its own row, and that is the change.** This used to be a
+ * `fixed` panel portalled to `document.body` and parked above the tab bar,
+ * which put the answer at the bottom of the screen no matter which row was
+ * asked — twenty rows, one place, and a reader whose thumb was at the top of
+ * the list had to look somewhere else to read what it said. Anchored to the
+ * row's own top edge it needs no portal, no `z-50`, and no arithmetic about
+ * `--nav-h` at all: it cannot cover the tab bar because it is nowhere near it.
+ *
+ * `pointer-events-none` is the promise that survives unchanged: the panel
  * cannot be tapped, so it can never be a thing you have to get out of. Any
  * pointer that goes down anywhere — including through it, onto the row
  * underneath — dismisses it, as does Escape and as does any scroll, captured so
  * that a scroll inside the table counts too.
  *
- * It sits above the phone's tab bar rather than on the bottom edge, for the
- * same reason the detail sheet does: `--nav-h` is the strip the bar owns and
- * covering it is how a reader ends up with no way out.
+ * The caller supplies the positioning, because the two layouts hang it off
+ * different boxes: the row-card is `relative` and takes `inset-x-0`, and the
+ * table row cannot be a containing block at all, so it hangs off the same 0px
+ * sticky cell the drawer already uses. Everything below the position is one
+ * component, so a peeked row says the same thing at every width.
  */
-function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
+function RowPeek({ card, onClose, className }: {
+  card: Card
+  onClose: () => void
+  /** Where it hangs. See the note above on why this is the caller's. */
+  className: string
+}) {
   const kind = cardKind(card)
   const where = contextLine(card)
 
@@ -1239,12 +1386,11 @@ function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
     }
   }, [onClose])
 
-  return createPortal(
+  return (
     <div
       role="tooltip"
-      style={{ bottom: 'calc(var(--nav-h) + 8px)' }}
-      className="fixed inset-x-2 z-50 pointer-events-none flex flex-col gap-2
-                 rounded-panel border border-edge bg-ink-850 p-3"
+      className={`${className} pointer-events-none flex flex-col gap-2
+                 rounded-panel border border-edge bg-ink-850 p-3`}
     >
       <span className="flex items-center gap-2 min-w-0">
         <KindGlyph kind={kind} size={14} />
@@ -1265,8 +1411,7 @@ function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
       {card.excerpt && (
         <span className={`${ROW_SECOND} line-clamp-3`}>{plainMarkdown(card.excerpt)}</span>
       )}
-    </div>,
-    document.body,
+    </div>
   )
 }
 
@@ -1308,14 +1453,16 @@ function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
  * needs has nothing to arbitrate here.
  */
 function RowCard({
-  card, selected, focused, actions, onPeek,
+  card, selected, focused, actions, onPeek, peeking,
 }: {
   card: Card
   selected: boolean
   focused: boolean
   actions: RowAction
   /** Show the peek for this row. The card is still a tap away and unaffected. */
-  onPeek: (c: Card) => void
+  onPeek: (c: Card | null) => void
+  /** Whether this row is the one being peeked. The panel is drawn on it. */
+  peeking: boolean
 }) {
   const ref = useRef<HTMLLIElement | null>(null)
   const words = dueWords(card.due_at)
@@ -1324,7 +1471,8 @@ function RowCard({
   const where = contextLine(card)
   const name = titleOf(card)
   const swipe = useSwipe(card.group_key, 3)
-  const press = useLongPress(() => onPeek(card))
+  const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
+  const peekAbove = usePeekAbove(peeking, ref)
 
   // The `j`/`k` cursor reaches this layout too, and a selection nobody can see
   // is worse than none — the same line the table row spends on the same problem.
@@ -1333,17 +1481,20 @@ function RowCard({
   return (
     <li
       ref={n => { ref.current = n; swipe.bind.ref(n) }}
-      onPointerDown={e => { swipe.bind.onPointerDown(e); press.onPointerDown(e) }}
-      onPointerMove={e => { swipe.bind.onPointerMove(e); press.onPointerMove(e) }}
-      onPointerUp={e => { swipe.bind.onPointerUp(e); press.onPointerUp() }}
-      onPointerCancel={e => { swipe.bind.onPointerCancel(e); press.onPointerCancel() }}
-      onClickCapture={e => { if (press.ate(e)) return; swipe.bind.onClickCapture(e) }}
+      onPointerDown={e => { swipe.bind.onPointerDown(e); tap.onPointerDown(e) }}
+      onPointerMove={swipe.bind.onPointerMove}
+      onPointerUp={swipe.bind.onPointerUp}
+      onPointerCancel={e => { swipe.bind.onPointerCancel(e); tap.onPointerCancel() }}
+      /* The drawer still eats the click a swipe produces, and that is also what
+         stops a swipe being read as half of a double tap: `onClick` never runs. */
+      onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
-      /* `WebkitTouchCallout` beside the gesture's own style: without it iOS
-         answers a long press on a row of text with its own selection magnifier,
-         over the peek that press was asking for. */
+      /* `WebkitTouchCallout` beside the gesture's own style. The long press it
+         was defending against is gone, but the callout is not about the peek —
+         a press-and-hold on a row of text still raises iOS's selection
+         magnifier over a row whose whole job is to be tapped. */
       style={{ ...swipe.bind.style, WebkitTouchCallout: 'none' }}
-      onClick={() => actions.onOpen(card)}
+      onClick={tap.onClick}
       /* `aria-current`, where both tables say `aria-selected`, and the swap is
          not cosmetic: `aria-selected` is only defined on a handful of roles —
          row, option, tab, gridcell — and a plain `<li>` is none of them, so on
@@ -1362,6 +1513,17 @@ function RowCard({
         dx={swipe.dx} width={swipe.width} onClose={swipe.close}
         {...drawerFor(card, actions)}
       />
+
+      {/* The row is already the containing block the drawer needs, so the peek
+          costs nothing extra here: `inset-x-0 top-0` is the row's own top edge,
+          full width, and there is no scroller on this layout to clip it. */}
+      {peeking && (
+        <RowPeek
+          card={card}
+          onClose={() => onPeek(null)}
+          className={`absolute inset-x-0 z-30 ${peekAbove ? 'bottom-full mb-1' : 'top-0'}`}
+        />
+      )}
 
       <div className="flex items-start gap-2 min-w-0">
         {/* Named for the source rather than the kind: the shape is what a
@@ -1407,9 +1569,9 @@ function RowCard({
  * and nothing here is wider than the column it sits in, so there is nothing to
  * scroll horizontally and nothing to fight the row's own swipe for the axis.
  *
- * The long press answers with the same `Peek` the phone table uses — one
- * component, so a held row says the same thing at every width it can be held
- * at.
+ * A double tap answers with the same `RowPeek` the phone table uses — one
+ * component, so a peeked row says the same thing at every width it can be
+ * peeked at.
  */
 export function CardList({
   rows, selectedKey, cursorKey, actions,
@@ -1423,22 +1585,20 @@ export function CardList({
   const [peek, setPeek] = useState<Card | null>(null)
 
   return (
-    <>
-      {/* One edge at the top, which is the table's `<thead>` rule doing the one
-          job it still has here: saying where the list starts. Without it the
-          first row floats under the filter control with nothing between them. */}
-      <ul className="border-t border-edge">
-        {rows.map(c => (
-          <RowCard
-            key={c.group_key} card={c}
-            selected={c.group_key === selectedKey}
-            focused={c.group_key === cursorKey}
-            actions={actions}
-            onPeek={setPeek}
-          />
-        ))}
-      </ul>
-      {peek && <Peek card={peek} onClose={() => setPeek(null)} />}
-    </>
+    /* One edge at the top, which is the table's `<thead>` rule doing the one
+       job it still has here: saying where the list starts. Without it the
+       first row floats under the filter control with nothing between them. */
+    <ul className="border-t border-edge">
+      {rows.map(c => (
+        <RowCard
+          key={c.group_key} card={c}
+          selected={c.group_key === selectedKey}
+          focused={c.group_key === cursorKey}
+          actions={actions}
+          onPeek={setPeek}
+          peeking={peek?.group_key === c.group_key}
+        />
+      ))}
+    </ul>
   )
 }

@@ -56,7 +56,7 @@ import {
   TERMINAL_ROWS, TERMINAL_SIZE_DIR, TERMINAL_TMUX_SOCKET, TMUX_BIN, WORKSPACE_ROOT,
 } from '../env'
 import { getRepo } from '../registry/scan'
-import { getSession } from '../sources/claudeSessions'
+import { getSession, isSessionActive } from '../sources/claudeSessions'
 import {
   DEFAULT_PERMISSION_MODE, resolveCwd, type PermissionMode,
 } from './launch'
@@ -551,6 +551,37 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
     // caller cannot invent an id and have Wake create a directory for it.
     const session = getSession(id)
     if (!session) return { error: `no session ${id} on this machine`, status: 400 }
+
+    /*
+     * And a transcript is not a conversation.
+     *
+     * `getSession` searches `ALL_HISTORY_DAYS` of transcripts, so on its own it
+     * answers yes for every session that has ever run on this box — five
+     * hundred of them here against nine that are up. That is the right
+     * allowlist for *which directory* a resume may run in and the wrong one for
+     * *whether* it may run at all, and the gap between those two was the whole
+     * of the bug this gate closes: a card for a session that finished last week
+     * still carries its id, `CardDetail` still offers to open it, and the id
+     * went to `claude --resume`, which answered — on his phone, which is where
+     * it was read — that the session had been archived.
+     *
+     * `isSessionActive` is the answer the rest of the product already gives to
+     * this question. The list gives it, the launcher's picker gives it, and
+     * `POST /sessions/:id/send` gives it in this same sentence; this route was
+     * the one path that *starts* something and did not ask. Claude Code
+     * publishes no archive flag to read — measured again on 2.1.251, zero
+     * archive-shaped keys under `~/.claude` — so "is a process holding this
+     * open" is the only honest question available, and it is the one every
+     * other surface is already answering.
+     *
+     * The reattach above is deliberately in front of this and stays that way:
+     * `getTerminal` reads tmux rather than memory, so a session Wake is holding
+     * is reachable across a Wake restart, and that path never reaches `--resume`
+     * at all.
+     */
+    if (!isSessionActive(id)) {
+      return { error: 'that session is not running any more — start a new one', status: 409 }
+    }
 
     const where = resolveSessionCwd(session.cwd)
     if (!where.ok) return { error: where.error, status: 400 }

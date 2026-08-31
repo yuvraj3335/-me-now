@@ -286,7 +286,16 @@ export default function App() {
       {/* Mobile nav: all six destinations. 65px each at 390px, which clears the
           44pt target, and nothing worth reaching is behind a sheet you have to
           know about. */}
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom bg-ink-900 border-t border-edge">
+      {/* `data-navbar` is how a positioned panel finds out how much of the
+          bottom of the screen is already spoken for. `--nav-h` is the same fact
+          in the stylesheet, and everything that can stay in CSS uses that; a
+          menu that has to *decide* whether to open upward needs the number, and
+          a custom property carrying a `calc()` with an `env()` inside it does
+          not resolve to one through `getPropertyValue`. So the bar is measured
+          instead — it reports 0 the moment it is `display: none`, which is
+          exactly the answer wanted from `sm` up. See `navStrip`. */}
+      <nav data-navbar
+        className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom bg-ink-900 border-t border-edge">
         <div className="flex">
           {TABS.map(t => (
             <TabItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}

@@ -30,13 +30,15 @@ import {
   terminalRoute, terminalSocketPath, tmuxNameFor,
 } from '../src/server/claudecode/terminal'
 import { buildPack, renderPack } from '../src/server/claudecode/launch'
-import { CLAUDE_BIN, CLAUDE_PROJECTS_DIR, WORKSPACE_ROOT } from '../src/server/env'
+import { CLAUDE_BIN, CLAUDE_HOME, CLAUDE_PROJECTS_DIR, WORKSPACE_ROOT } from '../src/server/env'
 import { terminalIdOf } from '../src/web/lib/route'
 import { rescan } from '../src/server/registry/scan'
 
 const root = process.env.WAKE_WORKSPACE_ROOT!
 const SESSION = 'aaaaaaaa-1111-4111-8111-111111111111'
 const NOT_HERE = 'ffffffff-9999-4999-8999-999999999999'
+/** A real transcript in a real repository, with no process behind it. */
+const FINISHED = 'cccccccc-3333-4333-8333-333333333333'
 
 beforeAll(() => {
   // The same fixture launch.test.ts builds. Building it twice is harmless and
@@ -65,6 +67,22 @@ beforeAll(() => {
       { type: 'user', cwd: repo, gitBranch: 'fix/sync', message: { role: 'user', content: 'look at the sync' } },
       { type: 'user', cwd: repo, gitBranch: 'fix/sync', message: { role: 'user', content: 'carry on' } },
     ].map(l => JSON.stringify(l)).join('\n'),
+  )
+
+  /*
+   * And a process holding it open, because a transcript on its own is no longer
+   * enough to resume.
+   *
+   * `openTerminal` gates a resume on `isSessionActive`, which reads the
+   * per-process files Claude Code writes — the same source `claude agents
+   * --json` reports from. Without this the fixture describes a session that
+   * *finished*, and the tests below would be measuring the refusal rather than
+   * the allowlist they are named for.
+   */
+  mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
+  writeFileSync(
+    `${CLAUDE_HOME}/sessions/4242.json`,
+    JSON.stringify({ pid: 4242, sessionId: SESSION, cwd: repo, startedAt: Date.now(), name: 'the fixture' }),
   )
 })
 
@@ -277,6 +295,34 @@ describe('only what Wake already knows can be started', () => {
     const r = openTerminal({ sessionId: SESSION })
     expect(r).toHaveProperty('error')
     if ('error' in r) expect(r.status).toBe(503)
+  })
+
+  test('a session nothing is running is refused before the machine is asked', () => {
+    /*
+     * The transcript exists and the directory is a real repository, so every
+     * allowlist in this file says yes — and it still may not be resumed,
+     * because `--resume` on a session no process is holding open is how Claude
+     * Code came to tell him, on his phone, that the session had been archived.
+     *
+     * 409 rather than 503 is the whole point: this refusal comes *before*
+     * availability, so it is the same answer on a box with tmux and without
+     * one, and it is the same sentence `POST /sessions/:id/send` gives.
+     */
+    const dir = `${CLAUDE_PROJECTS_DIR}/${join(root, 'truto').replace(/[^a-zA-Z0-9]/g, '-')}`
+    writeFileSync(
+      `${dir}/${FINISHED}.jsonl`,
+      [
+        { type: 'user', cwd: join(root, 'truto'), message: { role: 'user', content: 'this one ended' } },
+        { type: 'user', cwd: join(root, 'truto'), message: { role: 'user', content: 'last week' } },
+      ].map(l => JSON.stringify(l)).join('\n'),
+    )
+
+    const r = openTerminal({ sessionId: FINISHED })
+    expect(r).toHaveProperty('error')
+    if ('error' in r) {
+      expect(r.status, 'a finished session was handed to --resume').toBe(409)
+      expect(r.error).toContain('not running any more')
+    }
   })
 })
 

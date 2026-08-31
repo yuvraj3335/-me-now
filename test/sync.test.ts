@@ -15,7 +15,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { db } from '../src/server/db'
+import { db, now } from '../src/server/db'
 import { api } from '../src/server/api'
 import { syncLine } from '../src/web/components/sync'
 import { timeOfDay } from '../src/web/lib/time'
@@ -142,5 +142,74 @@ describe('the line says what actually happened', () => {
       src('gmail', { ok: false, error: 'rate limited' }),
     ]))
     expect(title.split('\n')).toEqual(['Slack: 4 in 12ms', 'Gmail: rate limited'])
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * A poll that merges two groups has to move both of them.
+ *
+ * `doIngest` groups over `survivors` — this round's cards *and* every live row —
+ * precisely so a card arriving now can join one stored days ago. Its write loop
+ * only walked the newly fetched cards, so the new card learned the merged key
+ * and the stored one kept its old one: one thing, two rows on the desk, two
+ * `card_state` rows, two separate "already seen" baselines.
+ *
+ * `fetch/index.ts` has carried the follow-up loop since Fetch could merge
+ * groups at all. The poller runs every three minutes and did not.
+ * ------------------------------------------------------------------------- */
+
+import { ADAPTERS, ingest } from '../src/server/ingest'
+import type { RawCard, SourceAdapter } from '../src/server/sources/types'
+
+describe('a poll that merges two groups moves both rows', () => {
+  const SHARED = 'https://github.com/acme/widgets/pull/7'
+
+  /** Swap one adapter for a stub that returns exactly these cards. */
+  const withAdapter = async (name: string, cards: RawCard[], run: () => Promise<void>) => {
+    const at = ADAPTERS.findIndex(a => a.name === name)
+    const real = ADAPTERS[at]!
+    ADAPTERS[at] = {
+      ...real,
+      async status() { return { ok: true, detail: 'stub' } },
+      async fetch() { return cards },
+    } as SourceAdapter
+    try { await run() } finally { ADAPTERS[at] = real }
+  }
+
+  test('the card that was already stored follows the merge', async () => {
+    db.query(`DELETE FROM cards`).run()
+    db.query(`DELETE FROM card_state`).run()
+    db.query(`DELETE FROM sync_runs`).run()
+
+    // Already on the desk, from a source this poll will not touch, carrying the
+    // shared reference. Its own id is its group key, as an unmerged card's is.
+    const stored = 'github:acme/widgets#7'
+    db.query(
+      `INSERT INTO cards (id, source, source_id, group_key, kind, title, why, url, ts, pile,
+                          refs, meta, first_seen_at, last_seen_at, gone, found_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,'{}',?,?,0,'poll')`,
+    ).run(stored, 'github', 'acme/widgets#7', stored, 'my_pr', 'A pull request', 'yours',
+          SHARED, now(), 'open', JSON.stringify([{ t: 'url', v: SHARED }]), now(), now())
+
+    // And a Slack message that talks about the same pull request.
+    const incoming: RawCard = {
+      source: 'slack', source_id: 'C1:1.2', kind: 'mention',
+      title: 'can you look at this PR', why: 'you were named',
+      url: 'https://slack.com/archives/C1/p12', ts: now(), pile: 'open',
+      refs: [{ t: 'url', v: SHARED }], meta: {},
+    }
+
+    await withAdapter('slack', [incoming], async () => { await ingest('slack') })
+
+    const keys = db
+      .query<{ id: string; group_key: string }, []>(`SELECT id, group_key FROM cards WHERE gone = 0`)
+      .all()
+
+    expect(keys.length, 'the fixture did not land as two rows').toBe(2)
+    const distinct = new Set(keys.map(k => k.group_key))
+    expect(
+      distinct.size,
+      `the stored row kept its old group key — one thing is still two rows: ${JSON.stringify(keys)}`,
+    ).toBe(1)
   })
 })

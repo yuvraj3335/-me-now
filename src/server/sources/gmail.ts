@@ -20,7 +20,7 @@ import {
   GMAIL_ACCOUNTS, GMAIL_PAGE_SIZE, GMAIL_RESCUE_REPLIED, gmailCardQuery, gmailRepliedQuery, ME,
 } from '../env'
 import { extractRefs, subjectRef } from '../dedup'
-import { gmailThreadUrl, sessionFor } from '../mail/gmail'
+import { gmailThreadUrl, probeMail, sessionFor } from '../mail/gmail'
 import { plainBody, plainText } from '../mail/sanitize'
 import { rescuedByReply } from '../mail/triage'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
@@ -67,28 +67,47 @@ export const gmail: SourceAdapter = {
   name: 'gmail',
   label: 'Gmail',
 
+  /**
+   * Ask Google, rather than ask whether a token exists.
+   *
+   * This was the one adapter of four that answered from a *string*. Slack calls
+   * `discoverTools`, Sentry calls `findIssuesTool`, GitHub calls
+   * `api.github.com/user` — each of them round-trips and each of them turns an
+   * `McpUnauthorized` into "reconnect". Gmail returned `ok: true` as soon as
+   * `resolveToken` handed back any token at all.
+   *
+   * `resolveToken` is a real check and #36 is why — a credential that cannot
+   * refresh comes back null rather than stale. What it cannot see is the token
+   * that has not expired and has been *revoked*, which is precisely what
+   * happens when a Google grant is withdrawn from the account page: nothing
+   * expires, no refresh is attempted, so Settings kept saying `connected:
+   * yuvraj@truto.one` while every fetch 401'd. "A source nobody connected is
+   * not a healthy sync" is already a suite in this repo; this is the same rule
+   * one tier down.
+   *
+   * `probeMail` is the probe the mail surface already runs, so this adds no new
+   * mechanism and no new round trip in the common case: it is cached behind
+   * `CAP_TTL_MS`, deduplicated through a single in-flight promise, and
+   * deliberately *not* cached when every inbox was rejected, so a reconnect
+   * shows up here immediately instead of looking like it did nothing.
+   */
   async status() {
-    const per = await Promise.all(
-      GMAIL_ACCOUNTS.map(async a => ({ a, ...(await resolveToken(`gmail:${a}`)) })),
-    )
-    const shared = await resolveToken('gmail')
-    const live = per.filter(p => p.token).map(p => p.a)
-    if (!live.length && shared.token) {
-      // One token, every configured address — `fetch` polls all of them with it,
-      // and `/api/mail/state` lists all of them as connected. Calling that
-      // "single account" contradicted both wherever the string surfaced.
-      return {
-        ok: true,
-        detail: GMAIL_ACCOUNTS.length === 1
-          ? `connected: ${GMAIL_ACCOUNTS[0]}`
-          : `connected: ${GMAIL_ACCOUNTS.join(', ')} (one shared token)`,
-        via: shared.via,
-      }
-    }
+    const caps = await probeMail()
+    const live = caps.accounts.filter(a => a.connected)
+
     if (!live.length) {
-      return { ok: false, detail: 'Connect — Google\'s hourly token expired and cannot be refreshed' }
+      return { ok: false, detail: caps.reason ?? 'not connected' }
     }
-    return { ok: true, detail: `connected: ${live.join(', ')}`, via: per.find(p => p.token)?.via }
+
+    // One token, every configured address — `fetch` polls all of them with it,
+    // and `/api/mail/state` lists all of them as connected. Calling that
+    // "single account" contradicted both wherever the string surfaced.
+    const shared = live.length < GMAIL_ACCOUNTS.length ? '' : ' (one shared token)'
+    const detail = live.length === 1
+      ? `connected: ${live[0]!.address}`
+      : `connected: ${live.map(a => a.address).join(', ')}${shared}`
+
+    return { ok: true, detail, via: live[0]!.via }
   },
 
   async fetch() {

@@ -87,14 +87,29 @@ voice.get('/:id/audio', async c => {
   })
 })
 
+/**
+ * Absent means "leave it"; `null` means "clear it".
+ *
+ * These are two different requests and `?? undefined` collapsed them into one.
+ * `updateNote` drops every key that is `undefined`, so `{"task_id": null}` —
+ * which the body type has always declared as legal, and which is the only way
+ * to detach a note from the task, card or pack it was filed under — arrived as
+ * an empty patch and returned 200 having changed nothing at all. The store was
+ * always ready for it: its `UPDATE` writes `patch[k] ?? null`.
+ *
+ * `in` is the distinction the JSON already carries, so it is the one to read.
+ */
+const patched = <T extends string>(b: Record<string, string | null>, key: T) =>
+  key in b ? b[key] : undefined
+
 voice.patch('/:id', async c => {
   const b = await c.req.json<Record<string, string | null>>().catch(() => ({}) as Record<string, string | null>)
   const note = updateNote(c.req.param('id'), {
-    title: b.title ?? undefined,
-    transcript: b.transcript ?? undefined,
-    task_id: b.task_id ?? undefined,
-    card_group: b.card_group ?? undefined,
-    pack_id: b.pack_id ?? undefined,
+    title: patched(b, 'title'),
+    transcript: patched(b, 'transcript'),
+    task_id: patched(b, 'task_id'),
+    card_group: patched(b, 'card_group'),
+    pack_id: patched(b, 'pack_id'),
   })
   return note ? c.json({ note }) : c.json(bad('no such note'), 404)
 })

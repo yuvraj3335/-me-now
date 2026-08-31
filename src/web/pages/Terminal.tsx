@@ -396,16 +396,24 @@ export function TerminalPage({ id }: { id: string }) {
     else navigate('/sessions')
   }
 
-  const restart = async () => {
-    try {
-      const t = await terminalApi.open({ sessionId: id })
-      setInfo(t)
-      setError(null)
-      setStatus('connecting')
-      setAttach(a => a + 1)
-    } catch (e) {
-      toast((e as Error).message)
-    }
+  /**
+   * What a stopped session actually offers, which is not a resume.
+   *
+   * This used to `POST /terminals {sessionId}` again, on the theory that the
+   * transcript is still here so the conversation can be picked up. Claude Code
+   * does not agree once the process is gone: the id names a record, `--resume`
+   * is where "this session has been archived" comes from, and Wake now refuses
+   * to hand a non-running id to it at all — so the button was a request that
+   * could only ever come back as an error toast.
+   *
+   * A new conversation in the same directory is the honest offer, and it is the
+   * one the Sessions page already makes. The repository travels so he does not
+   * have to find it again; the transcript stays where it is and is still
+   * readable on the session page.
+   */
+  const startFresh = () => {
+    const where = session?.cwd ?? info?.cwd
+    navigate(where ? `/sessions/new?repo=${encodeURIComponent(where)}` : '/sessions/new')
   }
 
   const end = async () => {
@@ -468,7 +476,7 @@ export function TerminalPage({ id }: { id: string }) {
         <div className="ml-auto shrink-0 flex items-center gap-2">
           <Live status={status} />
           {status === 'ended' || status === 'gone' ? (
-            <Button size="sm" variant="secondary" onClick={() => void restart()}>Open again</Button>
+            <Button size="sm" variant="secondary" onClick={startFresh}>New session</Button>
           ) : (
             <Button
               size="sm"
@@ -499,7 +507,7 @@ export function TerminalPage({ id }: { id: string }) {
       )}
 
       {status === 'gone' ? (
-        <Gone id={id} session={session} onOpen={() => void restart()} />
+        <Gone id={id} session={session} onOpen={startFresh} />
       ) : (
         <>
           {/* Tapping the screen focuses xterm's own input. It has to happen
@@ -661,7 +669,7 @@ function Gone({
     <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 pad-x text-center">
       <p className="text-sm text-fg-dim">
         {session
-          ? <>This session is not running right now. Its transcript is still on this machine, so opening it again picks up where it left off.</>
+          ? <>This session is not running any more. Its transcript is still on this machine and is readable on the session page — but Claude Code will not continue a conversation whose process has gone, so the way on is a new one in the same repository.</>
           : <>There is no session <span className="tnum">{id.slice(0, 8)}</span> on this machine.</>}
       </p>
       {session && (
@@ -669,7 +677,7 @@ function Gone({
           <p className="text-sm text-fg-mute">
             {session.title} · {session.cwd}{session.branch ? ` · ${session.branch}` : ''}
           </p>
-          <Button variant="primary" size="lg" onClick={onOpen}>Open it again</Button>
+          <Button variant="primary" size="lg" onClick={onOpen}>Start a new session here</Button>
         </>
       )}
       <Button variant="ghost" onClick={() => navigate('/sessions')}>Back to Sessions</Button>

@@ -216,7 +216,10 @@ async function doRefresh(server: string, row: StoredToken): Promise<string | nul
       })
       return null
     }
-    // Transient. Nothing was established, so nothing is cleared.
+    // Transient. Nothing was established, so nothing is cleared — the grant
+    // survives and the reason is kept for the Settings row to explain itself
+    // with. It is deliberately *not* terminal: see `statusOf` in `Settings.tsx`
+    // for why that distinction has to be made where it is read rather than here.
     putStored(server, { last_auth_error: (e as Error).message })
     return null
   }

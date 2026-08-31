@@ -126,12 +126,12 @@ describe('a phone can reach every column of its own table', () => {
 
   test('the row keeps every other way in', () => {
     // Every way in survives the axis being lent to the table for the first part
-    // of the gesture: a tap opens the card, a long press peeks it, `Done` is one
+    // of the gesture: a tap opens the card, a double tap peeks it, `Done` is one
     // control away in the row's own Status column, and the drawer itself is
     // reached by swiping on past the end of the scroll.
     const line = bodyOf(table, 'CardLine')
     expect(line, 'tap-to-open is gone from the phone row').toContain('actions.onOpen(card)')
-    expect(line, 'long-press-to-peek is gone from the phone row').toContain('useLongPress')
+    expect(line, 'double-tap-to-peek is gone from the phone row').toContain('useDoubleTap')
     // A `<Select>` until this pass, and the control changed rather than left —
     // see `a status is a colour before it is a word` below for what a closed
     // one now has to draw.
@@ -384,9 +384,9 @@ describe('below sm a row is a card, and nothing scrolls sideways', () => {
       .not.toContain("'manipulation'")
   })
 
-  test('a row can still be acted on, held, and pointed at', () => {
+  test('a row can still be acted on, peeked, and pointed at', () => {
     expect(card, 'the row lost the drawer').toContain('<SwipeDrawer')
-    expect(card, 'the row lost the long press').toContain('useLongPress')
+    expect(card, 'the row lost the double tap').toContain('useDoubleTap')
     expect(card, 'a tap stopped opening the card').toContain('actions.onOpen(card)')
     // Selected, focused and unseen from the one function every list uses. A
     // phone has no hover, so a row that says which one it is only on hover says
@@ -499,5 +499,107 @@ describe('a session card opens the session', () => {
       .toContain('Open session')
     expect(detail, 'the session control is not full width on a phone')
       .toMatch(/className="w-full" disabled=\{opening\}/)
+  })
+})
+
+/**
+ * The peek is a double tap, and it is drawn on the row that was tapped.
+ *
+ * Two separate failures were being fixed, and they are pinned separately
+ * because either one could come back without the other.
+ *
+ * **The gesture.** A long press is what *hesitating before a scroll* looks
+ * like, so the peek fired on rows nobody asked about; it also collides with
+ * iOS's own selection magnifier, which is why the row had to carry
+ * `WebkitTouchCallout: none` to defend it. Double-tap is the gesture a phone
+ * already spends on "more of this", and it costs the row nothing it was not
+ * already paying — it is the same tap target twice.
+ *
+ * **The place.** The answer used to be a `fixed` panel portalled to
+ * `document.body` and parked above `--nav-h`, so twenty rows all answered in
+ * one place at the bottom of the screen, nowhere near the row being asked
+ * about, and permanently one arithmetic slip away from covering the tab bar.
+ * Anchored to the row it needs no portal and no knowledge of the tab bar at
+ * all.
+ */
+describe('a peek is two taps, and it lands on its own row', () => {
+  const src = code(table)
+
+  test('the long press is gone, and so is its timer', () => {
+    expect(src, 'the long press came back').not.toContain('useLongPress')
+    expect(src, 'the long press timer came back').not.toContain('PEEK_MS')
+    expect(src, 'the long-press slop came back').not.toContain('PEEK_SLOP')
+  })
+
+  test('both phone layouts peek through the same double tap', () => {
+    for (const name of ['CardLine', 'RowCard']) {
+      const row = bodyOf(table, name)
+      expect(row, `${name} does not peek on a double tap`).toContain('useDoubleTap(')
+      // Single tap still opens. `useDoubleTap` is handed the open as its second
+      // argument precisely so that one function owns which of the two happens.
+      expect(row, `${name} stopped opening on a tap`).toContain('actions.onOpen(card)')
+    }
+  })
+
+  test('the second tap is the one that would have zoomed, so it is prevented', () => {
+    const hook = bodyOf(table, 'useDoubleTap')
+    expect(hook, 'the double tap no longer suppresses iOS double-tap zoom')
+      .toContain('e.preventDefault()')
+    // A mouse pays nothing to open a row, so it does not pay the window either.
+    expect(hook, 'the deferral stopped being touch-only')
+      .toContain("e.pointerType === 'touch'")
+  })
+
+  /*
+   * The row is what suppresses double-tap zoom in the browser, and the
+   * `preventDefault` above is the belt to that pair of braces. Any value other
+   * than `auto` disables double-tap zoom; these are the two the rows declare.
+   */
+  test('every row a double tap can land on declares a non-auto touch-action', () => {
+    expect(css, "the row's own touch-action policy is gone")
+      .toMatch(/\[data-swipe='pan-y'\][\s\S]*?touch-action: pan-y;/)
+    expect(css, 'the table row stopped declaring one')
+      .toMatch(/\[data-swipe='manipulation'\][\s\S]*?touch-action: manipulation;/)
+    expect(css, 'a row started letting the browser choose').not.toMatch(/touch-action:\s*auto/)
+  })
+
+  test('the peek is not a portal, not fixed, and not the tab bar’s problem', () => {
+    const peek = bodyOf(table, 'RowPeek')
+    expect(peek, 'the peek went back to a portal').not.toContain('createPortal')
+    expect(peek, 'the peek went back to document.body').not.toContain('document.body')
+    expect(peek, 'the peek is fixed to the viewport again').not.toContain('fixed')
+    expect(peek, 'the peek is doing tab-bar arithmetic again').not.toContain('--nav-h')
+    // The whole of the promise that it can never trap a thumb.
+    expect(peek, 'the peek became tappable').toContain('pointer-events-none')
+  })
+
+  test('both call sites hang it off the row, on whichever edge has room', () => {
+    /*
+     * `top-0` reads best and is the default. It is wrong on the last screenful,
+     * where a panel growing downward from the row's own top edge runs under the
+     * tab bar — measured at 390px, a row at y=666 put 55px of panel, which is
+     * exactly the excerpt, behind the six tabs. The answer is the row's other
+     * edge, not a different box: moving it off the row is what the portal did.
+     */
+    for (const name of ['CardLine', 'RowCard']) {
+      const row = bodyOf(table, name)
+      expect(row, `${name} stopped drawing the peek`).toContain('<RowPeek')
+      expect(row, `${name} stopped asking which edge has room`).toContain('peekAbove')
+      expect(row, `${name} is no longer positioned against its own row`)
+        .toMatch(/<RowPeek[\s\S]*?className=\{`absolute[^`]*\$\{peekAbove \? 'bottom-full mb-1' : 'top-0'\}/)
+    }
+    // And the decision is measured against the strip the tab bar owns, not
+    // against the bottom of the viewport — the same correction `place()` and
+    // `anchorFor()` needed.
+    expect(bodyOf(table, 'usePeekAbove'), 'the flip stopped accounting for the tab bar')
+      .toContain('window.innerHeight - navStrip()')
+  })
+
+  test('a pointer going down anywhere still dismisses it', () => {
+    const peek = bodyOf(table, 'RowPeek')
+    expect(peek, 'the peek stopped dismissing on the next pointer')
+      .toContain("document.addEventListener('pointerdown', away, true)")
+    expect(peek, 'the peek stopped dismissing on a scroll')
+      .toContain("window.addEventListener('scroll', away, true)")
   })
 })

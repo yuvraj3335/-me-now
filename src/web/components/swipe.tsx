@@ -487,6 +487,21 @@ export function SwipeDrawer({
     return (
       <div
         data-swipe-action
+      /*
+       * The drawer's clicks are the drawer's.
+       *
+       * `onClickCapture` on the row deliberately lets a tap through when it
+       * lands inside `[data-swipe-action]` — that is what stops "tap anywhere
+       * to close" from eating the action you were aiming at. What nothing then
+       * did was stop it *bubbling*, so pressing `Done` also ran the row's own
+       * `onClick`: the card was finished and the detail pane opened on top of
+       * it, acknowledging the card on the way out. Same for `Delete`, and same
+       * for `Status`, which does not even go through `act`.
+       *
+       * One handler on the container rather than three on the buttons, because
+       * the rule is about the drawer and not about any one action in it.
+       */
+      onClick={e => e.stopPropagation()}
         className="absolute top-0 -bottom-px right-0 z-10 flex items-stretch bg-ink-800 w-max"
         role="group"
         aria-label="Status"
@@ -549,6 +564,9 @@ export function SwipeDrawer({
        * separate from underneath.
        */
       className="absolute top-0 -bottom-px right-0 z-10 overflow-hidden"
+      /* See the picker branch above: a drawer action must not also open the
+         row it was pressed on. */
+      onClick={e => e.stopPropagation()}
       style={{ width: shown }}
     >
       <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width }}>
