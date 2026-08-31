@@ -749,11 +749,16 @@ function LaunchComposer({
           rel="noreferrer"
           title={APP_HATCH}
           aria-label={APP_HATCH}
-          className="inline-flex items-center gap-2 min-w-0 h-11 -ml-2 px-2 rounded-control
+          /* No glyph beside it, and that is arithmetic rather than taste. This
+             label and `Send to session` are 316px of a 343px row at 375px; an
+             external-link mark and its gap is another 22 and the label starts
+             truncating — and the word this control cannot afford to lose is the
+             last one. `truncate` stays as the insurance, so a wider font
+             degrades the secondary rather than breaking the row. */
+          className="inline-flex items-center min-w-0 h-11 -ml-2 px-2 rounded-control
                      text-sm font-medium text-fg-mute hover:text-fg-dim hover:bg-ink-800
                      transition-colors duration-100"
         >
-          <ArrowUpRight size={14} aria-hidden className="shrink-0" />
           <span className="truncate">Open in the Claude app</span>
         </a>
 
@@ -1771,7 +1776,7 @@ function RunPanel({
         <p className="text-sm text-fg-mute mb-2 tnum">{provenance}</p>
 
         {draft
-          ? <Review packId={draft.packId} brief={draft.brief} setBrief={setBrief} page={page} />
+          ? <Review brief={draft.brief} setBrief={setBrief} page={page} />
           : (
             <>
               <p className="text-sm text-fg-mute mb-2 leading-snug">
@@ -1809,9 +1814,8 @@ function RunPanel({
  * trusted.
  */
 function Review({
-  packId, brief, setBrief, page,
+  brief, setBrief, page,
 }: {
-  packId: string
   brief: string
   setBrief: (text: string) => void
   /** Drawn on the phone's page rather than in the sheet. See `LaunchSheet`. */
@@ -1838,7 +1842,7 @@ function Review({
   }
 
   return (
-    <div data-pack={packId}>
+    <div>
       <div className="relative">
         <textarea
           ref={ref}

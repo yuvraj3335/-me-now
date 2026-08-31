@@ -1096,7 +1096,7 @@ function TaskDetail({
               of the form lives, which is why it leads. */}
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <Button variant="secondary" onClick={onEdit}>Edit</Button>
-            <Button variant="default" title="Open in Claude"
+            <Button variant="default" title="Send to Claude Code"
               onClick={() => openLaunch(taskContext(task, goal), {
                 template: 'blank',
                 title: task.title,

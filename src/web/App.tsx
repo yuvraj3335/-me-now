@@ -348,7 +348,7 @@ function useCommands(): Command[] {
          * be chosen the same way.
          */
         id: 'launch:blank',
-        label: 'Open in Claude',
+        label: 'Send to Claude Code',
         hint: 'a blank brief',
         group: 'Wake',
         icon: <SquareTerminal size={14} />,

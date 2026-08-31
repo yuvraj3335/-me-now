@@ -644,7 +644,7 @@ export function TaskRead({
           — two hundred rows do not each need a terminal — and this is where it
           landed: on the one task he has actually opened. */}
       <div className="mt-4">
-        <Button variant="default" title="Open in Claude"
+        <Button variant="default" title="Send to Claude Code"
           onClick={() => openLaunch(taskContext(task, goal), {
             template: 'blank',
             title: task.title,

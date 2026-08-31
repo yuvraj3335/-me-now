@@ -175,7 +175,13 @@ async function warnDeadlines() {
   const due: Array<{ key: string; title: string; at: number; url: string }> = []
 
   for (const task of db.query<any, []>(
-    `SELECT id, title, due_at FROM tasks WHERE status != 'done' AND due_at IS NOT NULL`,
+    // `NOT IN`, not `!= 'done'`. A task now has two settled states, and the
+    // second one arrived with migration 14: deciding you are *not* going to do
+    // something is the one case where a deadline is most certainly not news.
+    // The old test let every `wont_do` task keep buzzing on the day it was
+    // never going to be done.
+    `SELECT id, title, due_at FROM tasks
+      WHERE status NOT IN ('done', 'wont_do') AND due_at IS NOT NULL`,
   ).all()) {
     due.push({ key: `due:${task.id}`, title: task.title, at: task.due_at, url: `${PUBLIC_URL}/work` })
   }

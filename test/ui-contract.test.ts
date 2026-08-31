@@ -775,6 +775,35 @@ describe('both themes stay complete', () => {
   })
 })
 
+describe('the verb says which product it opens', () => {
+  test('nothing is labelled "Open in Claude" any more', () => {
+    /*
+     * Three surfaces said `Open in Claude` over a control that opens the
+     * *composer* — and the composer then sends to Claude Code, on this box, in
+     * a repository. "Claude" without "Code" is a different product with no
+     * repository and nothing to resume, which is exactly the confusion #39 was
+     * written about and #40 finished paying off.
+     *
+     * There are two verbs now and they are not interchangeable:
+     *   `Send to Claude Code` / `Send to session` — stays in Wake.
+     *   `Open in the Claude app`  — the real <a>, a NEW conversation, never an id.
+     *
+     * Comments are stripped before the check: several of these files explain in
+     * prose why they no longer say it, and a note about history is not a label.
+     */
+    for (const f of web) {
+      const code = codeOf(f)
+      for (const m of code.matchAll(/(label|title|ariaLabel)\s*[=:]\s*['"`]([^'"`]*)['"`]/g)) {
+        expect(m[2], `${f}: "${m[2]}" — say Claude Code, or say the Claude app`)
+          .not.toMatch(/^Open in Claude$/)
+      }
+      // The bare words as visible JSX text, e.g. `>Open in Claude<`.
+      expect(code, `${f}: "Open in Claude" is still rendered as a label`)
+        .not.toMatch(/>\s*Open in Claude\s*</)
+    }
+  })
+})
+
 describe('five statuses are five colours', () => {
   const css = read('src/web/styles.css')
   const STATUSES = ['idle', 'live', 'review', 'done', 'drop'] as const
