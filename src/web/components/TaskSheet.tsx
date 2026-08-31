@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Bell, BellOff, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import type { Card as CardT, Goal, Task } from '../lib/types'
 import { actions, reload, useStore } from '../lib/api'
-import { atHour, deadlineWords, fromLocalInput, toLocalInput, until, wallClock } from '../lib/time'
+import { deadlineWords, until, wallClock } from '../lib/time'
 import { actions as api } from '../lib/api'
-import { Button, Chip, Field, Sheet, inputClass } from './primitives'
+import { Button, Chip, DateTimePicker, Field, Sheet, inputClass } from './primitives'
 
 /** Sticky-note palette: muted enough to sit on the dark ground without shouting. */
 export const NOTE_COLORS = ['#e9a23b', '#b58ee0', '#6bd39a', '#d98a86', '#8fa4c4', '#d0a07a']
@@ -18,18 +18,6 @@ function reminderWords(ts: number, devices: number | null, error: string | null)
   return `${when} — pushes to ${devices} device${devices > 1 ? 's' : ''}`
 }
 
-/**
- * The four times he actually picks, plus an escape hatch.
- *
- * Two bare `datetime-local` fields were the only unstyled native controls in the
- * product, and they are also the slowest way to say "tomorrow morning".
- */
-const PRESETS: Array<{ id: string; label: string; at: () => number }> = [
-  { id: 'today5', label: 'Today 5pm', at: () => atHour(0, 17) },
-  { id: 'tom9', label: 'Tomorrow 9am', at: () => atHour(1, 9) },
-  { id: 'mon9', label: 'Mon 9am', at: () => atHour(((8 - new Date().getDay()) % 7) || 7, 9) },
-]
-
 export function TaskSheet({
   open, onClose, task, fromCard,
 }: { open: boolean; onClose: () => void; task?: Task | null; fromCard?: CardT | null }) {
@@ -41,9 +29,19 @@ export function TaskSheet({
 
   const [title, setTitle] = useState('')
   const [goalId, setGoalId] = useState('')
-  const [due, setDue] = useState('')
+  /**
+   * Both times are epoch milliseconds now, not `datetime-local` strings.
+   *
+   * The string was an artefact of the native input these fields used to hide
+   * behind a `Pick…` chip; with a real calendar the field's value and the value
+   * that gets written are the same number, so there is one representation and
+   * no `fromLocalInput` on the way out. The picker does its own wall-clock
+   * arithmetic on local parts, which is the only kind that survives a daylight
+   * saving boundary.
+   */
+  const [due, setDue] = useState<number | null>(null)
   const [color, setColor] = useState<string | null>(null)
-  const [remindAt, setRemindAt] = useState('')
+  const [remindAt, setRemindAt] = useState<number | null>(null)
   const [repeat, setRepeat] = useState('')
   const [noteBody, setNoteBody] = useState('')
   /** Notes typed before there is a task to hang them on. */
@@ -71,8 +69,7 @@ export function TaskSheet({
    * so no bell appeared, and reopening the task showed an empty field. He was
    * never told.
    */
-  const remindTs = fromLocalInput(remindAt)
-  const remindError = remindTs !== null && remindTs <= Date.now()
+  const remindError = remindAt !== null && remindAt <= Date.now()
     ? 'That time has already passed — a reminder can only be set for the future.'
     : null
 
@@ -80,9 +77,9 @@ export function TaskSheet({
     if (!open) return
     setTitle(task?.title ?? fromCard?.title ?? '')
     setGoalId(task?.goal_id ?? '')
-    setDue(toLocalInput(task?.due_at ?? null))
+    setDue(task?.due_at ?? null)
     setColor(task?.color ?? null)
-    setRemindAt(toLocalInput(existingReminder?.fire_at ?? null))
+    setRemindAt(existingReminder?.fire_at ?? null)
     setRepeat(existingReminder?.repeat_rule ?? '')
     setNoteBody('')
     setPending([])
@@ -100,7 +97,7 @@ export function TaskSheet({
       const body: Record<string, unknown> = {
         title: title.trim(),
         goal_id: goalId || null,
-        due_at: fromLocalInput(due),
+        due_at: due,
         color,
         source_card_group: task?.source_card_group ?? fromCard?.group_key ?? null,
       }
@@ -125,14 +122,13 @@ export function TaskSheet({
       for (const p of pending) await actions.createNote({ task_id: saved.id, body: p, color })
       setPending([])
 
-      const fireAt = fromLocalInput(remindAt)
-      if (fireAt) {
+      if (remindAt !== null) {
         // The server keeps at most one live reminder per target, so this either
         // creates it or moves the existing one — never a second buzz. It also
         // refuses a `fire_at` in the past now; the field below refuses it first,
         // so this is a second line rather than the only one.
         await actions.setReminder({
-          target_kind: 'task', target_id: saved.id, fire_at: fireAt,
+          target_kind: 'task', target_id: saved.id, fire_at: remindAt,
           label: 'Reminder', repeat_rule: repeat || null,
         })
       } else if (existingReminder) {
@@ -211,15 +207,21 @@ export function TaskSheet({
 
       {/* A deadline he set, stated back to him in the words he set it in. The
           storage was always right; the display never showed the time at all. */}
-      <TimeField label="Deadline" value={due} onChange={setDue}
-        stated={due ? deadlineWords(fromLocalInput(due)!) : null} />
+      <TimeField
+        label="Deadline" value={due} onChange={setDue}
+        stated={due !== null ? deadlineWords(due) : 'No deadline'}
+      />
 
       <TimeField
         label="Remind me" value={remindAt} onChange={setRemindAt}
-        stated={remindAt ? reminderWords(fromLocalInput(remindAt)!, devices, remindError) : null}
+        stated={
+          remindAt !== null ? reminderWords(remindAt, devices, remindError)
+          : existingReminder ? 'Clearing this reminder on save'
+          : 'No reminder'
+        }
         tone={remindError ? 'bad' : undefined}
       >
-        {remindAt && !remindError && (
+        {remindAt !== null && !remindError && (
           <div className="flex flex-wrap gap-2 mt-2">
             {[['', 'Once'], ['daily', 'Daily'], ['weekdays', 'Weekdays'], ['weekly', 'Weekly']].map(([v, l]) => (
               <Chip key={v} active={repeat === v} onClick={() => setRepeat(v!)}>{l}</Chip>
@@ -318,54 +320,52 @@ export function TaskSheet({
             </Button>
           </div>
       </div>
-
-      {existingReminder && (
-        <p className="mt-3 text-sm text-fg-mute flex items-center gap-2">
-          {remindAt ? <Bell size={12} /> : <BellOff size={12} />}
-          {remindAt ? `Set for ${wallClock(fromLocalInput(remindAt)!)}` : 'Clearing this reminder on save'}
-        </p>
-      )}
     </Sheet>
   )
 }
 
 
 /**
- * A time, chosen from the times he actually picks, with the native control as
- * the escape hatch rather than as the interface — and stated back in words.
+ * A time, picked on a calendar, and said back in his own words.
+ *
+ * What was here was five chips — `Today 5pm · Tomorrow 9am · Mon 9am · Pick… ·
+ * None` — and they were broken in a way the design hid: the three presets were
+ * rendered with no `active`, so choosing one left every chip unpressed and only
+ * the sentence underneath changed. `None` was the only one that ever lit up. On
+ * a phone the row wrapped to two lines.
+ *
+ * They are gone rather than repaired, because the bug was the smaller half. A
+ * preset answers *how far away* and a deadline is *when*, and putting the two
+ * questions side by side made the control that answers the real one — the
+ * native field behind `Pick…` — look like the fallback. `DateTimePicker` is a
+ * month grid and a time, so `Tomorrow 9am` is a day cell and a clock rather
+ * than a chip, and every other date in the year is reachable by the same two
+ * presses instead of by a sixth control.
+ *
+ * `stated` survives untouched, and it is the best thing this field had: it says
+ * the choice back in the words he set it in, including when the choice is
+ * nothing at all. A field that reads `No deadline` has answered its own
+ * question; one that is simply blank has not. Clearing is `DateTimePicker`'s own
+ * Clear, which appears only once there is something to clear.
  */
 function TimeField({
   label, value, onChange, stated, tone, children,
 }: {
   label: string
-  value: string
-  onChange: (v: string) => void
-  stated: string | null
+  value: number | null
+  onChange: (ms: number | null) => void
+  /** Always a sentence, including the one that says nothing is set. */
+  stated: string
   tone?: 'bad'
   children?: React.ReactNode
 }) {
-  const [exact, setExact] = useState(false)
-  useEffect(() => { if (!value) setExact(false) }, [value])
-
   return (
     <div className="mb-4">
       <div className="text-eyebrow uppercase text-fg-mute mb-2">{label}</div>
-      <div className="flex flex-wrap gap-2">
-        {PRESETS.map(p => (
-          <Chip key={p.id} onClick={() => { onChange(toLocalInput(p.at())); setExact(false) }}>
-            {p.label}
-          </Chip>
-        ))}
-        <Chip active={exact} onClick={() => setExact(o => !o)}>Pick…</Chip>
-        <Chip active={!value} onClick={() => { onChange(''); setExact(false) }}>None</Chip>
-      </div>
-      {(exact || (!!value && !stated)) && (
-        <input type="datetime-local" className={`${inputClass} mt-2`} value={value}
-          onChange={e => onChange(e.target.value)} />
-      )}
-      {stated && (
-        <p className={`mt-2 text-sm ${tone === 'bad' ? 'text-bad' : 'text-fg-dim'}`}>{stated}</p>
-      )}
+      <DateTimePicker value={value} onChange={onChange} ariaLabel={label} />
+      <p className={`mt-2 text-sm ${tone === 'bad' ? 'text-bad' : value === null ? 'text-fg-mute' : 'text-fg-dim'}`}>
+        {stated}
+      </p>
       {children}
     </div>
   )

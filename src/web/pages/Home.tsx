@@ -32,16 +32,18 @@ import type { Card as CardT, CardPriority, CardStatus, SourceName } from '../lib
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { timeOfDay } from '../lib/time'
 import {
-  CardLine, CardRow, PANE_MIN, TABLE_MIN, TableCols, TableHead, maxPaneFor,
+  CardRow, PANE_MIN, PhoneTable, TABLE_MIN, TableCols, TableHead, maxPaneFor,
   useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
+import { Sync } from '../components/sync'
 import { TaskSheet } from '../components/TaskSheet'
 import {
   Button, Empty, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
 } from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
+import { inBucket } from '../lib/bucket'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { useStill } from '../lib/motion'
@@ -187,11 +189,16 @@ export function Home() {
    * Each reads exactly one URL parameter, so none of them can know about any of
    * the others — which is what makes "the source tab and the priority filter
    * both apply" true by construction rather than by remembering to write it.
+   *
+   * The first of them asks what a row *is*, not which pipe carried it.
+   * `c.sources.some(s => s.source === filter)` is the transport question, and it
+   * was wrong by about forty rows: a Sentry issue announced in `#sentry-alerts`
+   * is minted `source: 'slack'`, so Slack claimed it and the tab's nine human
+   * threads sat under forty `TRUTO-39 · Error`s while the Sentry tab read 13.
+   * `inBucket` answers the other question — see `lib/bucket.ts` for what counts
+   * as a Sentry identity and, just as importantly, what does not.
    */
-  const matchSource = useCallback(
-    (c: CardT) => filter === 'all' || c.sources.some(s => s.source === filter),
-    [filter],
-  )
+  const matchSource = useCallback((c: CardT) => inBucket(c, filter), [filter])
 
   /**
    * Search spans every column the table dropped, not just the two it kept.
@@ -529,12 +536,18 @@ export function Home() {
         </>
       ) : (
         <>
-          <ul>
-            {pageRows.map(c => (
-              <CardLine key={c.group_key} card={c}
-                selected={c.group_key === selectedKey} actions={rowActions} />
-            ))}
-          </ul>
+          {/* Four columns here too, at the widths a phone can read them at, in
+              a scroller of the table's own — Kind gives up its place to Where,
+              because a glyph already says which kind and nothing said which
+              customer. The `j`/`k` cursor reaches this layout now as well; it
+              did not before, so a narrow laptop had a keyboard cursor with
+              nothing on screen to show where it was standing. */}
+          <PhoneTable
+            rows={pageRows}
+            selectedKey={selectedKey}
+            cursorKey={cursor === null ? null : rows[cursor]?.group_key ?? null}
+            actions={rowActions}
+          />
           <Pager page={page} pages={pages} total={rows.length}
             onPage={n => setParam('page', n === 1 ? null : String(n))} />
         </>
@@ -771,13 +784,23 @@ function PushDetail({
  *
  * The mark rides this row on a phone and nowhere else — `PageTitle` owns that
  * rule now, for all six routes rather than for the two that remembered it.
+ *
+ * Two controls sit here, side by side, and they are peers rather than a primary
+ * and its overflow. `Fetch` asks the collectors this machine can reach — the
+ * Claude bridge and the MCP boxes — and `Sync` re-polls the sources Wake is
+ * already connected to. They are different pipes with different failure modes,
+ * a reader has to be able to press either one on purpose, and a poll that was
+ * reachable only from the command palette was a poll nobody knew existed.
  */
 function Header({ count, source }: { count?: number; source: SourceName | 'all' }) {
   return (
     <header className="pt-4 pb-2 flex items-center gap-3">
       <PageTitle>Desk</PageTitle>
       {count !== undefined && <span className="tnum text-sm text-fg-mute">{count}</span>}
-      <span className="ml-auto shrink-0"><Fetch source={source} /></span>
+      <span className="ml-auto shrink-0 flex items-center gap-2">
+        <Sync source={source} />
+        <Fetch source={source} />
+      </span>
     </header>
   )
 }

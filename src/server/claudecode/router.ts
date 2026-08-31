@@ -10,7 +10,7 @@
 
 import { Hono } from 'hono'
 import { unlinkSync } from 'node:fs'
-import { audit, db } from '../db'
+import { archivedSessionIds, audit, db, setSessionArchived } from '../db'
 import {
   deleteSession, getSession, listAllSessions, liveSessions, sessionExcerpt, sessionFilePaths,
 } from '../sources/claudeSessions'
@@ -66,16 +66,24 @@ claudecode.get('/state', c =>
 )
 
 /**
- * Sessions, with the one fact a transcript cannot carry.
+ * Sessions, with the two facts a transcript cannot carry.
  *
  * A transcript's mtime says it was written to recently, which a *finished*
  * session satisfies just as well as a running one. `liveSessions()` reads the
  * per-process files Claude Code keeps, and that is the only place "right now"
  * is actually recorded.
+ *
+ * `archived` is the other direction: nothing on disk records that he is done
+ * with a session, so it is Wake's own state, joined on here rather than inside
+ * the filesystem source. That file's whole job is to say what the disk says,
+ * and an opinion Wake holds is not that.
  */
 function sessionRows(opts: { windowDays?: number; repo?: string; limit?: number }) {
   const live = liveSessions()
-  return listAllSessions(opts).map(s => ({ ...s, live: live.has(s.id) }))
+  const archived = archivedSessionIds()
+  return listAllSessions(opts).map(s => ({
+    ...s, live: live.has(s.id), archived: archived.has(s.id),
+  }))
 }
 
 claudecode.get('/sessions', c => {
@@ -102,6 +110,33 @@ claudecode.get('/sessions/:id', c => {
     excerpt: excerpt.found ? excerpt.text ?? '' : '',
     paths: sessionFilePaths(id),
   })
+})
+
+/**
+ * Put a session away, or take it back out.
+ *
+ * Deliberately nothing like the delete below it. Archiving writes one row in
+ * Wake's own database and touches no file on this machine, so it needs no
+ * confirmation token, it is reversible by the same call with `archived: false`,
+ * and — unlike the delete — it is allowed while the session is *running*. That
+ * last one is the point rather than an oversight: the delete is refused for a
+ * live session because unlinking a transcript out from under its own process
+ * destroys a conversation still being had, and none of that is true of an
+ * opinion about whether he wants to see it in a list.
+ *
+ * The session still has to exist. Without that check this route is a way to
+ * write a row per POST for ids that name nothing.
+ */
+claudecode.post('/sessions/:id/archive', async c => {
+  const id = c.req.param('id')
+  if (!getSession(id)) return c.json(bad('no such session on this machine'), 404)
+
+  const b = await c.req.json<{ archived?: boolean }>().catch(() => ({}) as { archived?: boolean })
+  // Absent means archive: the route is named for the thing it does, and only an
+  // explicit `false` asks for the reverse.
+  const archived = b.archived !== false
+  setSessionArchived(id, archived)
+  return c.json({ ok: true, archived })
 })
 
 /**
@@ -148,6 +183,9 @@ claudecode.delete('/sessions/:id', async c => {
     audit('claude.session.delete', { target: id, ok: false, error: removed.error })
     return c.json(bad(removed.error), 409)
   }
+  // The files are gone, so any opinion Wake held about them goes too. A uuid is
+  // never reissued, so this row could only ever be a leak.
+  setSessionArchived(id, false)
   audit('claude.session.delete', { target: id, detail: { removed: removed.removed, kept: removed.kept } })
   return c.json({ ok: true, ...removed })
 })

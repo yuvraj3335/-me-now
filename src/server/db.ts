@@ -822,6 +822,37 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
         .run(Date.now(), Date.now())
     },
   },
+  {
+    id: 13,
+    name: 'claude-session-archive',
+    /*
+     * Wake owns "I am done with this session", because nothing else does.
+     *
+     * Claude Code has no archive. A transcript is a file under `~/.claude` and
+     * that directory records only what happened in the conversation — there is
+     * no flag on it for whether you have finished with it, and putting one
+     * there would mean Wake editing another program's files to store Wake's own
+     * opinion. So the opinion lives here, keyed by the session id, which is the
+     * one identifier both sides already agree on.
+     *
+     * A row means archived. Un-archiving deletes it rather than nulling a
+     * column: a nullable `archived_at` left behind is a table that gains a row
+     * every time he changes his mind and never loses one, all to record the
+     * absence of a fact that the absence of a row already states.
+     *
+     * No foreign key and no sweep. The id comes out of another program's
+     * directory, so there is nothing here to reference; and a row whose
+     * transcript has since been deleted is forty bytes that can never match
+     * another session — uuids are not reissued. `DELETE /sessions/:id` clears
+     * its own row on the way out, which is where that belongs.
+     */
+    sql: `
+CREATE TABLE IF NOT EXISTS claude_session_archive (
+  session_id  TEXT PRIMARY KEY,
+  archived_at INTEGER NOT NULL
+);
+`,
+  },
 ]
 
 /**
@@ -999,6 +1030,41 @@ export function sweepOauthPending(olderThanMs = 600_000): number {
 }
 
 sweepOauthPending()
+
+/* ------------------- Claude Code sessions he has put away ------------------ */
+
+/**
+ * Which sessions are archived, as one set.
+ *
+ * A set rather than a per-id lookup, because every caller is a list joining
+ * this onto rows it has just read off the disk. It is deliberately the same
+ * shape as `liveSessions()` for the same reason: one query for a page of rows,
+ * not one query per row.
+ */
+export function archivedSessionIds(): Set<string> {
+  return new Set(
+    db.query<{ session_id: string }, []>(`SELECT session_id FROM claude_session_archive`)
+      .all().map(r => r.session_id),
+  )
+}
+
+/**
+ * Archive one, or take it back out. Idempotent in both directions.
+ *
+ * Re-archiving keeps the first timestamp. `archived_at` answers "when did he
+ * put this away", and a second press of a button that was already pressed is
+ * not new information about that.
+ */
+export function setSessionArchived(id: string, archived: boolean) {
+  if (archived) {
+    db.query(
+      `INSERT INTO claude_session_archive (session_id, archived_at) VALUES (?, ?)
+       ON CONFLICT(session_id) DO NOTHING`,
+    ).run(id, Date.now())
+  } else {
+    db.query(`DELETE FROM claude_session_archive WHERE session_id = ?`).run(id)
+  }
+}
 
 export function kvGet(k: string): string | null {
   const r = db.query<{ v: string }, [string]>(`SELECT v FROM kv WHERE k = ?`).get(k)

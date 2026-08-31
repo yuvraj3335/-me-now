@@ -1,11 +1,19 @@
 /**
- * Claude Code sessions, as Wake reads them off the disk.
+ * Claude Code sessions, as Wake reads them off the disk — and the one thing
+ * about them that is Wake's own.
  *
- * Three things here are easy to break and impossible to notice: the directory a
+ * Four things here are easy to break and impossible to notice: the directory a
  * session is filed under is a *lossy* encoding of where it ran, the list the
  * Sessions page renders must not be the newest-N-files list the card pile
- * wants, and deleting one removes files under `~/.claude` that nothing else in
+ * wants, `?repo=` has to name one repository rather than four that share a
+ * prefix, and deleting one removes files under `~/.claude` that nothing else in
  * this product touches.
+ *
+ * Archive is the fifth, and it is a different kind of fact: Claude Code has no
+ * archive, so it lives in Wake's database and is joined onto rows read off the
+ * disk. The tests for it are about that seam — the flag reaching the row, the
+ * two directions being reversible, and archiving being allowed exactly where
+ * deleting is refused.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -15,7 +23,11 @@ import { CLAUDE_HOME, CLAUDE_PROJECTS_DIR, FETCH_RUN_DIR } from '../src/server/e
 import {
   deleteSession, getSession, listAllSessions, listSessions, liveSessions, sessionFilePaths,
 } from '../src/server/sources/claudeSessions'
+import { archivedSessionIds, setSessionArchived } from '../src/server/db'
 import { claudecode } from '../src/server/claudecode/router'
+import {
+  ALL_REPOS, chooseRepo, matchesView, readView, repoIdOf, repoList,
+} from '../src/web/components/sessions'
 
 const app = new Hono()
 app.route('/api/claude', claudecode)
@@ -58,6 +70,8 @@ function write(project: string, id: string, body: string, ageDays = 1) {
 
 const OLD_CWD = '/Users/me/work/truto-app'
 const OLD_PROJECT = flatten(OLD_CWD)
+/** `OLD_CWD` with its suffix removed — a real, different repository. */
+const PREFIX_CWD = '/Users/me/work/truto'
 
 beforeAll(() => {
   // Own the fixture directory outright. Every caller in this file counts rows,
@@ -76,6 +90,11 @@ beforeAll(() => {
   write(flatten('/Users/me/work/quiet'), uuid(100), transcript('/Users/me/work/quiet', 'the quiet one'), 20)
   // One filed under a dashed repository, recording where it really ran.
   write(OLD_PROJECT, uuid(101), transcript(OLD_CWD, 'dashed repo', 'feat/x'), 2)
+  // And its prefix, which is a different repository with a very similar name.
+  // This pair is the whole point of the repo filter being exact: on the real
+  // machine `truto`, `truto-app`, `truto-monitoring` and `truto-skills` all
+  // live side by side under one parent.
+  write(flatten(PREFIX_CWD), uuid(105), transcript(PREFIX_CWD, 'the shorter name'), 2)
   // One that never recorded a cwd, so only the filename is left.
   write(OLD_PROJECT, uuid(102), transcript(null, 'no cwd recorded'), 2)
   // One Wake ran itself.
@@ -142,6 +161,179 @@ describe('which sessions are listed', () => {
     expect(three).toHaveLength(3)
     const all = listAllSessions({ limit: 500 })
     expect(three.map(s => s.id)).toEqual(all.slice(0, 3).map(s => s.id))
+  })
+})
+
+describe('which repository a session is in', () => {
+  test('a repository is named exactly, not by prefix', () => {
+    // The live symptom this replaces: `?repo=truto` answered with `truto`,
+    // `truto-app`, `truto-monitoring` and `truto-skills` — four of the five
+    // repositories with sessions on the machine — because the filter was a
+    // substring test over `cwd` and `project` joined together. A picker built
+    // on that can narrow to everything or to nothing, never to one repository.
+    expect(listAllSessions({ repo: 'truto', limit: 500 }).map(s => s.id)).toEqual([uuid(105)])
+    expect(listAllSessions({ repo: PREFIX_CWD, limit: 500 }).map(s => s.id)).toEqual([uuid(105)])
+    expect(listAllSessions({ repo: 'truto-app', limit: 500 }).map(s => s.id)).toEqual([uuid(101)])
+  })
+
+  test('both real names for a place are accepted', () => {
+    // The recorded working directory, and the basename it is listed under.
+    // Neither is more correct than the other; the picker sends the first and a
+    // hand-typed `?repo=` is usually the second.
+    const byPath = listAllSessions({ repo: '/Users/me/work/quiet', limit: 500 })
+    const byName = listAllSessions({ repo: 'QUIET', limit: 500 })
+    expect(byPath.map(s => s.id)).toEqual([uuid(100)])
+    expect(byName.map(s => s.id), 'the match stopped being case-insensitive').toEqual([uuid(100)])
+  })
+
+  test('the id the picker sends is the id the server answers for', () => {
+    // The client derives a repository id from a row (`repoIdOf`) and hands it
+    // straight back as `?repo=`. If the two ever disagree about what names a
+    // place, every session in the picker leads to an empty list — and the one
+    // row that would prove it is the session that never recorded a `cwd`,
+    // whose id is a flattened directory name rather than a path.
+    const interesting = [uuid(101), uuid(102), uuid(105)]
+    const rows = listAllSessions({ limit: 500 }).filter(r => interesting.includes(r.id))
+    expect(rows).toHaveLength(3)
+    for (const row of rows) {
+      expect(
+        listAllSessions({ repo: repoIdOf(row), limit: 500 }).map(s => s.id),
+        `${row.id} cannot be found under its own repository`,
+      ).toContain(row.id)
+    }
+  })
+})
+
+describe('archiving a session', () => {
+  const id = uuid(105)
+
+  const markLiveAs = (pid: number, sessionId: string) => {
+    mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
+    writeFileSync(
+      `${CLAUDE_HOME}/sessions/${pid}.json`,
+      JSON.stringify({ pid, sessionId, cwd: PREFIX_CWD, startedAt: Date.now() }),
+    )
+  }
+
+  test('a row means archived, and taking it back out removes the row', () => {
+    setSessionArchived(id, true)
+    expect(archivedSessionIds().has(id)).toBe(true)
+    // Twice is once. The button is idempotent in both directions, because the
+    // list it acts on can be a few seconds old.
+    setSessionArchived(id, true)
+    expect([...archivedSessionIds()].filter(x => x === id)).toHaveLength(1)
+
+    setSessionArchived(id, false)
+    expect(archivedSessionIds().has(id), 'un-archiving left a row behind').toBe(false)
+  })
+
+  test('the flag rides the rows the list already returns', async () => {
+    const rows = async () => {
+      const r = await call('/sessions?all=1')
+      return (await r.json() as { sessions: Array<{ id: string; archived: boolean }> }).sessions
+    }
+
+    expect((await rows()).find(s => s.id === id)?.archived).toBe(false)
+
+    const on = await call(`/sessions/${id}/archive`, { method: 'POST', body: '{}' })
+    expect(on.status).toBe(200)
+    expect(await on.json()).toMatchObject({ archived: true })
+
+    const after = await rows()
+    expect(after.find(s => s.id === id)?.archived).toBe(true)
+    expect(
+      after.filter(s => s.archived).map(s => s.id),
+      'archiving one session moved another',
+    ).toEqual([id])
+
+    const off = await call(`/sessions/${id}/archive`, {
+      method: 'POST', body: JSON.stringify({ archived: false }),
+    })
+    expect(await off.json()).toMatchObject({ archived: false })
+    expect((await rows()).find(s => s.id === id)?.archived).toBe(false)
+  })
+
+  test('a running session can be archived, and still cannot be deleted', async () => {
+    // The whole reason these are two different actions. Deleting a live
+    // transcript destroys a conversation that is still being had; archiving it
+    // writes one row in Wake's own database and touches nothing on disk, so
+    // there is nothing for the live check to protect.
+    markLiveAs(5150, id)
+    expect(liveSessions().has(id)).toBe(true)
+
+    expect((await call(`/sessions/${id}/archive`, { method: 'POST', body: '{}' })).status).toBe(200)
+    expect(archivedSessionIds().has(id)).toBe(true)
+
+    const refused = await call(`/sessions/${id}/delete/confirm`, { method: 'POST', body: '{}' })
+    expect(refused.status).toBe(409)
+
+    rmSync(`${CLAUDE_HOME}/sessions/5150.json`, { force: true })
+    setSessionArchived(id, false)
+  })
+
+  test('an id that names nothing on this machine is refused', async () => {
+    const r = await call(`/sessions/${uuid(999)}/archive`, { method: 'POST', body: '{}' })
+    expect(r.status).toBe(404)
+    expect(archivedSessionIds().has(uuid(999)), 'a row was written for a session that does not exist')
+      .toBe(false)
+  })
+
+  test('deleting a session forgets that it was archived', async () => {
+    const gone = uuid(400)
+    write(flatten('/Users/me/work/gone'), gone, transcript('/Users/me/work/gone', 'archive, then delete'))
+    setSessionArchived(gone, true)
+    expect(archivedSessionIds().has(gone)).toBe(true)
+
+    const minted = await call(`/sessions/${gone}/delete/confirm`, { method: 'POST', body: '{}' })
+    const { token } = await minted.json() as { token: string }
+    expect((await call(`/sessions/${gone}?token=${token}`, { method: 'DELETE' })).status).toBe(200)
+
+    // A uuid is never reissued, so a row left here could only ever be a leak.
+    expect(archivedSessionIds().has(gone), 'a row outlived the session it described').toBe(false)
+  })
+})
+
+describe('what the page shows, before it is rendered', () => {
+  test('Active is what he opens on, and it hides what he put away', () => {
+    expect(readView(null)).toBe('active')
+    expect(readView('nonsense')).toBe('active')
+    expect(readView('archived')).toBe('archived')
+    expect(readView('all')).toBe('all')
+
+    // A row from before this release carries no flag at all, and an absent
+    // flag is not an archived session.
+    const rows = [{ archived: false }, { archived: true }, {}]
+    expect(rows.filter(r => matchesView(r, 'active'))).toHaveLength(2)
+    expect(rows.filter(r => matchesView(r, 'archived'))).toHaveLength(1)
+    expect(rows.filter(r => matchesView(r, 'all'))).toHaveLength(3)
+  })
+
+  test('the picker lists every repository that has a session, and counts it once', () => {
+    const rows = listAllSessions({ limit: 500 })
+    const repos = repoList(rows)
+
+    expect(new Set(repos.map(r => r.id)).size, 'a repository is offered twice').toBe(repos.length)
+    expect(repos.reduce((n, r) => n + r.count, 0), 'a session belongs to no repository')
+      .toBe(rows.length)
+    expect(repos.map(r => r.id)).toContain(PREFIX_CWD)
+    // Newest first, because that is what "the repository you were last in"
+    // means and it is what the page falls back to.
+    expect(repos[0]!.id).toBe('/Users/me/work/busy')
+  })
+
+  test('the first paint is a repository, never the whole machine', () => {
+    const repos = repoList(listAllSessions({ limit: 500 }))
+
+    expect(chooseRepo(null, null, repos)).toBe(repos[0]!.id)
+    expect(chooseRepo(null, null, repos)).not.toBe(ALL_REPOS)
+    // A remembered choice is a memory, so it has to still exist.
+    expect(chooseRepo(null, PREFIX_CWD, repos)).toBe(PREFIX_CWD)
+    expect(chooseRepo(null, '/Users/me/work/deleted-since', repos)).toBe(repos[0]!.id)
+    // The address bar outranks both — including for a repository this index
+    // does not list, since the index is capped and a bookmark is not a guess.
+    expect(chooseRepo('/Users/me/work/somewhere-else', PREFIX_CWD, repos))
+      .toBe('/Users/me/work/somewhere-else')
+    expect(chooseRepo(ALL_REPOS, PREFIX_CWD, repos)).toBe(ALL_REPOS)
   })
 })
 

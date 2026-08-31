@@ -25,33 +25,43 @@
  * direction that can be correct.
  *
  * Two marks ride on top of those four columns, and they are one fact told
- * twice: a `+N` immediately after the title, and a 2px amber edge down the row's
- * left side. Both render from `card.activity.count > 0` — one expression, read
+ * twice: a `+N` badge immediately after the title, and a warm wash across the
+ * whole row. Both render from `card.activity.count > 0` — one expression, read
  * in two places — so the badge and the highlight can never disagree about how
- * much has landed since he last looked. The edge is the 2px of state this file
- * reserved when it deleted the old row stripe; that stripe painted the identical
- * colour on all twenty rows and encoded nothing, and this paints two or three.
+ * much has landed since he last looked. Neither is drawn here: `rowStateClass`
+ * paints the ground and `CountBadge` paints the number, both from
+ * `primitives.tsx`, because a `<tr>`, an `<li>` and Mail's `<button>` rows were
+ * all telling this story in slightly different colours. What that replaces is a
+ * 2px amber bar inset on the row's first cell, which read as a rendering seam in
+ * the corner of one column and, on the phone list, sat under a thumb.
  *
  * And every row swipes left. `Done`, `Status` and `Delete` under a finger, a
  * trackpad or a mouse drag, without opening anything — see `components/swipe.tsx`
  * for why the drawer is a clip window pinned to the last cell rather than a
  * translated row.
  *
- * Below 1024px there is no table: four columns in 390px is not a table, it is a
- * diagram of one. The phone row is one 44px line.
+ * Below 1024px it is still a table, and that is the reversal this file's last
+ * comment argued against. "Four columns in 390px is a diagram of a table" was
+ * true of four columns *squeezed* into 390px; what shipped instead was one
+ * column — a glyph, a truncated title, a tick — so a phone showed no status, no
+ * deadline, no channel and no person, which are the four facts that decide
+ * whether a row is opened at 7am. The phone gets real columns at real widths in
+ * a scroller of their own, and everything that does not fit is reached by moving
+ * the table rather than by squeezing it. See `PhoneTable`.
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Card, CardStatus } from '../lib/types'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { fromLocalInput, toLocalInput } from '../lib/time'
-import { ArrowDown, ArrowUp, ArrowUpDown, Check } from 'lucide-react'
-import { Button, Select } from './primitives'
-import { cardKind, KindGlyph } from './kinds'
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import { CountBadge, Select, rowStateClass } from './primitives'
+import { cardKind, contextLine, KindGlyph } from './kinds'
 import { SOURCE_LABEL } from './sources'
-import { PriorityGlyph, StatusSlot, isSettled } from './status'
+import { PriorityGlyph, isSettled } from './status'
 import { SwipeDrawer, useSwipe } from './swipe'
-import { dueWords, ROW_META, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
+import { dueWords, ROW_META, ROW_SECOND, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
 
 export type RowAction = {
   /** Open the detail. The row's own click, and the phone row's whole left half. */
@@ -66,28 +76,15 @@ export type RowAction = {
 const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id: id as string, label: STATUS_LABEL[id] }))
 
 /**
- * The count, and the edge, from one expression.
+ * What `+2` says on this page, said once.
  *
- * `+2` renders iff there is something new and the row is marked iff there is
- * something new, so the two can never tell different stories about the same
- * thread. The server computes the number in `activityOf`; this decides nothing
- * except where to put it.
- *
- * The edge is an `inset` box-shadow on the row's first cell rather than a border
- * on the `<tr>`, because under `border-collapse` a row's own border does not
- * paint at all.
+ * `CountBadge` is shared with the phone tab bar, so the two badges in the
+ * product are one badge; `plus` is the only difference and it is the difference
+ * between a delta and a total. The desk means "two things arrived since you last
+ * looked", which is a delta, so the sign is on. The server computes the number
+ * in `activityOf` and nothing here recounts it.
  */
-const EDGE = { boxShadow: 'inset 2px 0 0 var(--color-accent)' } as const
-const edgeIf = (card: Card) => (card.activity.count > 0 ? EDGE : undefined)
-
-function Count({ card }: { card: Card }) {
-  if (card.activity.count <= 0) return null
-  return (
-    <span className="text-accent-ink tnum text-sm shrink-0" title="new since you last looked">
-      +{card.activity.count}
-    </span>
-  )
-}
+const NEW_TITLE = 'new since you last looked'
 
 /**
  * The drawer's three actions, in the vocabulary the desk already has.
@@ -294,8 +291,12 @@ export function CardRow({
       style={swipe.bind.style}
       onClick={() => actions.onOpen(card)}
       aria-selected={selected}
-      className={`group cursor-pointer border-b border-rule transition-colors duration-100
-        ${focused ? 'bg-ink-700' : selected ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
+      /* Four states, one function, every list in the product. Selected used to
+         be `bg-ink-800` — the same token as hover — so the row the pane was
+         showing became invisible the moment the pointer was anywhere near the
+         table. See `rowStateClass`. */
+      className={`group cursor-pointer border-b border-rule
+        ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
       {/* A settled card keeps its title legible and struck through rather than
           dimmed away: it is still the thing he is looking at, it is just no
@@ -305,10 +306,10 @@ export function CardRow({
           costs the elastic column about 26px on the rows that have one and
           nothing at all on the rows that do not. */}
       <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
-        style={edgeIf(card)} title={card.title}>
-        <span className="flex items-baseline gap-2 min-w-0">
+        title={card.title}>
+        <span className="flex items-center gap-2 min-w-0">
           <span className="truncate">{card.title}</span>
-          <Count card={card} />
+          <CountBadge count={card.activity.count} plus title={NEW_TITLE} />
         </span>
       </td>
 
@@ -427,58 +428,243 @@ function DueCell({ card, onDue, children }: {
   )
 }
 
-/* ------------------------------ the phone row ----------------------------- */
+/* ----------------------------- the phone table ---------------------------- */
 
 /**
- * One line, 44px.
+ * The phone's own columns, measured for a 375px screen rather than derived
+ * from the laptop's.
  *
- * Status glyph, source glyph, title, due, and one control. Still no kind
- * *word*, no channel and no priority: 358px of usable width already carries two
- * things that want to truncate, and a third string makes all of them useless.
+ * `Status` holds the same control the table does and its longest option is
+ * still `Not started`, so it cannot go below the desk's own floor by much.
+ * `Where` holds `15five — Roopi`, which is what the phone row was missing
+ * altogether. `Due` holds `Overdue 12d`. Title takes what is left and is the
+ * only elastic column, exactly as on the laptop.
  *
- * The second glyph is not a third string. It is 20px of fixed slot, and without
- * it a Slack message, a Gmail thread and a Sentry alert are the same row — the
- * laptop answers that in a whole Kind column and the phone was answering it
- * nowhere, so the only way to tell one from another was to switch the source
- * tab and see which rows disappeared. Where a thing came from is the fastest
- * signal on the row and the reason a row gets skipped or opened at 7am.
+ * 356 fixed plus a 184 floor under Title is 540, against the 343 a 375px phone
+ * leaves inside the page pad. **That difference is the feature.** The columns
+ * are drawn at a width where they can be read and the table is moved to reach
+ * them, rather than every column being squeezed to 68px so that all four fit
+ * and none of them says anything.
+ */
+export const PHONE_W = { status: 132, where: 136, due: 88 }
+
+/** What Title wants on a phone. Below this a two-word title starts eliding. */
+export const PHONE_TITLE_MIN = 184
+
+/** The width the phone table refuses to go under, and therefore scrolls at. */
+export const PHONE_MIN =
+  PHONE_TITLE_MIN + PHONE_W.status + PHONE_W.where + PHONE_W.due
+
+/**
+ * Five columns, the last of which has no width.
  *
- * It is the kind mark rather than a source dot, and that is deliberate: the
- * shape already differs per source and the hue is the source's own, so one mark
- * carries both. Five identical dots in five hues would carry neither on a screen
- * that cannot hover.
+ * The fifth is not a column of data — it is a 0px anchor pinned to the visible
+ * right edge, and it exists because the swipe drawer has to hang off something.
+ * See the row.
+ */
+function PhoneCols() {
+  return (
+    <colgroup>
+      {/* Unsized, so Title absorbs whatever the others leave — the same trick
+          the laptop's `TableCols` turns on, for the same reason. */}
+      <col />
+      <col style={{ width: PHONE_W.status }} />
+      <col style={{ width: PHONE_W.where }} />
+      <col style={{ width: PHONE_W.due }} />
+      <col style={{ width: 0 }} />
+    </colgroup>
+  )
+}
+
+/**
+ * The phone's headings, and they are not decoration.
+ *
+ * A table that scrolls sideways needs them more than one that does not: they
+ * are the only thing that says what the column you have just scrolled to is.
+ * They do not stick — a sticky `top` resolves against the nearest scrollport,
+ * which here is the horizontal scroller rather than the page, so it would have
+ * a zero-length range and pin nothing. The page is what scrolls vertically and
+ * a page of rows is `PAGE_SIZE` long, so the heading is a few flicks away
+ * rather than gone.
+ */
+function PhoneHead() {
+  return (
+    <thead>
+      <tr className="border-b border-edge">
+        <th className={HEAD} scope="col">Title</th>
+        <th className={HEAD} scope="col">Status</th>
+        <th className={HEAD} scope="col">Where</th>
+        <th className={HEAD} scope="col">Due</th>
+        <th className={HEAD} scope="col" aria-label="Row actions" />
+      </tr>
+    </thead>
+  )
+}
+
+/**
+ * A horizontal scroller and a horizontal swipe in one row, kept apart on
+ * purpose.
+ *
+ * They are the same gesture to a browser: a finger travelling left across a row
+ * either pans the table or opens the drawer, and whichever of them claims the
+ * touch first takes it for the whole stream. Left alone they fight, and the way
+ * they lose is silent — the drawer opens a third of the way and the table
+ * lurches, or neither moves.
+ *
+ * So the axis is decided by **which cell the finger lands on**, which is the one
+ * thing `touch-action` can express per element:
+ *
+ *   * The **Title cell keeps `pan-y`** — the policy `styles.css` already puts on
+ *     every `[data-swipe='pan-y'] > td` — so the browser takes the page's
+ *     vertical scroll and hands the app the horizontal axis. A swipe starts on
+ *     the row's identity, which is where a thumb naturally lands and the one
+ *     part of the row that is always on screen.
+ *   * **Every other cell overrides to `manipulation`**, which is both pans and
+ *     pinch without the double-tap zoom delay, so the browser scrolls the table.
+ *     A pointer that starts there and is taken over for a pan is delivered to
+ *     the row as `pointercancel`, which `useSwipe` already handles — the drawer
+ *     does not half-open and then stick.
+ *
+ * The declaration has to be inline because a class cannot outrank the
+ * stylesheet's `> td` rule without another selector nobody else needs, and
+ * because `touch-action` is not inherited — the `<select>` inside the Status
+ * cell falls back to `auto`, which is right: it stops the row's pointer events
+ * itself, so there is no gesture there to protect.
+ */
+const PANS = { touchAction: 'manipulation' } as const
+
+/**
+ * How long a press has to be held before it is a peek, and how far it may drift.
+ *
+ * 8px is deliberately *under* `SWIPE_ENGAGE_PX`, so a gesture that is going to
+ * become a swipe has already cancelled the peek before the swipe itself
+ * engages; a scroll cancels it on the first frame that moves. 450ms is long
+ * enough that a tap can never reach it and short enough that a deliberate hold
+ * does not feel broken.
+ */
+const PEEK_MS = 450
+const PEEK_SLOP = 8
+
+/**
+ * Long-press, which this product did not have.
+ *
+ * Three things it must not be, and each one is a real failure it would
+ * otherwise have: it must not fire on a **scroll** (the finger is down for as
+ * long as you like while the page moves), it must not fire on a **swipe** (the
+ * drawer is already the row's gesture), and it must not fire on a **tap** — and
+ * the tap is the subtle one, because a press that has already peeked still
+ * produces a `click` on release, which would open the pane the peek exists to
+ * avoid opening. `ate` is what swallows that click, in the capture phase,
+ * before the row's own handler sees it.
+ */
+function useLongPress(onPeek: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const from = useRef<{ x: number; y: number } | null>(null)
+  const fired = useRef(false)
+
+  const clear = () => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+  }
+
+  // A row that leaves mid-press must not peek from the grave.
+  useEffect(() => clear, [])
+
+  return {
+    onPointerDown(e: React.PointerEvent) {
+      // Secondary buttons belong to the context menu, same rule the swipe keeps.
+      if (e.button > 0) return
+      fired.current = false
+      from.current = { x: e.clientX, y: e.clientY }
+      clear()
+      timer.current = setTimeout(() => {
+        timer.current = null
+        fired.current = true
+        onPeek()
+      }, PEEK_MS)
+    },
+    onPointerMove(e: React.PointerEvent) {
+      const start = from.current
+      if (!start || !timer.current) return
+      if (Math.abs(e.clientX - start.x) > PEEK_SLOP || Math.abs(e.clientY - start.y) > PEEK_SLOP) clear()
+    },
+    onPointerUp() { from.current = null; clear() },
+    onPointerCancel() { from.current = null; clear() },
+    /** True — and the click is eaten — when this press already peeked. */
+    ate(e: React.MouseEvent) {
+      if (!fired.current) return false
+      fired.current = false
+      e.preventDefault()
+      e.stopPropagation()
+      return true
+    },
+  }
+}
+
+/**
+ * One phone row, as a row of a real table.
+ *
+ * What it replaces was a single 44px flex line: a kind glyph, a title truncated
+ * at whatever was left, and a tick. No status, no deadline, no channel and no
+ * person — the four facts that decide whether something is opened at 7am — and
+ * nothing to scroll sideways to, because there were no columns to scroll to.
+ *
+ * The tick is gone with it, and that is a deliberate subtraction rather than an
+ * omission: `Done` is now reachable from the Status control in this row's own
+ * second column and from the swipe drawer, and a third way to finish one card
+ * on one row is two ways too many for 44px.
+ *
+ * The last cell is 0px wide and `sticky right-0`, and it holds the drawer. That
+ * is the whole reason it exists. `SwipeDrawer` anchors itself to `right: 0` of
+ * whatever contains it, so in a table that scrolls sideways an ordinary last
+ * cell would put `Done`, `Status` and `Delete` at the right edge of the *table*
+ * — 200px off the screen, on a row the reader is holding open. Pinned, its right
+ * edge is the right edge of what is visible, whatever the table has been
+ * scrolled to, and it costs the layout nothing because it has no width.
  */
 export function CardLine({
-  card, selected, actions,
-}: { card: Card; selected: boolean; actions: RowAction }) {
+  card, selected, focused, actions, onPeek,
+}: {
+  card: Card
+  selected: boolean
+  focused: boolean
+  actions: RowAction
+  /** Show the peek for this row. The pane is still a tap away and unaffected. */
+  onPeek: (c: Card) => void
+}) {
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
   const kind = cardKind(card)
+  const where = contextLine(card)
   const swipe = useSwipe(card.group_key, 3)
+  const press = useLongPress(() => onPeek(card))
 
   return (
-    <li
+    <tr
       ref={swipe.bind.ref}
-      onPointerDown={swipe.bind.onPointerDown}
-      onPointerMove={swipe.bind.onPointerMove}
-      onPointerUp={swipe.bind.onPointerUp}
-      onPointerCancel={swipe.bind.onPointerCancel}
-      onClickCapture={swipe.bind.onClickCapture}
+      /* Both gestures read the same pointer stream. The swipe goes first in
+         every one of these because it is the one that can claim the pointer;
+         the press only ever cancels itself. */
+      onPointerDown={e => { swipe.bind.onPointerDown(e); press.onPointerDown(e) }}
+      onPointerMove={e => { swipe.bind.onPointerMove(e); press.onPointerMove(e) }}
+      onPointerUp={e => { swipe.bind.onPointerUp(e); press.onPointerUp() }}
+      onPointerCancel={e => { swipe.bind.onPointerCancel(e); press.onPointerCancel() }}
+      onClickCapture={e => { if (press.ate(e)) return; swipe.bind.onClickCapture(e) }}
       data-swipe={swipe.bind['data-swipe']}
-      // The same 2px edge the table draws, through the same function, on the
-      // element that is the row here. An `<li>` takes a box-shadow directly, so
-      // there is no first-cell trick — but a second copy of the predicate is
-      // still a second copy, and the phone's edge and the desk's disagreeing
-      // about one thread is precisely the failure this shares a helper to avoid.
-      style={{ ...swipe.bind.style, ...edgeIf(card) }}
-      className={`relative flex items-center border-b border-rule h-11 ${selected ? 'bg-ink-800' : ''}`}
+      /* `WebkitTouchCallout` beside the gesture's own style: without it iOS
+         answers a long press on a row of text with its own selection magnifier,
+         over the peek that press was asking for. */
+      style={{ ...swipe.bind.style, WebkitTouchCallout: 'none' }}
+      onClick={() => actions.onOpen(card)}
+      aria-selected={selected}
+      className={`cursor-pointer border-b border-rule
+        ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
-      <button onClick={() => actions.onOpen(card)} className="min-w-0 grow h-full text-left">
-        <div className="flex items-center h-full">
-          {/* The same fixed slots the table uses, so every title on the page
-              starts on one x whatever glyphs precede it — and in the table's own
-              order, Status before Kind, so the two layouts read the same way. */}
-          <StatusSlot status={card.status} />
+      {/* The identity column, and the one the gesture belongs to. It keeps the
+          stylesheet's `pan-y`, so a horizontal drag here is the drawer. */}
+      <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
+        title={card.title}>
+        <span className="flex items-center gap-2 min-w-0">
           {/* Named for the source rather than the kind: the shape is what a
               sighted reader tells them apart by, and the hue that carries the
               source is exactly the half a screen reader cannot see. */}
@@ -486,33 +672,169 @@ export function CardLine({
             className="w-5 shrink-0 flex items-center">
             <KindGlyph kind={kind} size={14} />
           </span>
-          <span className={`${ROW_TITLE} truncate min-w-0 grow
-                            ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
-            {card.title}
+          <span className="truncate">{card.title}</span>
+          <CountBadge count={card.activity.count} plus title={NEW_TITLE} />
+        </span>
+      </td>
+
+      <td className="py-2 pr-4 align-middle" style={PANS}>
+        <Select
+          value={card.status}
+          options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
+          onChange={s => actions.onStatus(card, s)}
+          ariaLabel="Status"
+          className="w-full"
+        />
+      </td>
+
+      {/* `15five — Roopi`, not `#15five-truto`. See `contextLine`. */}
+      <td className={`${CELL} ${ROW_SECOND}`} style={PANS} title={where ?? undefined}>
+        {where ?? '—'}
+      </td>
+
+      {/* Read-only, unlike the laptop's. A deadline is set in the detail, which
+          is one tap away and has room for a time of day; an 88px column on a
+          phone has room for neither. */}
+      <td className={`${CELL} ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}
+        style={PANS}>
+        {words ?? '—'}
+      </td>
+
+      <td className="sticky right-0 w-0 p-0 align-middle" style={PANS}>
+        <SwipeDrawer
+          dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+          {...drawerFor(card, actions)}
+        />
+      </td>
+    </tr>
+  )
+}
+
+/**
+ * The phone list, which is the same table at a different width.
+ *
+ * The scroller is the table's own and nothing else's. `<main>` carries
+ * `overflow-x-clip` precisely so that a page column never scrolls sideways —
+ * read the comment there before touching it — and this does not fight that
+ * rule, it is what the rule leaves room for: the page body still cannot move,
+ * and the one box that can is the one whose content is wider than the screen on
+ * purpose.
+ *
+ * `overflow-x-auto` also makes the box a scroll container on the *other* axis,
+ * which is CSS and not a choice — `overflow-y: visible` computes to `auto` the
+ * moment its partner is not visible. It is harmless here only because the box is
+ * given no height: it grows to hold every row, so the vertical scrollport and
+ * the vertical content are the same size and the page keeps the scroll. Putting
+ * a `max-h` on this would take the list's vertical scrolling away from the page
+ * and hand it to a nested box, which is the one thing a phone must never have.
+ *
+ * `overscroll-x-contain` stops a flick that reaches the end of the table from
+ * chaining into the browser's own back-navigation gesture, which is how a reader
+ * leaves Wake by scrolling a column.
+ *
+ * There is no `.rail` fade over it, and that is measured rather than forgotten:
+ * the fade is an `::after` on the wrapper, painted after the table in tree
+ * order, so an open swipe drawer would be read through 32px of gradient at
+ * exactly the end where `Delete` sits. The cut-off column and the scrollbar say
+ * the same thing without painting over a control.
+ */
+export function PhoneTable({
+  rows, selectedKey, cursorKey, actions,
+}: {
+  rows: Card[]
+  selectedKey: string | null
+  /** The row the `j`/`k` cursor is standing on, or null when nobody chose one. */
+  cursorKey: string | null
+  actions: RowAction
+}) {
+  const [peek, setPeek] = useState<Card | null>(null)
+
+  return (
+    <>
+      <div className="overflow-x-auto overscroll-x-contain">
+        <table className="w-full table-fixed border-collapse" style={{ minWidth: PHONE_MIN }}>
+          <PhoneCols />
+          <PhoneHead />
+          <tbody>
+            {rows.map(c => (
+              <CardLine
+                key={c.group_key} card={c}
+                selected={c.group_key === selectedKey}
+                focused={c.group_key === cursorKey}
+                actions={actions}
+                onPeek={setPeek}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {peek && <Peek card={peek} onClose={() => setPeek(null)} />}
+    </>
+  )
+}
+
+/**
+ * What a long press answers with.
+ *
+ * Deliberately *not* the detail. The pane is what a tap opens and it is a place
+ * you go — it takes the screen, it acknowledges the card, and coming back is a
+ * dismissal. The peek is a look: it says who this is with, why it is on the
+ * desk, and the first three lines of what was actually said, and then it goes
+ * away on the next thing you do. Nothing about it is a decision, so nothing
+ * about it is committed — it does not acknowledge, it does not select, and it
+ * does not change the URL.
+ *
+ * `pointer-events-none` is the whole of that promise, expressed once: the panel
+ * cannot be tapped, so it can never be a thing you have to get out of. Any
+ * pointer that goes down anywhere — including through it, onto the row
+ * underneath — dismisses it, as does Escape and as does any scroll, captured so
+ * that a scroll inside the table counts too.
+ *
+ * It sits above the phone's tab bar rather than on the bottom edge, for the
+ * same reason the detail sheet does: `--nav-h` is the strip the bar owns and
+ * covering it is how a reader ends up with no way out.
+ */
+function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
+  const kind = cardKind(card)
+  const where = contextLine(card)
+
+  useEffect(() => {
+    const away = () => onClose()
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('pointerdown', away, true)
+    document.addEventListener('keydown', esc)
+    window.addEventListener('scroll', away, true)
+    return () => {
+      document.removeEventListener('pointerdown', away, true)
+      document.removeEventListener('keydown', esc)
+      window.removeEventListener('scroll', away, true)
+    }
+  }, [onClose])
+
+  return createPortal(
+    <div
+      role="tooltip"
+      style={{ bottom: 'calc(var(--nav-h) + 8px)' }}
+      className="fixed inset-x-2 z-50 pointer-events-none flex flex-col gap-2
+                 rounded-panel border border-edge bg-ink-850 p-3"
+    >
+      <span className="flex items-center gap-2 min-w-0">
+        <KindGlyph kind={kind} size={14} />
+        <span className={`${ROW_SECOND} truncate`}>{where ?? kind.word}</span>
+        {card.activity.count > 0 && (
+          <span className="ml-auto flex items-center gap-2 shrink-0">
+            <CountBadge count={card.activity.count} plus />
+            <span className="text-sm text-fg-mute">{NEW_TITLE}</span>
           </span>
-          {card.activity.count > 0 && (
-            <span className="pl-2 flex items-center"><Count card={card} /></span>
-          )}
-          {words && (
-            <span className={`shrink-0 pl-3 ${overdue ? 'text-sm text-bad tnum' : ROW_META}`}>
-              {words}
-            </span>
-          )}
-        </div>
-      </button>
-      {/* A neutral tick, not the Done glyph. The glyph is painted in `ok`, and
-          nineteen green ticks down the right edge of a list reads as nineteen
-          finished rows rather than as nineteen ways to finish one. */}
-      <span className="pl-2 shrink-0">
-        <Button size="sm" variant="ghost" title="Done" ariaLabel="Done"
-          onClick={() => actions.onStatus(card, 'done')}>
-          <Check size={14} />
-        </Button>
+        )}
       </span>
-      <SwipeDrawer
-        dx={swipe.dx} width={swipe.width} onClose={swipe.close}
-        {...drawerFor(card, actions)}
-      />
-    </li>
+
+      <span className={`${ROW_TITLE} line-clamp-2`}>{card.title}</span>
+      <span className="text-sm text-fg-mute">{card.why}</span>
+      {card.excerpt && (
+        <span className={`${ROW_SECOND} line-clamp-3`}>{card.excerpt}</span>
+      )}
+    </div>,
+    document.body,
   )
 }

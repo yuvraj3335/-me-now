@@ -63,8 +63,9 @@ export function reload(): Promise<void> {
  * Fetch — pipe 2. Runs pipe 1 first, then asks every connector this machine can
  * reach the two standing questions and lands what comes back on the same desk.
  *
- * It takes no argument, because there is nothing to ask it — that is the
- * property that keeps it a collector rather than a chat box.
+ * The only argument it takes is which source to confine it to, chosen from a
+ * closed list the server checks again. There is no way to ask it a *question* —
+ * that is the property that keeps it a collector rather than a chat box.
  *
  * Started, then polled. A collection through the box's own `claude` takes 40–60
  * seconds, and an HTTP request held open that long dies: measured, the socket
@@ -90,14 +91,58 @@ export async function fetchNow(only?: SourceName): Promise<import('./types').Fet
   throw new Error('the collection did not finish')
 }
 
-/** Ask the server to poll every source now, then reload. */
-export async function refresh() {
+/**
+ * What one poll did, per source — the server's `IngestReport`, as it arrives.
+ *
+ * `count` is rows the source returned, and it is not the same question as "did
+ * it work": a source with no credential returns nothing and has not failed,
+ * while a source that was rate-limited half way through returns real rows and
+ * has lost the right to say what is missing. `connected` and `authoritative`
+ * are those two facts, and anything rendering this report has to read all three
+ * or it will say "synced, 0 rows" about an account that does not exist.
+ */
+export type SyncReport = {
+  at: number
+  sources: Array<{
+    source: SourceName
+    ok: boolean
+    connected: boolean
+    authoritative: boolean
+    count: number
+    ms: number
+    error?: string
+  }>
+  /** Live groups on the desk after the poll, and how many were not there before. */
+  groups: number
+  newGroups: number
+}
+
+export type SyncResult =
+  | { ok: true; report: SyncReport }
+  | { ok: false; error: string }
+
+/**
+ * Sync — pipe 1, on demand. Poll the sources Wake already holds a credential
+ * for, then reload the desk. With `only`, poll that one and leave the rest
+ * exactly as they are.
+ *
+ * It answers rather than throws, and the two callers are why. The palette runs
+ * it as `void refresh()`, where a rejection is an unhandled one; the Sync
+ * control has to print what actually happened — how many rows landed, how many
+ * of those were new, which source went quiet — and a thrown `Error` can carry
+ * none of that. So the failure is a value too, and the caller that wants to say
+ * something about it can.
+ */
+export async function refresh(only?: SourceName): Promise<SyncResult> {
   set({ syncing: true })
   try {
-    await post('/refresh')
+    const report = await post<SyncReport>('/refresh', only ? { only } : undefined)
     await reload()
+    return { ok: true, report }
   } catch (e) {
-    set({ error: (e as Error).message })
+    const error = (e as Error).message
+    set({ error })
+    return { ok: false, error }
   } finally {
     set({ syncing: false })
   }

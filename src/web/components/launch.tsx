@@ -9,10 +9,10 @@
  * 460px sheet, for an operation whose real content is "confirm this text, then
  * tap".
  *
- * So: one scroll, in the order the decision is actually made — which session,
- * which repository, which templates, which skills, what is attached, what you
- * want, and how it should run. The brief is the next beat, at a size you can
- * read. The only commit is the link.
+ * So: one scroll, in the order the decision is actually made — which
+ * repository, which session in it, which templates, which skills, what is
+ * attached, what you want, and how it should run. The brief is the next beat,
+ * at a size you can read. The only commit is the link.
  *
  * That link is a real `<a>`, and its href is built here from the text as you
  * type (`src/shared/handoff.ts`, the same code the server uses). On a phone
@@ -27,13 +27,20 @@
  * session puts its directory, its branch and its last exchanges into the brief
  * and prints the `claude --resume` line for the terminal. The UI says that in
  * those words rather than implying a resume it cannot perform. DECISIONS.md #35.
+ *
+ * The repository is asked first because it is what that list is drawn from. It
+ * used to be asked second, under a session menu that offered all thirty
+ * sessions on the machine whatever repository was picked — five directories'
+ * work in one list, none of it marked as belonging anywhere in particular.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpRight, Check, Copy, FileText, Loader2, Scissors, Search, Sparkles, SquareTerminal, X,
 } from 'lucide-react'
-import { Button, Segmented, Sheet, inputClass } from './primitives'
+import {
+  Button, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
+} from './primitives'
 import {
   PERMISSION_MODES, closeLaunch, launchApi, openLaunch, removeFromLaunch,
   resetLaunch, resolveSkillIds, resumeCommand, setLaunchPermissionMode, setLaunchSession,
@@ -234,14 +241,14 @@ function Composer({
 }) {
   return (
     <div className="divide-y divide-rule">
-      <SessionPicker
-        sessions={meta.sessions} repos={meta.repos} value={session} setCwd={setCwd}
-      />
-
-      {/* An inline field, not a native `<select>`: its popup painted over the
-          object list above it, which is the third clause of the fail photograph
-          this sheet was in. */}
+      {/* Where the work is, before which conversation about it — the wider
+          choice first, and the one the list under it is drawn from. */}
       <RepoPicker repos={meta.repos} cwd={cwd} setCwd={setCwd} />
+
+      <SessionPicker
+        sessions={meta.sessions} repos={meta.repos} repo={cwd}
+        value={session} attached={items} setCwd={setCwd}
+      />
 
       {/*
         Name beside description on a laptop, name over description on a phone.
@@ -256,7 +263,10 @@ function Composer({
         one line tall.
       */}
       <section className="py-4">
-        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Templates — {templates.length}</h3>
+        {/* A label, not a readout. `Templates — 1` put a number where the name
+            goes, and the number was already on screen: every chosen row has a
+            check on it. */}
+        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Templates</h3>
         {meta.templates.map(t => {
           const on = templates.includes(t.id)
           return (
@@ -264,10 +274,16 @@ function Composer({
               key={t.id}
               onClick={() => onToggleTemplate(t.id)}
               aria-pressed={on}
-              className="w-full flex flex-col items-start gap-1 py-2
+              /* This list stays inline rather than becoming a menu: it is a
+                 multi-select, and its blurbs are the whole reason it is
+                 browsable — a popup that closes on the first pick can be
+                 neither. What it borrows from the rest of the product is the
+                 row treatment, so a chosen row is a lit ground here exactly as
+                 it is on the desk, instead of a check and nothing else. */
+              className={`w-full flex flex-col items-start gap-1 py-2
                          sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
                          text-left border-b border-rule last:border-0
-                         hover:bg-ink-800 transition-colors duration-100"
+                         ${rowStateClass({ selected: on })}`}
             >
               {/* A check, not a filled amber box. One selected template used to
                   be one accent mark, so choosing three spent the budget. */}
@@ -290,9 +306,7 @@ function Composer({
       <SkillPicker all={meta.skills} selected={skills} onChange={setSkills} />
 
       <section className="py-4">
-        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">
-          Attachments — {items.length}
-        </h3>
+        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Attachments</h3>
         {items.length === 0 && <p className="text-sm text-fg-mute h-11 flex items-center">—</p>}
         {items.map(i => (
           <div key={`${i.kind}:${i.ref}`} className="flex items-center h-11 border-b border-rule last:border-0">
@@ -373,6 +387,111 @@ function GrowingField({
 /* ------------------------------- the session ------------------------------ */
 
 /**
+ * The row that means "no session", as an id.
+ *
+ * `null` cannot carry a check, and "a new conversation" is a row like any
+ * other. A session id is a UUID, so a leading colon cannot collide with one.
+ */
+const NEW_SESSION = ':new'
+
+/**
+ * Claude Code's own name for a directory: every character that is not
+ * alphanumeric becomes a dash.
+ *
+ * A transcript that never wrote down where it ran has only the directory it is
+ * *filed* under, and the server hands that name back as the session's `cwd` —
+ * so `-Users-yuvrajmuley-work-truto` is a real value on this wire, and on this
+ * machine it is two of the thirty.
+ */
+const filedAs = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-')
+
+/**
+ * Whether a session ran in this repository, or in a directory inside it.
+ *
+ * A path test rather than a name test, and `===` or a `/`-terminated prefix
+ * rather than `includes`. Both of the loose spellings are wrong in the same
+ * direction here: `truto` is a substring of `truto-app`, `truto-skills` and
+ * `truto-monitoring`, and `/Users/yuvrajmuley/work/truto` is a prefix of
+ * `/Users/yuvrajmuley/work/truto-app`. The server's own `?repo=` filter is the
+ * substring version, which is precisely why this is recomputed here instead of
+ * being taken on trust.
+ *
+ * The filed name is matched exactly and never as a prefix. `-…-work-truto` is
+ * unambiguously this repository, but `-…-work-truto-app` and `-…-work-truto-cli`
+ * are a sibling repository and a directory inside this one wearing the same
+ * shape — the encoding threw away the separator that told them apart, so the
+ * only honest thing to do with a dash there is nothing.
+ */
+export const sessionInRepo = (cwd: string, repo: string) =>
+  cwd === repo || cwd.startsWith(`${repo}/`) || cwd === filedAs(repo)
+
+/**
+ * The rows the session menu offers, in the order it prints them.
+ *
+ * Exported because the filter is the whole of what this control does, and it is
+ * the part that cannot be seen to be right by looking at it.
+ *
+ * `chosen` is offered whatever repository it ran in. A brief that is already
+ * about a session must be able to name it — dropping the row would leave the
+ * trigger printing a dash over a brief that says otherwise — so it survives the
+ * filter, and its `title` is the fallback for a session so old that this
+ * window has never seen it.
+ */
+export function sessionChoices(
+  sessions: readonly Session[],
+  repo: string | null,
+  chosen: { id: string; title: string | null } | null,
+): MenuItem[] {
+  const seen = new Set<string>()
+  const rows = sessions
+    .filter(s => {
+      // The two reads overlap by construction: `/state` sends the machine's
+      // newest thirty and the repository read sends that repository's own.
+      if (seen.has(s.id)) return false
+      if (repo && !sessionInRepo(s.cwd, repo) && s.id !== chosen?.id) return false
+      seen.add(s.id)
+      return true
+    })
+    .sort((a, b) => b.lastTs - a.lastTs)
+
+  /*
+   * Grouped by the directory each session recorded.
+   *
+   * `Menu` prints a heading whenever the group changes rather than nesting, so
+   * rows sharing one have to arrive together — the sorted list alone would
+   * print `truto` above every third row. Insertion order into the map is the
+   * order of each group's newest session, which is the order to read them in.
+   */
+  const byDir = new Map<string, Session[]>()
+  for (const s of rows) {
+    const key = s.project || s.cwd
+    const list = byDir.get(key)
+    list ? list.push(s) : byDir.set(key, [s])
+  }
+
+  const items: MenuItem[] = [{ id: NEW_SESSION, label: 'A new conversation' }]
+  for (const [dir, list] of byDir) {
+    for (const s of list) {
+      items.push({
+        id: s.id,
+        label: s.title,
+        group: dir,
+        // One fact beside the name, which is what a menu row has room for.
+        // Among sessions in one repository the title is often the same commit
+        // message twice, so what tells them apart is when each last ran — and
+        // `live` outranks an age, because a session running right now is the
+        // one whose transcript is still moving.
+        meta: s.live ? 'live' : ago(s.lastTs),
+      })
+    }
+  }
+  if (chosen && !seen.has(chosen.id)) {
+    items.push({ id: chosen.id, label: chosen.title || 'The session this brief is about' })
+  }
+  return items
+}
+
+/**
  * Which session this brief is about — and the honest word for what that means.
  *
  * The sessions were already being fetched on every sheet open and thrown away.
@@ -381,86 +500,90 @@ function GrowingField({
  * so its last exchanges travel, and it puts the `claude --resume` line into the
  * brief. It does not resume anything, and the sentence under the heading says
  * so rather than leaving him to find out.
+ *
+ * It is a `Menu` now, for the reason every picker here is: the open list had no
+ * ground, no edge and no z-index, it shoved the templates and the commit button
+ * down the sheet as it opened, and it never marked which row was already
+ * chosen. And it is given the repository, which it previously was not — so the
+ * choice above it could not narrow this one even in principle.
  */
 function SessionPicker({
-  sessions, repos, value, setCwd,
+  sessions, repos, repo, value, attached, setCwd,
 }: {
   sessions: Session[]
   repos: LaunchState['repos']
+  /** The chosen repository's path, or null for "not about one repository". */
+  repo: string | null
   value: string | null
+  /** The basket, which is where a session chosen elsewhere left its title. */
+  attached: PackItem[]
   setCwd: (v: string | null) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const current = sessions.find(s => s.id === value) ?? null
+  const [inRepo, setInRepo] = useState<Session[]>([])
 
-  /** Grouped by the directory each session recorded, newest group first. */
-  const groups = useMemo(() => {
-    const by = new Map<string, Session[]>()
-    for (const s of sessions) {
-      const key = s.project || s.cwd
-      const list = by.get(key)
-      list ? list.push(s) : by.set(key, [s])
-    }
-    return [...by.entries()]
-  }, [sessions])
+  /*
+   * A repository's sessions are asked for, not filtered out of what is to hand.
+   *
+   * `/state` sends the newest thirty sessions on the machine over thirty days,
+   * whatever directory they ran in — so a repository he last touched three
+   * weeks ago has none of its own in that thirty, and a filter alone would
+   * answer "nothing here" for a repository full of work. Scoping the read is
+   * what pays for asking the repository first: the list stops being the
+   * machine's last thirty and becomes this repository's own.
+   *
+   * Thirty rows, and a year of days behind them. The count is what bounds the
+   * menu — thirty because that is what the unscoped read already returns, one
+   * page size said once, and because a menu you scroll for a minute is a page.
+   * The year is not a second bound, it is what stops the first one being
+   * useless: a busy repository fills thirty rows in a fortnight and a quiet one
+   * needs months to fill any, so counting days would answer for neither. What
+   * this asks for is a repository's newest thirty, however far back it reaches.
+   */
+  useEffect(() => {
+    if (!repo) { setInRepo([]); return }
+    let live = true
+    launchApi.sessions({ repo, window: 365, limit: 30 })
+      .then(r => { if (live) setInRepo(r.sessions) })
+      // A widening that fails is not an error on this sheet: what `/state`
+      // already sent is still a true list, only a shorter one.
+      .catch(() => {})
+    return () => { live = false }
+  }, [repo])
+
+  const known = useMemo(() => [...sessions, ...inRepo], [sessions, inRepo])
+  const current = known.find(s => s.id === value) ?? null
+  const chosen = value
+    ? { id: value, title: current?.title ?? attached.find(i => i.ref === sessionRef(value))?.title ?? null }
+    : null
+  const items = useMemo(
+    () => sessionChoices(known, repo, chosen),
+    [known, repo, chosen?.id, chosen?.title],
+  )
 
   const pick = (s: Session | null) => {
     // The previous session's object goes with the previous session. Leaving it
     // attached would quote a transcript the brief no longer claims to be about.
     if (value) removeFromLaunch(sessionRef(value))
-    setOpen(false)
     if (!s) return setLaunchSession(null)
 
     setLaunchSession(s.id)
-    const repo = repos.find(r => r.path === s.cwd) ?? repos.find(r => s.cwd.startsWith(`${r.path}/`))
-    if (repo) setCwd(repo.path)
+    // A session that ran somewhere else moves the repository to where it ran,
+    // rather than sitting in a list that has just stopped describing it.
+    const home = repos.find(r => r.path === s.cwd) ?? repos.find(r => sessionInRepo(s.cwd, r.path))
+    if (home) setCwd(home.path)
     attachSession(s)
   }
 
   return (
     <section className="py-4">
       <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Session</h3>
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center h-11 border-b border-rule text-left
-                   hover:text-fg transition-colors duration-100">
-        <span className="text-sm text-fg-dim truncate grow min-w-0">
-          {current ? current.title : 'A new conversation'}
-        </span>
-        <span className="text-sm text-fg-mute shrink-0 pl-3">{open ? 'Close' : 'Change'}</span>
-      </button>
-
-      {open && (
-        <div className="max-h-64 overflow-y-auto">
-          <button onClick={() => pick(null)}
-            className="w-full flex items-center h-11 border-b border-rule text-left text-sm
-                       text-fg-mute hover:bg-ink-800 transition-colors duration-100">
-            A new conversation
-          </button>
-          {groups.map(([repo, list]) => (
-            <div key={repo}>
-              <p className="text-eyebrow uppercase text-fg-mute pt-3 pb-1">{repo}</p>
-              {list.map(s => (
-                <button key={s.id} onClick={() => pick(s)}
-                  className="w-full flex items-center gap-2 h-11 border-b border-rule text-left
-                             hover:bg-ink-800 transition-colors duration-100">
-                  <SquareTerminal size={14} className="text-fg-mute shrink-0" />
-                  <span className="text-sm text-fg-dim truncate grow min-w-0">{s.title}</span>
-                  {s.live && <span className="text-sm text-ok shrink-0">live</span>}
-                  {/* Age, because the repository is already the group heading
-                      and the title is often the same commit message twice. Two
-                      sessions in one directory differ by when they last ran and
-                      how far they got, and this list was printing only the
-                      second half — `/sessions` has said both all along, off the
-                      same `lastTs` this row already had in hand. */}
-                  <span className="text-sm text-fg-mute tnum shrink-0">{s.turns} in view</span>
-                  <span className="text-sm text-fg-mute tnum shrink-0">{ago(s.lastTs)}</span>
-                </button>
-              ))}
-            </div>
-          ))}
-          {!sessions.length && <p className="text-sm text-fg-mute h-11 flex items-center">—</p>}
-        </div>
-      )}
+      <Menu
+        items={items}
+        value={value ?? NEW_SESSION}
+        onPick={id => pick(id === NEW_SESSION ? null : known.find(s => s.id === id) ?? null)}
+        ariaLabel="Session"
+        full
+      />
 
       {current && (
         <p className="text-sm text-fg-mute mt-2 leading-snug">
@@ -539,43 +662,50 @@ function PermissionModeBlock({ mode, session }: { mode: PermissionMode; session:
 }
 
 /**
- * The repository, as a list of rows.
+ * A repository is chosen by a row like any other, so "none" needs an id.
  *
- * `<select>` was the only native popup in the product, and on a phone it covers
- * the sheet; on a laptop its menu painted straight over the object list. A
- * collapsed row that opens into rows behaves like everything else here.
+ * Every repository is an absolute path, so a leading colon cannot collide with
+ * one — and `null` cannot be a menu value, because the row that says "not about
+ * one repository" has to be able to carry the check.
+ */
+const NO_REPO = ':none'
+
+/**
+ * The repository — the first question, and now a real menu.
+ *
+ * It has been three controls. A native `<select>`, whose popup painted over the
+ * object list and, on a phone, over the sheet. Then a collapsed row that opened
+ * into more rows in document flow: no ground, no edge, no elevation, nothing
+ * marking the row already chosen, and everything below it — templates, skills,
+ * the one button that commits — pushed down the screen at the moment of
+ * choosing. Now the shared `Menu`, which overlays rather than displaces and
+ * says which one is current.
  */
 function RepoPicker({
   repos, cwd, setCwd,
 }: { repos: LaunchState['repos']; cwd: string | null; setCwd: (v: string | null) => void }) {
-  const [open, setOpen] = useState(false)
-  const current = repos.find(r => r.path === cwd)
+  const items = useMemo<MenuItem[]>(() => [
+    { id: NO_REPO, label: 'Not about one repository' },
+    ...repos.map(r => ({
+      id: r.path,
+      label: r.name,
+      // Uncommitted work, because that is the fact that decides whether this is
+      // the checkout he means — and a `<select>` could not have carried it.
+      ...(r.dirty > 0 ? { meta: `${r.dirty} dirty` } : {}),
+    })),
+  ], [repos])
+
   return (
     <section className="py-4">
       <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Repository</h3>
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center h-11 border-b border-rule text-left
-                   hover:text-fg transition-colors duration-100">
-        <span className="text-sm text-fg-dim truncate grow min-w-0 font-mono">{current?.name ?? '—'}</span>
-        <span className="text-sm text-fg-mute shrink-0 pl-3">{open ? 'Close' : 'Change'}</span>
-      </button>
-      {open && (
-        <div className="max-h-64 overflow-y-auto">
-          <button onClick={() => { setCwd(null); setOpen(false) }}
-            className="w-full flex items-center h-11 border-b border-rule text-left text-sm
-                       text-fg-mute hover:bg-ink-800 transition-colors duration-100">
-            Not about one repository
-          </button>
-          {repos.map(r => (
-            <button key={r.path} onClick={() => { setCwd(r.path); setOpen(false) }}
-              className="w-full flex items-center h-11 border-b border-rule text-left
-                         hover:bg-ink-800 transition-colors duration-100">
-              <span className="text-sm font-mono truncate grow min-w-0">{r.name}</span>
-              {r.dirty > 0 && <span className="text-sm text-fg-mute tnum shrink-0 pl-3">{r.dirty} dirty</span>}
-            </button>
-          ))}
-        </div>
-      )}
+      <Menu
+        items={items}
+        value={cwd ?? NO_REPO}
+        onPick={id => setCwd(id === NO_REPO ? null : id)}
+        ariaLabel="Repository"
+        full
+        mono
+      />
     </section>
   )
 }
@@ -633,7 +763,7 @@ function SkillPicker({
 
   return (
     <section className="py-4">
-      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Skills — {selected.length}</h3>
+      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Skills</h3>
 
       {selected.map(id => (
         <div key={id} className="flex items-center gap-2 h-8 border-b border-rule last:border-0">
@@ -678,10 +808,15 @@ function SkillPicker({
               key={s.id}
               onClick={() => toggle(s.id)}
               aria-pressed={on}
-              className="w-full flex flex-col items-start gap-1 py-2
+              /* Inline, like the templates and for the same two reasons: it is
+                 a multi-select, and it is searched. A menu closes on the first
+                 pick and has nowhere to put the field. What it does take from
+                 the menu is the answer to "which of these have I already
+                 chosen?" — the row's own lit ground, not a check alone. */
+              className={`w-full flex flex-col items-start gap-1 py-2
                          sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
                          text-left border-b border-rule last:border-0
-                         hover:bg-ink-800 transition-colors duration-100"
+                         ${rowStateClass({ selected: on })}`}
             >
               <span className="w-full sm:w-52 shrink-0 flex items-center gap-2 sm:pr-4">
                 <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />

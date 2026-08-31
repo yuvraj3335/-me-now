@@ -321,7 +321,31 @@ api.get('/state', async c => {
   })
 })
 
-api.post('/refresh', async c => c.json(await ingest()))
+/**
+ * Sync — pipe 1, on demand.
+ *
+ * The same poll the timer runs, run now: every source Wake already holds a
+ * credential for is asked what is on him, and nothing outside those credentials
+ * is touched. That is the whole difference from Fetch below, which additionally
+ * asks the connectors on this box. Both pipes stay, because neither can see
+ * what the other sees.
+ *
+ * `only` narrows it to one source, and it is validated for the reason spelled
+ * out over the Fetch route: `ingest()` picks its adapters by name, so a free
+ * string would select none of them and report a clean, successful, entirely
+ * empty poll — a green tick over a question nobody asked.
+ *
+ * `isFetchScope` is the right guard here rather than a near-copy of it under a
+ * different name. `FetchScope` and `SourceName` are the same five names, and
+ * the coupling is not new: `collectAll` already hands a `FetchScope` straight
+ * to `ingest()`. One list means the two buttons can never disagree about which
+ * sources exist.
+ */
+api.post('/refresh', async c => {
+  const { only } = await c.req.json<{ only?: unknown }>().catch(() => ({ only: undefined }))
+  if (only != null && !isFetchScope(only)) return c.json(bad('unknown source'), 400)
+  return c.json(await ingest(only ?? undefined))
+})
 
 /**
  * Fetch — pipe 2.

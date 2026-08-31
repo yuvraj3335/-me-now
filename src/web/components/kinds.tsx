@@ -203,6 +203,63 @@ export function whereOf(source: CardSource | undefined, card: Card): string | nu
 }
 
 /**
+ * The half of a context that differs, with a capital on it.
+ *
+ * `trutohq/truto-app` is one repository among many under one owner, and
+ * `yuvraj@truto.one` is one mailbox on one domain — in both, the part before
+ * the separator is the same on every row that has one, which is exactly what
+ * `cleanChannel` already takes out of a channel name. The capital is the whole
+ * of "human": `spendflo` is a slug and `Spendflo` is a customer. A name that
+ * starts with a digit — `15five` — is left as it is, because `'1'.toUpperCase()`
+ * is `'1'` and there is nothing to do.
+ */
+const shortName = (v: string) => {
+  const tail = v.split('/').pop()!.split('@')[0]!
+  return tail.charAt(0).toUpperCase() + tail.slice(1)
+}
+
+/**
+ * Who this row is about, or null when nobody is.
+ *
+ * `who` is the person waiting on him and it is the right answer whenever there
+ * is one. `actor` is the fallback and it is only reachable on a conversation:
+ * on an alert the actor is the bot that posted it, so `Sentry-alerts — Sentry`
+ * would be the row telling him the same thing twice and calling a monitor a
+ * person. The adapters already write `who: undefined` on every alert; this does
+ * not depend on their having remembered to.
+ */
+export function waitingOn(card: Card): string | null {
+  if (card.who) return card.who
+  const lead = card.sources[0]
+  if (card.kind === 'alert' || lead?.kind === 'alert') return null
+  return card.actor ?? lead?.actor ?? null
+}
+
+/**
+ * `customer — who`, which is what a row is at a glance on a phone.
+ *
+ * The phone had no channel column and no person column, so a row from
+ * `#15five-truto` said neither which customer it belonged to nor who was waiting
+ * on him — the two facts that decide whether a message is opened at 7am. It also
+ * cannot afford `#truto-15-5-truto` or `trutohq/truto-app`: this is one 132px
+ * cell, and a string that truncates carries less than a shorter true one.
+ *
+ * So: the context in its own system's vocabulary, shortened to the part that
+ * differs, paired with the person. Every source answers — Slack the channel,
+ * GitHub the repository, Sentry and Claude the project, Gmail the mailbox it
+ * landed in — because `whereOf` already answers for all five. Either half may be
+ * missing and the line is then just the other one; both missing is `null`, and
+ * the cell decides what nothing looks like.
+ */
+export function contextLine(card: Card): string | null {
+  const where = whereOf(card.sources[0], card)
+  const customer = where ? shortName(where) : null
+  const who = waitingOn(card)
+  if (customer && who) return `${customer} — ${who}`
+  return customer ?? who ?? null
+}
+
+/**
  * Truncate from the head, not the tail.
  *
  * `trutohq/truto-app` cut from the right is `trutohq/tru…`, which is the half

@@ -362,6 +362,16 @@ export function listSessions(limit = 30, windowDays = 30): SessionRow[] {
  * newest-first, and the loop stops as soon as `limit` rows have been *accepted*
  * — so a repo filter still walks until it has filled a page, and an unfiltered
  * read still parses only a page's worth of tails.
+ *
+ * `repo` names one place exactly. It used to be a substring test over
+ * `cwd` + `project`, which is a different question with the same shape: on this
+ * machine `?repo=truto` answered with `truto`, `truto-app`, `truto-monitoring`
+ * and `truto-skills` — four of the five repositories that have sessions — so a
+ * picker built on it could narrow to everything or to nothing and never to one
+ * repository. Both spellings are still accepted because both are real names for
+ * where a session ran: the recorded `cwd` (`/Users/me/work/truto`) and the
+ * basename it is shown under (`truto`). A session that never recorded a `cwd`
+ * has the same string for both, which is the case `placeOf` leaves behind.
  */
 export function listAllSessions(
   opts: { windowDays?: number; repo?: string; limit?: number } = {},
@@ -376,7 +386,7 @@ export function listAllSessions(
     // record of where it ran rather than the name it is filed under.
     if (isWakeRun({ cwd: info.cwd })) continue
     const row = rowOf(file, info)
-    if (wanted && !`${row.cwd}\n${row.project}`.toLowerCase().includes(wanted)) continue
+    if (wanted && row.cwd.toLowerCase() !== wanted && row.project.toLowerCase() !== wanted) continue
     out.push(row)
     if (out.length >= limit) break
   }

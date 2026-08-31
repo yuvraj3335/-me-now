@@ -81,6 +81,14 @@ export type Session = {
   permissionMode?: string | null
   /** Running on the box right now, from Claude Code's own per-process files. */
   live?: boolean
+  /**
+   * Put away, in Wake's own database.
+   *
+   * The one field on this type that is not a fact about the transcript. Claude
+   * Code has no archive, so there is nothing on disk to read it from and
+   * nothing on disk to write it to — see migration 13.
+   */
+  archived?: boolean
 }
 
 /**
@@ -201,6 +209,17 @@ export const launchApi = {
     const s = q.toString()
     return req<{ sessions: Session[] }>(`/sessions${s ? `?${s}` : ''}`)
   },
+  /**
+   * Put a session away, or take it back out.
+   *
+   * No confirmation step, unlike the delete below: this writes one row in
+   * Wake's own database, touches nothing under `~/.claude`, and the way back is
+   * the same call with `false`.
+   */
+  archiveSession: (id: string, archived: boolean) =>
+    req<{ ok: true; archived: boolean }>(
+      `/sessions/${id}/archive`, { method: 'POST', body: JSON.stringify({ archived }) },
+    ),
   /**
    * Step one of a delete: what would go, and a token bound to this id.
    * Two calls, because the dialog has to be able to name the four paths.
