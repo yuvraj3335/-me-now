@@ -16,8 +16,9 @@
 import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import {
-  MCP_SERVERS, ME, LOOKBACK_DAYS,
-  SLACK_ALERT_CHANNELS, SLACK_TEAM_ID, SLACK_THREAD_READS, SLACK_USERGROUPS, type AlertChannel,
+  MCP_SERVERS, ME, LOOKBACK_DAYS, isAllowedSlackChannel,
+  SLACK_ALERT_CHANNELS, SLACK_CHANNELS, SLACK_TEAM_ID, SLACK_THREAD_READS, SLACK_USERGROUPS,
+  type AlertChannel,
 } from '../env'
 import { extractRefs, extractAlertRefs } from '../dedup'
 import { isDmChannel } from '../../shared/slackThread'
@@ -739,7 +740,27 @@ export type ThreadEntry = {
   mine: boolean
 }
 
-const ENTRY_CHARS = 280
+/*
+ * How much of one message is stored, and why 280 was not enough.
+ *
+ * This is the text behind every thread line in the detail pane and every row in
+ * the composer's reply picker. At 280 the pane clamped it to three lines and the
+ * clip was invisible, so the number was never wrong on screen — it was simply
+ * never tested. The phone pass added a `Show all` under the list, and a control
+ * that promises the rest of a message has to be able to keep that promise: at
+ * 280 it revealed two more lines and then stopped mid-sentence, which is a
+ * worse answer than the clamp it replaced.
+ *
+ * 1200 holds a normal Slack message whole — the long ones on this workspace are
+ * pasted stack traces and changelog dumps, and those stop honestly with the
+ * ellipsis `cut` appends rather than dying mid-word. Twenty entries a card is
+ * ~24KB rather than ~5.6KB, which is nothing against a SQLite row that already
+ * carries the excerpt, the refs and the alert payload.
+ */
+const ENTRY_CHARS = 1200
+
+/** A cut that says it was cut, the same mark the collectors already use. */
+const cut = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n).replace(/[\s,;:–—-]+$/, '')}…`)
 const ENTRY_CAP = 20
 
 /**
@@ -766,7 +787,7 @@ const asEntry = (m: SlackMessage, me: string): ThreadEntry => {
     ts: m.ts,
     who: m.who,
     who_id: m.whoId,
-    text: plain(m.text).slice(0, ENTRY_CHARS),
+    text: cut(plain(m.text), ENTRY_CHARS),
     /*
      * A message he wrote is never "somebody named you".
      *
@@ -796,10 +817,10 @@ const hostOf = (permalink: string): string | null => {
  * bucket rather than three rows that each carry their own Done button and know
  * nothing about the other two.
  *
- * The two refusals live here, once each, so no later caller can route around
- * them: a direct message never becomes a bucket, and neither does a message he
- * wrote himself — the search asks for `<@me>`, so a hit of his own is him
- * naming himself.
+ * The three refusals live here, once each, so no later caller can route around
+ * them: a direct message never becomes a bucket, neither does a channel that is
+ * not on the desk's list, and neither does a message he wrote himself — the
+ * search asks for `<@me>`, so a hit of his own is him naming himself.
  */
 export function bucketHits(hits: SlackHit[], me: string): Map<string, ThreadBucket> {
   const out = new Map<string, ThreadBucket>()
@@ -811,6 +832,33 @@ export function bucketHits(hits: SlackHit[], me: string): Map<string, ThreadBuck
     // places: the route that reads stored threads back out, and the parser for
     // a link somebody pastes. One predicate is what stops the three drifting.
     if (h.isDm || isDmChannel(h.channelId)) continue
+    /*
+     * And a channel off the list is refused in the same shape, one line later,
+     * deliberately.
+     *
+     * This is the same rule as the DM refusal above and it is here for the same
+     * reason: this function is the single door a search hit walks through on its
+     * way to being a card. Everything downstream is fed from these buckets — the
+     * thread reads are ordered from them, `buildThreadCard` is called on them,
+     * and `foldThreadIntoAlert` can only ever be handed a card one of them
+     * produced — so a channel that cannot open a bucket cannot reach the desk by
+     * any of those routes either.
+     *
+     * It is an out-filter rather than trust in the query because the query is
+     * somebody else's product. `in:` is Slack's grammar, not ours, and it is
+     * evaluated on Slack's machine — the same grammar that has no `OR` today can
+     * gain one, and repeated `in:` reads as a union today by a rule nobody
+     * wrote down for us. A refusal that lives in a string handed to a search API
+     * is a refusal that ends quietly, on their release note, with a desk that
+     * fills back up and a sync line that stays green. The narrowing in `fetch()`
+     * below is worth having and is worth nothing as a guarantee. This line is
+     * the guarantee.
+     *
+     * `SLACK_ALERT_CHANNELS` passes, by `isAllowedSlackChannel`'s own rule and
+     * not by an exception written here — see the comment on it in `env.ts` for
+     * why a human reply under a Sentry post has to get through.
+     */
+    if (!isAllowedSlackChannel(h.channelName, h.channelId)) continue
     if (me && h.fromId === me) continue
 
     const parent = parentTs(h)
@@ -1115,6 +1163,51 @@ export function readOrder(buckets: Iterable<ThreadBucket>): ThreadBucket[] {
 /* ------------------------------ adapter ------------------------------- */
 
 /**
+ * The channel half of the mention query, in Slack's own dialect.
+ *
+ * Every claim below was checked against mcp.slack.com on 2026-08-31 rather than
+ * reasoned about, because the syntax is not what it looks like:
+ *
+ *   * **Repeating `in:` is an OR.** `<@me> after:2026-08-13 before:2026-08-15
+ *     in:#truto in:#sprinto` answered with two #sprinto rows and one #truto row
+ *     — the union. This is the one worth measuring rather than assuming: a space
+ *     is AND everywhere else in this grammar, so the obvious reading of two
+ *     `in:` terms is "in both channels at once", which no message can be. Under
+ *     that reading this query returns nothing at all and the desk goes silent
+ *     behind a green sync line.
+ *   * **`OR` is not an operator, so it is not written.** The search tool's own
+ *     description says so in as many words — "space-separated = AND, no boolean
+ *     operators (AND/OR/NOT)" — and the same query written `in:#truto OR
+ *     in:#sprinto` returned the identical three rows, so the word is being read
+ *     as a search term and quietly dropped rather than honoured. Writing it
+ *     would be a spell that happens to work for a reason nobody could point at.
+ *   * **The mention still binds.** Dropping `<@me>` from that query took it from
+ *     3 rows to 20, so the union of channels is AND-ed with the mention rather
+ *     than replacing it. That is the failure that would have mattered: rows from
+ *     channels he does work in that never named him, arriving with `you were
+ *     mentioned` written on them.
+ *   * **Private channels answer to `in:#name`.** Twelve of the eighteen are
+ *     private; the full query returns rows from #spendflo-truto and
+ *     #15five-truto. So the documented `in:<#C123>` id form is not needed, and
+ *     the whole thing — 341 characters — was accepted and answered as written.
+ *
+ * What this buys is slots. The search is capped at 20 results and the cap is the
+ * tool's, not ours: unfiltered, four of the twenty went to `#github-updates`,
+ * `#pr-reviews` and a Slack list rendering as `#FC:F096Q3LBF7C:Sprint Tasks`,
+ * and the same twenty filtered reached a further day back into real work.
+ *
+ * It buys nothing else. This is somebody else's query language evaluated on
+ * somebody else's machine; the refusal that decides what becomes a card is
+ * `isAllowedSlackChannel` in `bucketHits`, and it runs whatever this string
+ * does or stops doing.
+ *
+ * Exported for the same reason `searchArgs` below is: a query built inside an
+ * await is a query nothing can hold, and every claim in the list above is one a
+ * test should be able to fail on.
+ */
+export const CHANNEL_SCOPE = SLACK_CHANNELS.map(c => `in:#${c.name}`).join(' ')
+
+/**
  * Every argument the mention search is asked with, as a value.
  *
  * Pulled out of the call so `include_bots` is something a test can hold rather
@@ -1210,7 +1303,11 @@ export const slack: SourceAdapter = {
     // One question, not two. `to:me` is gone with direct messages as a concept:
     // a DM is a conversation, not a piece of work, and twenty of them on the
     // desk is twenty rows nothing can be done about from here.
-    const mention = me ? `<@${me}> after:${since}` : null
+    //
+    // It is one question about eighteen channels rather than about the
+    // workspace — see `CHANNEL_SCOPE` for the syntax and for why that is an
+    // economy and not the refusal.
+    const mention = me ? `<@${me}> after:${since} ${CHANNEL_SCOPE}`.trimEnd() : null
 
     /*
      * One settled array, deliberately. A failed alert-channel read has to make

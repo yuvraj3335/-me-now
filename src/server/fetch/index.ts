@@ -38,7 +38,7 @@
 import { db, logEvent, now } from './../db'
 import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
-import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID } from './../env'
+import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID, isAllowedSlackChannel } from './../env'
 import { readsLikeAsk } from './../sources/slack'
 import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
@@ -325,6 +325,20 @@ export function slackCard(h: SearchHit): RawCard | null {
   // and a title prefix is not.
   if (h.ref.startsWith('D')) return null
   const channel = (h.title ?? '').replace(/^#/, '')
+  /*
+   * The same channel allowlist the poll enforces, on the other door into `cards`.
+   *
+   * `bucketHits` is where a *polled* Slack hit is refused, and it is the only
+   * door that path has. Fetch is a second one: the operator presses a button, a
+   * search runs, and this builds rows straight from the hits — so without this
+   * line a manual Fetch reintroduces exactly the channels the poll was just
+   * taught to leave out, and they arrive `found_by = 'fetch'`, which the poll's
+   * sweep never clears.
+   *
+   * Both facts are to hand and the id is the durable one: `h.ref` is
+   * `<channel>:<ts>`, and `h.title` is the display name a rename can change.
+   */
+  if (!isAllowedSlackChannel(channel, h.ref.split(':')[0])) return null
   return {
     source: 'slack',
     source_id: h.ref,

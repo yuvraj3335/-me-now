@@ -454,12 +454,31 @@ export function resolveSessionCwd(cwd: string | null | undefined):
   const raw = cwd?.trim()
   if (!raw) return { ok: false, error: 'that session does not record where it ran, so there is nowhere to resume it' }
 
+  const path = resolve(raw)
+  const root = resolve(WORKSPACE_ROOT)
+
+  /*
+   * The workspace root is refused before anything else looks at it.
+   *
+   * `resolveCwd` answers the root as `{ ok: true, repo: null }` — deliberately,
+   * because a *brief* is allowed not to be about one repository. Asking it first
+   * therefore let the root straight through, which is how a live session ended
+   * up at `cwd: /home/yuvraj/work` with no repo: the drawer that holds every
+   * checkout and is itself none of them.
+   */
+  if (path === root) {
+    return {
+      ok: false,
+      error: `that session recorded the workspace root (${WORKSPACE_ROOT}) as its directory, which is not a repository — there is nothing there to resume it in`,
+    }
+  }
+
   const direct = resolveCwd(raw)
   if (direct.ok) return direct
 
-  const path = resolve(raw)
-  const root = resolve(WORKSPACE_ROOT)
-  if (path === root || path.startsWith(`${root}/`)) {
+  // Under the workspace but unknown to the registry: a subdirectory of a real
+  // checkout is real work, and bounding it by the root is what keeps it safe.
+  if (path.startsWith(`${root}/`)) {
     return { ok: true, path, repo: getRepo(path)?.name ?? null }
   }
   return {
@@ -545,6 +564,37 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
   /* --- a new conversation ------------------------------------------------ */
   const where = resolveCwd(input.cwd)
   if (!where.ok) return { error: where.error, status: 400 }
+
+  /*
+   * A session has to start *in* something, and the workspace root is not a
+   * repository.
+   *
+   * `resolveCwd` answers `{ path: WORKSPACE_ROOT, repo: null }` for a brief that
+   * named no repository, and for a brief that is right: "not about one
+   * repository" is a real answer when the objects are a mail thread and a Slack
+   * question. It is not a real answer for a process. Claude Code started in
+   * `~/work` is sitting in a directory that contains eleven checkouts and is
+   * itself none of them — no git, no project, nothing its tools can reason
+   * about — and the first thing it does is guess which one he meant.
+   *
+   * Found on the deployed site: a session at `cwd: /home/yuvraj/work`,
+   * `repo: null`, reached by pressing Open in Claude from a session row whose
+   * own `cwd` was not in the registry. The sheet had fallen back to "Not about
+   * one repository" and the fallback had been taken literally.
+   *
+   * So the refusal is here rather than in `resolveCwd`: the packer keeps its
+   * answer, and only the thing that spawns a process insists on a real
+   * directory. It names what to do about it, because the repository picker is
+   * the first control on the sheet and he has just scrolled past it.
+   */
+  if (!where.repo) {
+    return {
+      status: 400,
+      error: 'a session has to start in a repository, and none was chosen — ' +
+        `"not about one repository" packs a brief but leaves nothing to open it in. ` +
+        'Pick a repository at the top of the sheet.',
+    }
+  }
 
   const ready = available()
   if (!ready.ok) return { error: ready.missing!, status: 503 }

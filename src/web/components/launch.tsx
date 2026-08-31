@@ -47,20 +47,35 @@
  * listed here — author, words, when — and each is picked on its own. Not all of
  * them, not the channel, and never a direct message: the poll refuses those
  * before a card exists and the route refuses them again on the way out.
+ *
+ * **On a phone this is a page.** It was the same modal at every width, and at
+ * 390px that modal was measured showing 693px of a 2,431px scroll — eleven
+ * template rows, twenty-nine skills, a thread parent with its replies, the
+ * attachments, two fields and the brief — under a 48px title bar, over a hundred
+ * pixels of desk still visible and not reachable. A modal over a page is the
+ * right shape for a question with three fields in it; this has never been that.
+ * So below `sm` it takes the screen, with a back control and a chevron path
+ * exactly like the card detail beside it. Same sections, same order, same
+ * decisions, same one commit at the end: the room is what changed, not the flow.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
-  ArrowUpRight, Check, Copy, FileText, Link2, Loader2, Search, Sparkles, SquareTerminal, X,
+  ArrowUpRight, Check, ChevronLeft, ChevronRight, Copy, FileText, Link2, Loader2,
+  Search, Sparkles, SquareTerminal, X,
 } from 'lucide-react'
 import {
   Button, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
 } from './primitives'
 import {
-  PERMISSION_MODES, closeLaunch, launchApi, openLaunch, removeFromLaunch,
-  resetLaunch, resolveSkillIds, setLaunchPermissionMode, setLaunchSession,
-  useLaunchBasket, type LaunchState, type PackItem, type PermissionMode, type Session,
+  PERMISSION_MODES, PHONE_COMPOSER, closeLaunch, composerIsAPage, launchApi,
+  launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
+  resolveSkillIds, setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
+  type LaunchState, type PackItem, type PermissionMode, type Session,
 } from '../lib/launch'
+import { useDetailKey, useRoute } from '../lib/route'
+import { useOverlay } from '../lib/overlay'
 import {
   messageWord, packItemFor, slackApi, slackLinkFor,
   type SlackThread, type SlackThreadItem,
@@ -116,30 +131,151 @@ const NAME_ROW = `w-full flex flex-col items-start gap-1 py-2
     below its own content and the row overflows instead of truncating. */
 const NAME_CELL = 'w-full sm:w-auto min-w-0 shrink-0 flex items-center gap-2 sm:pr-4'
 
+/**
+ * `Open in Claude Code`, in full, because the missing two words were the whole
+ * bug: this used to say `Open in Claude` over a control that opened claude.ai.
+ * The product name is the honest title now that the product name is what it
+ * opens. It is the sheet's title on a laptop and the last crumb on a phone.
+ */
+const COMPOSER_TITLE = 'Open in Claude Code'
+
+/**
+ * Which room the composer is drawn in — asked by width, because width is what
+ * the answer is about.
+ *
+ * Not `pointer: coarse`, which is the right question for the terminal's key bar
+ * and the wrong one here: a touchscreen laptop at 1440px has a coarse pointer
+ * and acres of room, and giving it a full-viewport page would be answering a
+ * question nobody asked. 640 is where the shell swaps its rail for a tab bar,
+ * where `--nav-h` grows to 53px, and where every `sm:` below flips — so it is
+ * where this flips too. Live rather than read once: a laptop window dragged
+ * narrow gets the page, and dragged back gets the sheet.
+ */
+function useComposerIsAPage(): boolean {
+  const [page, setPage] = useState(composerIsAPage)
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE_COMPOSER)
+    const on = () => setPage(mq.matches)
+    on()
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return page
+}
+
 export function LaunchSheet() {
   const basket = useLaunchBasket()
+  const page = useComposerIsAPage()
+
+  const body = basket.open && (
+    <LaunchBody
+      items={basket.items}
+      preferred={basket.templates}
+      repoHint={basket.repoHint}
+      suggestedTitle={basket.title}
+      session={basket.session}
+      permissionMode={basket.permissionMode}
+      page={page}
+    />
+  )
+
+  if (page) return basket.open ? <LaunchPage>{body}</LaunchPage> : null
+
   return (
-    /* `Open in Claude Code`, in full, because the missing two words were the
-       whole bug: this used to say `Open in Claude` over a control that opened
-       claude.ai. The product name is the honest title now that the product name
-       is what it opens. */
-    <Sheet open={basket.open} onClose={closeLaunch} title="Open in Claude Code" wide>
-      {basket.open && (
-        <LaunchBody
-          items={basket.items}
-          preferred={basket.templates}
-          repoHint={basket.repoHint}
-          suggestedTitle={basket.title}
-          session={basket.session}
-          permissionMode={basket.permissionMode}
-        />
-      )}
+    <Sheet open={basket.open} onClose={closeLaunch} title={COMPOSER_TITLE} wide>
+      {body}
     </Sheet>
   )
 }
 
+/**
+ * The composer as a place, at the size a phone actually has.
+ *
+ * This is `DetailPage` in `pages/Home.tsx`, deliberately — the same portal, the
+ * same `pad-top`, the same stop at `--nav-h`, the same reason for each. A fixed
+ * box at `top: 0` starts under the notch, and the phone tab bar is not this
+ * page's to cover: `styles.css` states that as a rule and the card sheet that
+ * broke it made all six destinations unreachable while a card was open. Between
+ * those two edges is the whole surface the shell gives anything, which is what a
+ * page means here.
+ *
+ * `z-[52]`, and the two pixels are load-bearing. The ladder is 50 for a sheet
+ * and for the card detail page, 55 for a `Menu` — which is what the repository
+ * and session pickers on this very surface open as — and 60 for the palette.
+ * This has to cover the card detail, because the card detail is what it is
+ * usually opened from and is still standing behind it, and it has to stay under
+ * its own menus. Two equal z-indexes would leave that to DOM insertion order,
+ * which is true today and is not a thing to depend on.
+ *
+ * `useOverlay(true)` is the same non-decoration it is on the detail page: the
+ * desk binds `j`, `k`, `e` and `s` to the document, two of those are destructive
+ * and unconfirmed, and a surface that does not count itself leaves them live
+ * underneath it.
+ */
+function LaunchPage({ children }: { children: React.ReactNode }) {
+  useOverlay(true)
+
+  return createPortal(
+    <div
+      style={{ bottom: 'var(--nav-h)' }}
+      className="fixed inset-x-0 top-0 z-[52] pad-top flex flex-col bg-ink-900"
+    >
+      <LaunchPath onBack={closeLaunch} />
+      {children}
+    </div>,
+    document.body,
+  )
+}
+
+/**
+ * Where the composer sits, and the way out of it, in one line.
+ *
+ * `‹ Card › Open in Claude Code`. The shape is `DetailPath`'s and the reasons
+ * are its reasons: the first segment is the control, the rest is the sentence it
+ * completes, and a bare chevron with no word beside it is a guess about what it
+ * will close.
+ *
+ * The word on the control is *what is underneath*, not a fixed `Desk`. This
+ * surface is opened from a card, a mail thread, a task on Work, a session and
+ * the palette, and it does not navigate — it is a portal over whatever was
+ * already there, which is still there, unscrolled and unchanged. So Back names
+ * the thing it will uncover: a card whose detail is open, otherwise the
+ * destination the reader is standing on.
+ */
+const BACK_TO: Record<string, [label: string, aria: string]> = {
+  '/': ['Desk', 'Back to the desk'],
+  '/mail': ['Mail', 'Back to Mail'],
+  '/work': ['Work', 'Back to Work'],
+  '/sessions': ['Sessions', 'Back to Sessions'],
+  '/pulse': ['Pulse', 'Back to Pulse'],
+  '/settings': ['Settings', 'Back to Settings'],
+}
+
+function LaunchPath({ onBack }: { onBack: () => void }) {
+  const { path } = useRoute()
+  // A key means a card's detail is the surface underneath. The bare `#card/`
+  // sentinel is `''` and means he closed it on purpose, which is the desk.
+  const card = useDetailKey()
+  const [label, aria] = card
+    ? ['Card', 'Back to the card'] as const
+    : BACK_TO[path] ?? ['Wake', 'Back to Wake']
+
+  return (
+    <nav aria-label="Breadcrumb"
+      className="shrink-0 flex items-center gap-1 pad-x py-1 border-b border-rule">
+      <Button variant="default" size="sm" onClick={onBack}
+        ariaLabel={aria} title={aria}
+        className="shrink-0">
+        <ChevronLeft size={14} aria-hidden /> {label}
+      </Button>
+      <ChevronRight size={12} aria-hidden className="shrink-0 text-fg-mute" />
+      <span className="truncate text-sm text-fg-dim">{COMPOSER_TITLE}</span>
+    </nav>
+  )
+}
+
 function LaunchBody({
-  items, preferred, repoHint, suggestedTitle, session, permissionMode,
+  items, preferred, repoHint, suggestedTitle, session, permissionMode, page,
 }: {
   items: PackItem[]
   preferred: string[]
@@ -147,19 +283,54 @@ function LaunchBody({
   suggestedTitle: string | null
   session: string | null
   permissionMode: PermissionMode
+  /** Drawn as a full-viewport page rather than as a modal. See `LaunchSheet`. */
+  page: boolean
 }) {
+  /*
+   * The half-written brief, read once.
+   *
+   * Everything below used to start empty on every mount, and this component
+   * unmounts the moment the surface closes — so leaving the composer to go and
+   * read the thread underneath it cost him every word he had typed. `launch.ts`
+   * holds the draft across that trip now and `openLaunch` empties it when the
+   * next brief is a different one, so this is a resume rather than a leak. Read
+   * during the first render rather than in an effect: seeding state from an
+   * effect means one paint with an empty field, which on a resumed brief looks
+   * exactly like the loss this exists to prevent.
+   *
+   * Copied, not referenced. `rememberLaunch` mutates the stored draft in place —
+   * that is what makes it free to call on every keystroke — so holding the live
+   * object here would give `seed` a different meaning on every render, and every
+   * read of it below would silently become "as it is now" rather than "as it was
+   * when this opened". Only the initialisers read it today; a copy is what keeps
+   * that from mattering.
+   */
+  const seed = useRef({ ...launchDraft() }).current
+
   const [meta, setMeta] = useState<LaunchState | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [templates, setTemplates] = useState<string[]>(preferred.length ? preferred : ['blank'])
-  const [cwd, setCwd] = useState<string | null>(null)
-  const [skills, setSkills] = useState<string[] | null>(null)
-  const [instruction, setInstruction] = useState('')
+  const [templates, setTemplates] = useState<string[]>(
+    seed.templates ?? (preferred.length ? preferred : ['blank']))
+  const [cwd, setCwd] = useState<string | null>(seed.cwd)
+  const [skills, setSkills] = useState<string[] | null>(seed.skills)
+  const [instruction, setInstruction] = useState(seed.instruction)
   const [busy, setBusy] = useState(false)
-  const [draft, setDraft] = useState<{ packId: string; brief: string } | null>(null)
+  const [draft, setDraft] = useState<{ packId: string; brief: string } | null>(
+    seed.brief ? { packId: seed.brief.packId, brief: seed.brief.text } : null)
 
   useEffect(() => {
     launchApi.state().then(setMeta).catch(e => setErr((e as Error).message))
   }, [])
+
+  /* Every decision on this surface, written back where it survives an unmount.
+     The brief's own text is remembered by `Review`, which is the only thing
+     that holds it while it is being edited. */
+  useEffect(() => {
+    rememberLaunch({ templates, cwd, skills, instruction })
+  }, [templates, cwd, skills, instruction])
+  useEffect(() => {
+    rememberLaunch({ brief: draft ? { packId: draft.packId, text: draft.brief } : null })
+  }, [draft])
 
   const chosen = useMemo(
     () => (meta?.templates ?? []).filter(t => templates.includes(t.id)),
@@ -170,9 +341,18 @@ function LaunchBody({
    * Where the work is. The card's own hint wins over the templates' default —
    * a Claude Code session card knows the directory it ran in, and throwing that
    * away is why every brief used to say `cwd /home/yuvraj/work`.
+   *
+   * It does not run on a resumed brief. This effect re-derives the repository
+   * from the hint whenever the template list changes, which is the right answer
+   * the first time and the wrong one afterwards: a repository he chose by hand,
+   * left the composer and came back to would be quietly moved back to the card's
+   * guess. A brief that arrives with a repository already in it has had that
+   * question answered.
    */
+  const resumed = useRef(seed.cwd !== null).current
+
   useEffect(() => {
-    if (!meta) return
+    if (!meta || resumed) return
     const byHint = repoHint
       ? meta.repos.find(r => r.path === repoHint) ?? meta.repos.find(r => r.name === repoHint)
       : null
@@ -212,10 +392,13 @@ function LaunchBody({
     if (g && g !== group) setGroup(g)
   }, [items])
 
-  if (err && !meta) return <p className="text-sm text-bad py-6">{err}</p>
+  /* On a page these two answers have to fill the column they are in, or the
+     path bar sits over a viewport-tall stripe of nothing. */
+  const alone = page ? 'grow min-h-0 pad-x' : ''
+  if (err && !meta) return <p className={`text-sm text-bad py-6 ${alone}`}>{err}</p>
   // Nothing while the machine is read. It takes one round trip and a sentence
   // saying so is chrome that teaches.
-  if (!meta) return null
+  if (!meta) return page ? <div className="grow min-h-0" /> : null
 
   const write = async () => {
     setBusy(true)
@@ -239,14 +422,8 @@ function LaunchBody({
     }
   }
 
-  /*
-   * One scroll, in reading order: which session this is about, where the work
-   * is, which templates and skills, what is attached, what you need and how it
-   * should run — and then the brief itself, which is the last beat and the only
-   * commit.
-   */
-  return (
-    <div>
+  const body = (
+    <>
       <Composer
         items={items} meta={meta} cwd={cwd} setCwd={setCwd}
         skills={effectiveSkills} setSkills={setSkills}
@@ -265,6 +442,7 @@ function LaunchBody({
       {draft ? (
         <Review
           packId={draft.packId} initial={draft.brief} session={session}
+          page={page}
           // Off with a reason, rather than a commit that answers 503 after the
           // brief has been written and read. `missing` is the server's own
           // sentence naming which of tmux, python3 or the claude binary is not
@@ -277,13 +455,24 @@ function LaunchBody({
           } · ${effectiveSkills.length} skill${effectiveSkills.length === 1 ? '' : 's'}`} />
       ) : (
         /* `-mb-4` for the same reason as `-mx-4`: the bar breaks out of the
-           padding on every edge it touches, so it comes to rest on the panel's
-           own bottom edge rather than 16px above it with list rows sliding
-           through the strip underneath. `Sheet` owns the other half of this —
-           its bottom pad is inside the scrolled content precisely so a sticky
-           box can reach past it. */
-        <div className="sticky bottom-0 -mx-4 -mb-4 mt-4 px-4 py-3 bg-ink-850 border-t border-rule
-                        flex items-center">
+           padding on every edge it touches, so it comes to rest on its
+           scroller's own bottom edge rather than 16px above it with list rows
+           sliding through the strip underneath. `Sheet` owns the other half of
+           this on a laptop — its bottom pad is inside the scrolled content
+           precisely so a sticky box can reach past it — and the page below
+           carries the same arrangement for the same reason.
+
+           The ground is the surface's own, which differs between the two: a
+           sheet is `ink-850` and a page is `ink-900`, and a strip painted the
+           wrong one is a 64px band of the other product.
+
+           `-mb-4` only while there is nothing after it. A refusal from
+           `createPack` prints below this strip, and a negative bottom margin
+           with something following it does not free 16px, it pulls that
+           something 16px up underneath the bar. */
+        <div className={`sticky bottom-0 -mx-4 mt-4 px-4 py-3 border-t border-rule
+                         flex items-center ${err ? '' : '-mb-4'}
+                         ${page ? 'bg-ink-900' : 'bg-ink-850'}`}>
           {/* The one commit on this surface, and the only amber on it. */}
           <Button size="lg" variant="primary" className="ml-auto" onClick={write} disabled={busy}>
             {busy ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
@@ -293,8 +482,35 @@ function LaunchBody({
       )}
 
       {err && <p className="text-sm text-bad mt-3">{err}</p>}
-    </div>
+    </>
   )
+
+  /*
+   * One scroll, in reading order: which session this is about, where the work
+   * is, which templates and skills, what is attached, what you need and how it
+   * should run — and then the brief itself, which is the last beat and the only
+   * commit.
+   *
+   * On a laptop that scroll belongs to `Sheet`, which owns the scroller and the
+   * padding around it; here the content is handed over bare. On a phone this
+   * component *is* the page below the path bar, so it owns both: `grow min-h-0`
+   * takes whatever the path bar left, `overflow-y-auto` puts the one scroll
+   * inside it, and the horizontal pad is `.pad-x` — the page pad, applied once
+   * by the class that owns it — rather than the sheet's own `px-4`.
+   *
+   * The vertical pad is on the content and not on the scroller, which is the
+   * rule `Sheet` already states and the reason a `sticky bottom-0` strip can
+   * cancel it with `-mb-4` and come to rest on the real bottom edge.
+   */
+  if (page) {
+    return (
+      <div className="grow min-h-0 overflow-y-auto overscroll-contain pad-x">
+        <div className="py-4">{body}</div>
+      </div>
+    )
+  }
+
+  return <div>{body}</div>
 }
 
 /* -------------------------------- the sheet -------------------------------- */
@@ -369,7 +585,14 @@ function Composer({
         )}
         {items.map(i => (
           <div key={`${i.kind}:${i.ref}`} className="flex items-center h-11 border-b border-rule last:border-0">
-            <span className="text-sm text-fg-mute w-24 shrink-0">{KIND_LABEL[i.kind] ?? i.kind}</span>
+            {/* 96px for a word that is never longer than `Session` — 55px at
+                this size — is 40px a phone does not have. The title beside it
+                is the only thing that tells two Slack replies apart and it had
+                180px of a 358px row to do it in, minus the count and the cross.
+                The laptop keeps the wider column, where a fact grid reads
+                better for having one; below `sm` the column is the width of
+                its own longest word. */}
+            <span className="text-sm text-fg-mute w-16 sm:w-24 shrink-0">{KIND_LABEL[i.kind] ?? i.kind}</span>
             <span className="text-sm text-fg-dim truncate grow min-w-0" title={i.ref}>
               {i.title ?? i.ref}
             </span>
@@ -1425,7 +1648,7 @@ function SkillPicker({
  * decision rather than a retype.
  */
 function Review({
-  packId, initial, session, blocked, provenance,
+  packId, initial, session, blocked, provenance, page,
 }: {
   packId: string
   initial: string
@@ -1434,12 +1657,21 @@ function Review({
   /** Why this box cannot start a session at all, in the server's words. */
   blocked: string | null
   provenance: string
+  /** Drawn on the phone's page rather than in the sheet. See `LaunchSheet`. */
+  page: boolean
 }) {
   const [brief, setBrief] = useState(initial)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
+
+  /* The edited text, not the draft Wake rendered — the same distinction the
+     commit itself makes. Leaving the composer with a brief half-rewritten and
+     coming back to the version the server first wrote would be the loss this
+     surface exists to prevent, one step further along than the instruction
+     field. See `rememberLaunch`. */
+  useEffect(() => { rememberLaunch({ brief: { packId, text: brief } }) }, [packId, brief])
 
   const open = async () => {
     setBusy(true)
@@ -1483,17 +1715,44 @@ function Review({
           value={brief}
           onChange={e => setBrief(e.target.value)}
           spellCheck={false}
-          /* `text-xs` on the one thing you have to read before sending it. A
-             brief reviewed at 12px in a 760px box is not reviewed. */
-          className={`${inputClass} font-mono text-sm leading-relaxed resize-y
-                      h-[44vh] min-h-60 pr-10`}
+          /*
+            `text-xs` on the one thing you have to read before sending it. A
+            brief reviewed at 12px in a 760px box is not reviewed.
+
+            And on a phone, one reviewed through 44vh of a sheet is not reviewed
+            either. That number was measured against a `760px` dialog on a
+            laptop; at 390px it was 371px of window inside a scroller that also
+            held eleven template rows above it, which is the "read it through a
+            slot" this whole change is about. On the page it is the screen less
+            the four things that are not the brief — the safe-area top, the path
+            bar, this provenance line and the commit strip, about 200px between
+            them — so the brief gets ~590px of an 844px phone and the reader
+            scrolls the text rather than the surface it is in.
+          */
+          className={`${inputClass} font-mono text-sm leading-relaxed resize-y min-h-60 pr-10
+                      ${page ? 'h-[calc(100dvh-var(--nav-h)-200px)]' : 'h-[44vh]'}`}
         />
         <div className="absolute right-2 top-2">
           <Mic onText={insert} title="Dictate into the brief" />
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-2">
+      {/*
+        The commit, pinned on a phone and inline on a laptop.
+
+        In the sheet this row sits where it falls, directly under the field,
+        because the sheet is 760px of laptop and the whole of it is on screen.
+        On the page the field above is deliberately a screen tall, so an inline
+        row would put the one control that commits below the fold of a surface
+        whose scroll he has just been sent to the top of — the same failure the
+        `Write the brief` strip above already answers, and it is answered the
+        same way rather than a second way.
+      */}
+      <div className={`flex items-center gap-2
+                       ${page
+                         ? `sticky bottom-0 -mx-4 mt-4 px-4 py-3 bg-ink-900 border-t border-rule
+                            ${blocked || err ? '' : '-mb-4'}`
+                         : 'mt-4'}`}>
         {/*
           A button, and it is now correct that it is one.
 

@@ -232,10 +232,25 @@ export function CardDetail({
           )}
         </div>
         {/* One line, and `why` appears on it exactly once. It used to be here and
-            again as the last row of the fact table below. */}
-        <p className="mt-2 flex items-center gap-2 text-sm text-fg-dim">
-          <KindGlyph kind={kind} size={14} />
-          <span className="truncate">{[card.why, card.who, ago(card.ts)].filter(Boolean).join(' · ')}</span>
+            again as the last row of the fact table below.
+
+            Two lines' worth of room, because at 390px it is not one line. This
+            is `why · who · when` — the sentence that says what this card is
+            doing on the desk — and `truncate` gave it 320px on a phone: `a
+            colleague replied in a thread you are in · Sidharth …`. The one
+            place it also appears is the `Why` row of the facts below, which was
+            eliding the same sentence at the same width, so the answer to "why
+            am I looking at this" was cut in both of the two places it is
+            written. `items-start` because a glyph centred against a two-line
+            block sits in the gutter between them. */}
+        <p className="mt-2 flex items-start gap-2 text-sm text-fg-dim">
+          {/* Wrapped rather than given a class of its own: `KindGlyph` takes a
+              kind and a size and nothing else, and the Kind column, the source
+              tabs and this line all want it to keep meaning exactly that. */}
+          <span className="shrink-0 mt-0.5"><KindGlyph kind={kind} size={14} /></span>
+          <span className="line-clamp-2 leading-snug">
+            {[card.why, card.who, ago(card.ts)].filter(Boolean).join(' · ')}
+          </span>
         </p>
       </div>
 
@@ -364,12 +379,7 @@ export function CardDetail({
             </p>
             {/* Three lines, then a way to see the rest. `line-clamp-6` with no
                 expand made a silent clip read as the whole thing. */}
-            {excerpt.length > 160 && (
-              <button onClick={() => setExpanded(v => !v)}
-                className="mt-1 text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
-                {expanded ? 'Less' : 'Show all'}
-              </button>
-            )}
+            {excerpt.length > CLIPPED && <ShowAll open={expanded} onToggle={() => setExpanded(v => !v)} />}
           </div>
         )}
 
@@ -420,9 +430,23 @@ export function CardDetail({
         Four buttons, two columns on a narrow pane so four labels cannot overflow
         320px, one row wherever they fit. `Done` is the only primary: it is the
         only one of the four that commits anything.
+
+        Two columns on a phone as well, and that was measured rather than
+        assumed: at 390px the four at their natural widths — 82, 92, 75, 83, with
+        three 8px gaps — come to 357.0px against the 358px the page has. One
+        pixel is not a layout, it is a coincidence waiting for a longer label or
+        a different font metric.
+
+        **`gap-y-3`, and the four pixels matter.** `.hit` gives each of these a
+        44px touch box centred on 32px of ink, so every button's collar reaches
+        6px above and below itself; two rows 8px apart overlap by 4px, and in
+        that band the last one painted takes the tap. The one below is `Done`,
+        which settles the card and closes the pane. 12px is exactly two collars
+        touching and never overlapping — the same arithmetic the `Open in
+        browser` link below already spends `mt-6` on.
       */}
       <div className="shrink-0 border-t border-rule pad-x py-3">
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+        <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:flex sm:items-center sm:gap-2">
           {external && (
             <a
               href={app ?? href}
@@ -435,8 +459,24 @@ export function CardDetail({
               Open <ArrowUpRight size={14} />
             </a>
           )}
+          {/*
+            It does not close the card first, and that one removed line is the
+            whole of "Back puts him back where he was".
+
+            The composer opens *over* this — a modal on a laptop, a full page on
+            a phone — so closing the card underneath bought nothing visible and
+            cost the way back: on a phone `onClose` is `closeDetail`, which
+            unwinds the pushed `#card/<key>` entry, so pressing Back out of the
+            composer landed him on the desk with the card he had been reading
+            gone and his place in the list forgotten. It was worse than that on
+            the phone page: `closeDetail` runs `history.back()`, the composer
+            pushes its own entry in the same tick, and the deferred traversal
+            resolved against the pre-push index — so the composer opened and
+            closed itself in one press.
+
+            The card stays open behind. Back uncovers it, unscrolled.
+          */}
           <Button size="md" variant="secondary" onClick={() => {
-            onClose()
             openLaunch(cardContext(card), {
               templates: templatesFor(card),
               repoHint: repoHintFor(card),
@@ -481,6 +521,45 @@ export function CardDetail({
   )
 }
 
+/* ------------------------------- disclosure ------------------------------- */
+
+/**
+ * How long a piece of text has to be before three lines are demonstrably not
+ * all of it. One number for the excerpt and for the thread, because it is the
+ * same judgement about the same kind of text.
+ */
+const CLIPPED = 160
+
+/**
+ * "There is more of this than you can see" — the only disclosure this pane has,
+ * and now it is one control rather than two that had drifted into being the
+ * same one written twice.
+ *
+ * It has a real 44px height rather than an 18px line wearing `.hit`. That class
+ * draws its collar *outside* the control, and this one sits directly under a
+ * list — the thread, or a clipped excerpt — where a collar reaching 13px up
+ * would take taps that land on the last line of the text it is about. The rule
+ * `styles.css` states for menu rows applies unchanged: a control that already
+ * spans a readable width has no reason to fake its height, so it just has one.
+ *
+ * `-ml-2` puts the words back on the single left edge everything else in this
+ * pane starts on, which its own padding would otherwise move them off — the
+ * same correction `Open in browser` makes for the same reason.
+ */
+function ShowAll({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-expanded={open}
+      className="mt-1 -ml-2 px-2 inline-flex items-center min-h-11 rounded-control
+                 text-sm text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                 transition-colors duration-100"
+    >
+      {open ? 'Less' : 'Show all'}
+    </button>
+  )
+}
+
 /* -------------------------------- thread ---------------------------------- */
 
 /**
@@ -490,7 +569,8 @@ export function CardDetail({
  * under the question, and after a scroll the new material is where the eye
  * already is. Every body clips to three lines — the pane is 320–720px wide and
  * one Cursor root-cause post is 1,400 characters, so an unclipped list is a
- * single message and a scrollbar.
+ * single message and a scrollbar — and one `Show all` under the list opens
+ * every clipped one at once.
  *
  * Two marks, and no more. A reply that names him carries a 2px amber rule and
  * the word `@you`, which is the answer to "why did this row light up". A reply
@@ -501,8 +581,30 @@ export function CardDetail({
 function Thread({
   card, lines, baseline, partial,
 }: { card: Card; lines: ThreadLine[]; baseline: number; partial: boolean }) {
+  /*
+   * One disclosure for the whole list, not one per message.
+   *
+   * Every body clips to three lines, which is right — at 358px on a phone that
+   * is about 145 characters, and one Cursor root-cause post is 1,400. What was
+   * missing was any way to see the rest: a silent clip reads as the whole
+   * message, which is exactly the argument the excerpt directly below this
+   * already won for itself with a `Show all`.
+   *
+   * It is one control because the alternative is twenty. A thread has up to
+   * twenty replies and a per-message toggle would put a control under most of
+   * them, on the narrowest surface in the product, to answer a question the
+   * reader asks about the thread rather than about a message — "let me actually
+   * read this". The same words and the same treatment as the excerpt's, twenty
+   * lines further down, so the two do not read as two features.
+   */
+  const [full, setFull] = useState(false)
+  // Closed again on every card, the same way the excerpt and the due picker are:
+  // "I opened the last one out" is not a standing preference.
+  useEffect(() => { setFull(false) }, [card.group_key])
+
   if (!lines.length) return null
   const total = replyTotal(card)
+  const clipped = lines.some(l => l.text.length > CLIPPED)
 
   return (
     <section className="mt-6">
@@ -513,14 +615,15 @@ function Thread({
       </div>
       <ol>
         {lines.map(l => (
-          <ThreadRow key={l.key} line={l} fresh={isFreshLine(l, baseline)} />
+          <ThreadRow key={l.key} line={l} fresh={isFreshLine(l, baseline)} full={full} />
         ))}
       </ol>
+      {clipped && <ShowAll open={full} onToggle={() => setFull(v => !v)} />}
     </section>
   )
 }
 
-function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
+function ThreadRow({ line, fresh, full }: { line: ThreadLine; fresh: boolean; full: boolean }) {
   return (
     <li
       className={`py-2 border-b border-rule last:border-0
@@ -534,8 +637,12 @@ function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
       {/* `text-sm`, not the pane's body size, and not `DETAIL_BODY` — which
           carries a colour of its own that would fight the one below it. A body
           size is right for one excerpt and wrong for a list of twenty messages
-          in a 400px column. */}
-      <p className={`text-sm whitespace-pre-wrap line-clamp-3
+          in a 400px column.
+
+          `break-words`, because a Slack message is frequently a pasted URL and
+          a 200-character token with nowhere to break is the one thing that can
+          make this column wider than the screen. */}
+      <p className={`text-sm whitespace-pre-wrap break-words ${full ? '' : 'line-clamp-3'}
                      ${fresh ? 'text-fg-dim' : 'text-fg-mute'}`}>
         {line.text}
       </p>
@@ -553,12 +660,26 @@ function ThreadRow({ line, fresh }: { line: ThreadLine; fresh: boolean }) {
  * absent 20px glyph pulled the Priority control 20px left of the Status control
  * directly above it. Four controls on four verticals in a 360px pane is what
  * this whole file spent its last rewrite removing.
+ *
+ * **The chrome is narrower on a phone.** 96px of label, 20px of mark and two
+ * 12px gaps is 140px spent before the value starts — for words that are never
+ * longer than `Repository` (70px at this size) and are usually `Why` or `Who`.
+ * At 390px that left 218px for the value, which is where every elided fact on
+ * this pane was coming from. 80 and two 8px gaps is 116, and the value gets 242.
+ * The laptop keeps the wider column: there the value has room either way, and a
+ * label column that breathes is what makes a fact grid read as a grid.
+ *
+ * **`min-h-11`, not `h-11`.** The row is still 44px whenever its content is a
+ * control, which is every control this pane has. What changed is that a fact
+ * whose value is a *sentence* is now allowed to be two lines instead of one
+ * elided one — see `Facts` — and a fixed height would have clipped the second
+ * line rather than made room for it.
  */
 const Row = ({
   label, mark, children,
 }: { label: string; mark?: React.ReactNode; children: React.ReactNode }) => (
-  <div className="flex items-center gap-3 h-11 border-t border-rule first:border-t-0">
-    <span className="w-24 shrink-0 text-sm text-fg-mute">{label}</span>
+  <div className="flex items-center gap-2 sm:gap-3 min-h-11 py-1 border-t border-rule first:border-t-0">
+    <span className="w-20 sm:w-24 shrink-0 text-sm text-fg-mute">{label}</span>
     <span className="w-5 shrink-0 flex items-center">{mark}</span>
     <span className="min-w-0 grow">{children}</span>
   </div>
@@ -688,11 +809,22 @@ function Facts({ card, author }: {
   // The same `Row` the controls above use, so a fact and a control that mean
   // the same thing about the same card start on the same x. It was a table with
   // its own label width, which put the two columns 28px apart.
+  //
+  // Two kinds of value, and the difference is whether it is prose. A string
+  // here is a sentence a person wrote or a phrase Wake wrote — `you were
+  // mentioned in a thread you are in`, `ready for review`, `on a list` — and
+  // eliding a sentence at 242px loses the half that carries it. An element is a
+  // formatted value: `<Mono>` around a path, a channel, an alert id, a PR
+  // number, none of which reads any better broken across two lines and all of
+  // which a reader is scanning rather than reading. So prose wraps to two lines
+  // and a formatted value keeps the single elided one it has always had.
   return (
     <div className="mt-6 border-b border-rule">
       {rows.map(([k, v]) => (
         <Row key={k} label={k}>
-          <span className="block text-sm text-fg-dim truncate">{v}</span>
+          {typeof v === 'string'
+            ? <span className="block text-sm text-fg-dim line-clamp-2 leading-snug">{v}</span>
+            : <span className="block text-sm text-fg-dim truncate">{v}</span>}
         </Row>
       ))}
     </div>

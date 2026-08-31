@@ -21,6 +21,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   bucketHits, buildThreadCard, parentTs, parseSlackResults, parseThreadRead, plain,
 } from '../src/server/sources/slack'
+import { isDmChannel } from '../src/shared/slackThread'
 import { PartialPoll, settle, type RawCard } from '../src/server/sources/types'
 import { ME_ID, SEARCH_ONE_THREAD, SEARCH_ORPHAN_REPLY, SEARCH_WITH_DM, THREAD_READ } from './fixtures/slack'
 
@@ -154,13 +155,19 @@ describe('the desk does not hand him back what he just said', () => {
 describe('a direct message can never reach the desk', () => {
   test('a DM-shaped hit never becomes a bucket', () => {
     const hits = parseSlackResults(SEARCH_WITH_DM)
-    expect(hits).toHaveLength(3)
+    expect(hits).toHaveLength(4)
 
     const buckets = bucketHits(hits, ME_ID)
-    // The `#dm-tools` channel survives, and it is the reason the rule is two
-    // tells rather than a name test: a public channel whose name merely starts
-    // with `dm` is a channel.
-    expect([...buckets.keys()]).toEqual(['C0DMTOOLS1:1787811201.222222'])
+    // Only the channel on the desk's list survives. The two `D…` conversations
+    // are refused as direct messages and `#dm-tools` is refused as a channel
+    // nobody works in — two rules, and the fourth row is here so that "nothing
+    // came through" cannot pass for "the DM rule held".
+    expect([...buckets.keys()]).toEqual(['C07351C8Z8E:1787811801.333333'])
+
+    // And `#dm-tools` is still the reason the DM rule is two tells rather than a
+    // name test: a public channel whose name merely starts with `dm` is a
+    // channel, and it left on the other rule entirely.
+    expect(isDmChannel('C0DMTOOLS1')).toBe(false)
   })
 })
 

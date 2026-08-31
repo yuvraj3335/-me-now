@@ -48,7 +48,19 @@ export function Mic({
           }
           listening ? stop() : start()
         }}
-        className={`p-1.5 rounded-control transition-colors ${
+        /*
+         * `hit relative` because 26px of ink is not a touch target.
+         *
+         * `p-1.5` around a 14px glyph paints 26×26, which is right for the ink
+         * and 18px short of the platform minimum. `.hit` grows the *target* to
+         * 44px on a coarse pointer without moving the painted box — see the
+         * note over it in `styles.css` — and it needs `position: relative` on
+         * the host or the collar is laid out against the nearest positioned
+         * ancestor, which is the failure that gave three controls a page-sized
+         * tap area. This is every `Mic` in the product: the instruction field,
+         * the brief, and the task composer.
+         */
+        className={`hit relative p-1.5 rounded-control transition-colors ${
           listening ? 'text-accent-ink bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-ink-800' : 'text-fg-mute/50'
         }`}
       >

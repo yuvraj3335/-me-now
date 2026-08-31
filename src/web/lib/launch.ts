@@ -316,6 +316,65 @@ type Basket = {
    */
   session: string | null
   permissionMode: PermissionMode
+  /**
+   * What this composer was opened *about* — see `subjectOf`.
+   *
+   * It exists so that leaving the composer and coming back to the same card can
+   * be told apart from leaving it and opening a different one. The first is one
+   * piece of work interrupted; the second is a new brief, and only the second
+   * may inherit nothing.
+   */
+  subject: string
+  /**
+   * The half-written brief, which survives leaving the room.
+   *
+   * On a laptop the composer is a modal and the way out of it is a deliberate
+   * Escape or X. On a phone it is a page, and the way out of a page is Back —
+   * a navigation, pressed to go and look at something, not a decision to throw
+   * the brief away. So nothing about the brief is destroyed by leaving; it is
+   * destroyed by committing it, or by opening a different one.
+   */
+  draft: Draft
+}
+
+/**
+ * Everything the composer holds that is not already a field of the basket.
+ *
+ * `templates`, `session` and `permissionMode` are basket fields because the
+ * *opener* supplies them; these four are what he then does inside the composer,
+ * and they used to live in `useState` inside a component that unmounts the
+ * moment the surface closes. `null` means "nothing has been decided here yet",
+ * which is a different answer from an empty list — a template list he has
+ * emptied on purpose must not fall back to the opener's suggestion.
+ */
+export type Draft = {
+  templates: string[] | null
+  cwd: string | null
+  skills: string[] | null
+  instruction: string
+  /** The written brief and the pack it belongs to, once `Write the brief` ran. */
+  brief: { packId: string; text: string } | null
+}
+
+const NO_DRAFT = (): Draft =>
+  ({ templates: null, cwd: null, skills: null, instruction: '', brief: null })
+
+/**
+ * The signature of the brief a composer was opened for.
+ *
+ * The objects it was handed, the templates suggested with them, and the
+ * repository hint that came along — in a stable order, so the same card opened
+ * twice produces the same string and two different cards cannot. It is
+ * deliberately not the card's title or its own key: the composer is opened from
+ * a card, a mail thread, a task and the palette, and what all four have in
+ * common is the object list.
+ */
+function subjectOf(items: PackItem[], templates: string[], repoHint: string | null): string {
+  return JSON.stringify([
+    items.map(i => `${i.kind}:${i.ref}`).sort(),
+    [...templates].sort(),
+    repoHint ?? '',
+  ])
 }
 
 /**
@@ -339,13 +398,28 @@ const storedMode = (): PermissionMode => {
 
 let basket: Basket = {
   open: false, items: [], templates: [], repoHint: null, title: null,
-  session: null, permissionMode: storedMode(),
+  session: null, permissionMode: storedMode(), subject: '', draft: NO_DRAFT(),
 }
 const listeners = new Set<() => void>()
 const set = (p: Partial<Basket>) => {
   basket = { ...basket, ...p }
   listeners.forEach(l => l())
 }
+
+/**
+ * Write into the draft without waking anything up.
+ *
+ * Every keystroke in the instruction field and every keystroke in the brief
+ * lands here. Nothing renders *from* the draft — it is read once, when the
+ * composer mounts, to seed the fields — so notifying the store on each one would
+ * re-render the whole surface for a value nobody is watching. The object is
+ * mutated in place, which `set`'s own spread carries by reference, so a later
+ * `set` cannot silently drop what was typed a moment ago.
+ */
+export const rememberLaunch = (p: Partial<Draft>) => { Object.assign(basket.draft, p) }
+
+/** The draft as it stands. Read at mount; see `rememberLaunch`. */
+export const launchDraft = (): Readonly<Draft> => basket.draft
 
 /**
  * The basket as it stands, without a component.
@@ -367,7 +441,23 @@ export function useLaunchBasket() {
   )
 }
 
-/** Add objects and open the sheet. Duplicate refs collapse rather than stack. */
+/**
+ * Add objects and open the composer. Duplicate refs collapse rather than stack.
+ *
+ * **A fresh open of a different brief starts clean, and that check belongs
+ * here.** It used to be enforced at the other end: every dismissal emptied the
+ * basket, because "open one card's brief, press Escape, open a different card"
+ * showed the second card the first one's four objects. But the bug in that
+ * sentence is the *third* clause, not the second — what leaked was one brief's
+ * objects into another brief, and the moment that becomes visible is the open.
+ * Deciding it here is what makes it safe for leaving to preserve everything:
+ * come back to the same card and the composer is where you left it; go to a
+ * different one and it is empty, which is the property the old rule was
+ * protecting all along.
+ *
+ * While it is already open this stays purely additive — the Slack reply picker
+ * and the session picker both attach through it, and neither is a new brief.
+ */
 export function openLaunch(
   items: PackItem[],
   opts: {
@@ -375,17 +465,39 @@ export function openLaunch(
     title?: string | null; session?: string | null
   } = {},
 ) {
+  /*
+   * The subject is built from what this call *asks for*, never from what is
+   * left in the basket.
+   *
+   * `templates` below falls back to `basket.templates`, which is right for an
+   * attach from inside an open composer and is a leak in the one place the
+   * subject is decided: a fresh open with no template of its own would compute
+   * its signature from the *previous* brief's templates, and then write them
+   * back over the clear that had just removed them. Two calls that ask for the
+   * same thing have to produce the same string whatever the basket happens to
+   * hold, which is exactly what makes "the same card resumes" true.
+   */
+  const asked = opts.templates ?? (opts.template ? [opts.template] : [])
+  const subject = subjectOf(items, asked, opts.repoHint ?? null)
+  if (!basket.open && subject !== basket.subject) clearLaunch()
+
   const seen = new Set(basket.items.map(i => `${i.kind}:${i.ref}`))
   const merged = [...basket.items, ...items.filter(i => !seen.has(`${i.kind}:${i.ref}`))]
-  const templates = opts.templates ?? (opts.template ? [opts.template] : basket.templates)
   set({
     open: true,
     items: merged,
-    templates,
+    // Read after the clear, deliberately: a fresh open of a different brief has
+    // nothing to fall back to, which is the point.
+    templates: opts.templates ?? (opts.template ? [opts.template] : basket.templates),
     repoHint: opts.repoHint ?? basket.repoHint,
     title: opts.title ?? basket.title,
     session: opts.session ?? basket.session,
+    // Only a fresh open names the subject. An attach from inside the composer
+    // adds an object to the brief he is already writing; it does not make it a
+    // different brief.
+    ...(basket.open ? {} : { subject }),
   })
+  markLaunchHistory()
 }
 
 /** Which session the brief is about. `null` is `A new conversation`. */
@@ -398,23 +510,117 @@ export function setLaunchPermissionMode(mode: PermissionMode) {
 export const removeFromLaunch = (ref: string) => set({ items: basket.items.filter(i => i.ref !== ref) })
 
 /**
- * Every dismissal empties the basket.
+ * Leaving the composer, which is not the same as throwing the brief away.
  *
- * `closeLaunch` used to set `{ open: false }` and nothing else, while
- * `resetLaunch` — the one that actually clears it — was called from exactly one
- * place: the final anchor's onClick. So the basket emptied only on the success
- * path. Open one card's brief, press Escape, open a different card, and the
- * sheet read `CONTEXT — 4 OBJECTS`, three of them from the card he walked away
- * from — and `repoHint` was sticky too, so an abandoned card's repository could
- * silently become the next brief's working directory.
+ * This used to be `resetLaunch` outright: every dismissal emptied the basket,
+ * because the alternative at the time was a `{ open: false }` that let one
+ * card's objects turn up under the next card's heading. That fix worked and it
+ * was aimed one step too late — see `openLaunch`, which now refuses the leak at
+ * the point it would become visible.
+ *
+ * What it cost is the thing a phone cannot afford. On a phone the composer is a
+ * page and the way out of a page is Back; on either device the reason to leave
+ * mid-brief is almost always to go and *read* something — the thread on the card
+ * underneath, the repository he half-remembers. Emptying on the way out means
+ * that trip costs him everything he had typed, with no warning and no undo, on
+ * the one surface in the product whose content is written by hand.
+ *
+ * So leaving keeps all of it: the objects, the templates, the repository, the
+ * skills, the instruction and the brief itself. Coming back to the same card
+ * resumes; opening a different one starts clean; committing clears. There is no
+ * "are you sure" anywhere in that, because nothing is being destroyed.
  */
-export const closeLaunch = () => resetLaunch()
+export const closeLaunch = () => {
+  set({ open: false })
+  unmarkLaunchHistory()
+}
 
-/** Empty it. A brief handed over should not leave its objects in the basket. */
-export const resetLaunch = () =>
-  // `permissionMode` deliberately survives — it is a standing preference, not
-  // something this brief chose. Everything that belongs to one hand-off goes.
-  set({ open: false, items: [], templates: [], repoHint: null, title: null, session: null })
+/**
+ * Empty it. A brief handed over should not leave its objects in the basket.
+ *
+ * This is the commit path — the session has started and the page has moved to
+ * the terminal — so it takes the draft with it. Leaving is `closeLaunch`.
+ */
+export const resetLaunch = () => {
+  clearLaunch()
+  unmarkLaunchHistory()
+}
+
+/**
+ * The basket with one hand-off's worth of state taken out of it.
+ *
+ * `permissionMode` deliberately survives — it is a standing preference, not
+ * something this brief chose. Everything else that belongs to one brief goes,
+ * including the draft and the subject that says which brief it was.
+ */
+const clearLaunch = () =>
+  set({
+    open: false, items: [], templates: [], repoHint: null, title: null,
+    session: null, subject: '', draft: NO_DRAFT(),
+  })
+
+/* ------------------------ the phone's own Back button --------------------- */
+
+/**
+ * The width below which the composer is a page rather than a modal.
+ *
+ * The same 640 the rest of the product calls a phone: it is where the shell
+ * swaps its left rail for a bottom tab bar, where `--nav-h` grows to 53px, and
+ * where every `sm:` in the composer's own layout flips. One number, stated in
+ * four places that all have to agree, so it is written here as the query the
+ * stylesheet already runs.
+ */
+export const PHONE_COMPOSER = '(max-width: 639.98px)'
+export const composerIsAPage = () =>
+  typeof window !== 'undefined' && !!window.matchMedia?.(PHONE_COMPOSER).matches
+
+/**
+ * A history entry the OS Back button can land on, and nothing else.
+ *
+ * A page whose Back button does not work is not a page. The composer has an
+ * on-screen back control — that is the one a reader presses — but on a phone the
+ * gesture that means "out of here" is an edge swipe, and without this it would
+ * pop the *card detail underneath* while the composer stayed up: the surface he
+ * is looking at would not change and the one behind it would silently close.
+ *
+ * The entry carries no URL of its own. `pushState` is given `location.href`
+ * unchanged, so nothing about the address bar moves, `route.ts` sees no change
+ * and notifies nobody, and the composer stays what it is — a surface, not a
+ * destination. A real route would be better and would belong in `route.ts`; this
+ * is the version that does not reach into a file this change does not own.
+ *
+ * Only on a phone. On a laptop the composer is a modal with an X and an Escape,
+ * and a modal that also eats the browser's Back button is a modal that has
+ * started making navigation decisions.
+ *
+ * The marker is checked before every unwind rather than remembered in a
+ * variable, so the two ways this can go wrong are both safe: something else
+ * pushed on top of us (a commit navigating to `/terminal/<id>`) and the stale
+ * entry is simply left in the stack, or the push never happened and there is
+ * nothing to pop.
+ */
+let watchingBack = false
+
+function onLaunchPop() {
+  // Our entry has just been popped. Suspend, keeping everything — Back is a way
+  // out of the room, not a decision about the brief. See `closeLaunch`.
+  if (basket.open && !window.history.state?.wakeLaunch) set({ open: false })
+}
+
+function markLaunchHistory() {
+  if (!composerIsAPage()) return
+  if (window.history.state?.wakeLaunch) return
+  window.history.pushState({ wakeLaunch: true }, '', window.location.href)
+  if (!watchingBack) {
+    window.addEventListener('popstate', onLaunchPop)
+    watchingBack = true
+  }
+}
+
+function unmarkLaunchHistory() {
+  if (typeof window === 'undefined') return
+  if (window.history.state?.wakeLaunch) window.history.back()
+}
 
 /**
  * A task, as objects a brief can carry.

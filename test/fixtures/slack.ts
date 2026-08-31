@@ -113,11 +113,21 @@ Text:
 
 `
 
-/** A direct message and a group message, as each search spells them. */
+/**
+ * A direct message and a group message, as each search spells them, plus the two
+ * public channels that tell the two refusals apart.
+ *
+ * `#dm-tools` is a channel whose *name* begins `dm` and whose id does not — it
+ * is what proves the direct-message rule reads the id rather than the name. It
+ * is also not on `SLACK_CHANNELS`, so it is refused a second time and for a
+ * different reason, which is why `#crisp-chats` is here: something on the list
+ * has to survive, or a test that everything was dropped would pass for the
+ * wrong reason.
+ */
 export const SEARCH_WITH_DM = `# Search Results for: <@U09617LRRDF> after:2026-08-16
 
-## Messages (3 results)
-### Result 1 of 3
+## Messages (4 results)
+### Result 1 of 4
 Channel: DM (ID: D0BT1ED811Q)
 Participants: Ramesh Sutaliya (ID: U09038ZHE3H), Yuvraj Muley (ID: U09617LRRDF)
 From: Ramesh Sutaliya <ramesh.sutaliya@spendflo.com> (ID: U09038ZHE3H)
@@ -129,7 +139,7 @@ Hi Yuvraj, can you check with <@U08HCR8KXQB|Varad> and provide the details.
 
 ---
 
-### Result 2 of 3
+### Result 2 of 4
 Channel: MPIM (ID: D0BQQQQ1111)
 From: Sunny Siu <sunny@truto.one> (ID: U061JB3L41W)
 Time: 2026-08-27 11:33:21 IST
@@ -140,7 +150,7 @@ Text:
 
 ---
 
-### Result 3 of 3
+### Result 3 of 4
 Channel: #dm-tools (ID: C0DMTOOLS1)
 From: Nidhi <nidhi@truto.one> (ID: U0BBZV4HQHH)
 Time: 2026-08-27 11:43:21 IST
@@ -148,6 +158,17 @@ Message_ts: 1787811201.222222
 Permalink: [link](https://truto.slack.com/archives/C0DMTOOLS1/p1787811201222222)
 Text:
 <@U09617LRRDF> the channel whose name merely starts with dm
+
+---
+
+### Result 4 of 4
+Channel: #crisp-chats (ID: C07351C8Z8E)
+From: Nidhi <nidhi@truto.one> (ID: U0BBZV4HQHH)
+Time: 2026-08-27 11:53:21 IST
+Message_ts: 1787811801.333333
+Permalink: [link](https://truto.slack.com/archives/C07351C8Z8E/p1787811801333333)
+Text:
+<@U09617LRRDF> a channel that is actually on the list
 
 ---
 

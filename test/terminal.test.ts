@@ -220,6 +220,36 @@ describe('only what Wake already knows can be started', () => {
     }
   })
 
+  test('the workspace root is not a repository, and no session starts there', () => {
+    /*
+     * Found on the deployed site, and it is what "Open in Claude is broken"
+     * turned out to be: a live session at `cwd: /home/yuvraj/work`, `repo:
+     * null`. Pressing Open from a session row whose own `cwd` the registry did
+     * not know fell back to "not about one repository", and the fallback was
+     * taken literally — Claude Code started in the drawer that contains all
+     * eleven checkouts and is itself none of them.
+     *
+     * `resolveCwd` still answers the root for a *brief*, because "not about one
+     * repository" is a true thing to say about a mail thread and a Slack
+     * question. Only the thing that spawns a process insists on somewhere real.
+     */
+    const atRoot = resolveSessionCwd(WORKSPACE_ROOT)
+    expect(atRoot.ok, 'a session recorded at the workspace root still resolves').toBe(false)
+    if (!atRoot.ok) expect(atRoot.error).toContain('not a repository')
+
+    // And the same refusal on the way in, for a new conversation that named no
+    // repository at all — which is the path the reported session actually took.
+    for (const cwd of [undefined, null, '', WORKSPACE_ROOT]) {
+      const r = openTerminal({ cwd } as Parameters<typeof openTerminal>[0])
+      expect('error' in r, `a session started with cwd ${JSON.stringify(cwd)}`).toBe(true)
+      if ('error' in r) {
+        expect(r.status).toBe(400)
+        expect(r.error, 'the refusal does not say what to do about it')
+          .toContain('Pick a repository')
+      }
+    }
+  })
+
   test('a recorded path cannot climb out of the workspace with ..', () => {
     const r = resolveSessionCwd(`${WORKSPACE_ROOT}/../../../etc`)
     expect(r.ok).toBe(false)

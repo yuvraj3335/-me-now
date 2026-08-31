@@ -190,12 +190,13 @@ describe('every entry can be opened where it lives', () => {
 
 describe('a direct message cannot get here', () => {
   test('the refusal is at ingest, and again on the way out', () => {
-    // Where it lives: `bucketHits` in `sources/slack.ts`. Two of the three
+    // Where it lives: `bucketHits` in `sources/slack.ts`. Two of the four
     // captured hits are a DM and a group DM, and neither becomes a bucket — so
     // neither can become a card, so this route reads from a store that has
-    // never contained one.
+    // never contained one. The one survivor is the channel on the desk's list;
+    // `#dm-tools` leaves on the channel rule rather than the DM one.
     const buckets = bucketHits(parseSlackResults(SEARCH_WITH_DM), ME_ID)
-    expect([...buckets.keys()]).toEqual(['C0DMTOOLS1:1787811201.222222'])
+    expect([...buckets.keys()]).toEqual(['C07351C8Z8E:1787811801.333333'])
   })
 
   test('and a stored card that somehow named one is still not served', async () => {

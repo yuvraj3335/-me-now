@@ -6,12 +6,23 @@
  *
  * Read-only: only search_threads / get_thread are ever called, and the client's
  * write-tool denylist blocks the rest regardless.
+ *
+ * Two searches per inbox, and neither of their queries lives in this file. The
+ * first is the narrow one — what Gmail's own categories and his own filters say
+ * is worth a row — and the second exists because that narrowing has to be
+ * overrulable: a thread he has already answered is his, whatever Gmail decided
+ * about it. Both are assembled from settings in `env.ts`, which is also where
+ * the measurements that chose each clause are written down. This file decides
+ * what a thread *becomes*; it no longer decides which threads he is shown.
  */
 import { resolveToken } from '../mcp/creds'
-import { GMAIL_ACCOUNTS, ME, LOOKBACK_DAYS } from '../env'
+import {
+  GMAIL_ACCOUNTS, GMAIL_PAGE_SIZE, GMAIL_RESCUE_REPLIED, gmailCardQuery, gmailRepliedQuery, ME,
+} from '../env'
 import { extractRefs, subjectRef } from '../dedup'
 import { gmailThreadUrl, sessionFor } from '../mail/gmail'
 import { plainBody, plainText } from '../mail/sanitize'
+import { rescuedByReply } from '../mail/triage'
 import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
 
 // The session map lives in `mail/gmail.ts`. There used to be a byte-identical
@@ -95,22 +106,37 @@ export const gmail: SourceAdapter = {
       anyConnected = true
 
       const s = sessionFor(account)
-      // Unread mail addressed to me, excluding the automated noise that would
-      // otherwise dominate the Now pile.
-      const query = `is:unread newer_than:${LOOKBACK_DAYS}d -category:promotions -category:social`
 
-      let payload: any
-      try {
-        payload = await s.callJson('search_threads', { query, pageSize: 30 })
-        settled.push({ status: 'fulfilled', value: payload })
-      } catch (e) {
-        settled.push({ status: 'rejected', reason: e })
-        continue
+      /**
+       * One search, recorded whichever way it goes.
+       *
+       * Two queries now run per inbox and both belong in `settled`: a poll that
+       * asked twice and was refused once has half an answer, and the sweep that
+       * marks cards gone is entitled to know that before it decides a thread has
+       * disappeared. `null` rather than `[]` for the same reason the account
+       * loop keeps `anyConnected` — a query that failed is not a query that
+       * found nothing.
+       */
+      const ask = async (query: string): Promise<GmailThread[] | null> => {
+        try {
+          const payload = await s.callJson('search_threads', { query, pageSize: GMAIL_PAGE_SIZE })
+          settled.push({ status: 'fulfilled', value: payload })
+          return threadsFrom(payload)
+        } catch (e) {
+          settled.push({ status: 'rejected', reason: e })
+          return null
+        }
       }
 
-      for (const th of threadsFrom(payload)) {
+      // Thread ids this inbox has already produced a row for. The two queries
+      // overlap by design — a thread he answered that is also unread and in the
+      // inbox satisfies both — and the desk wants one card for one conversation.
+      const carded = new Set<string>()
+
+      const build = (th: GmailThread, rescued: boolean) => {
         const id = th.threadId ?? th.id
-        if (!id) continue
+        if (!id || carded.has(id)) return
+        carded.add(id)
 
         const msgs = th.messages ?? []
         const last = msgs[msgs.length - 1]
@@ -168,7 +194,13 @@ export const gmail: SourceAdapter = {
           account,
           kind: 'email',
           title: subject,
-          why: direct ? 'addressed to you, unread' : 'unread in your inbox',
+          // A rescued row is on the desk for a different reason from the rest and
+          // says so. It reached the card query's exclusions and was let through
+          // anyway, because he had already answered it — and a row that survived
+          // a filter should be able to explain that to the person reading it.
+          why: rescued
+            ? 'you replied — this thread has moved since'
+            : direct ? 'addressed to you, unread' : 'unread in your inbox',
           actor: nameOf(senderRaw),
           actor_id: addrOf(senderRaw),
           // The sender is a person. The display name when there is one, the
@@ -210,6 +242,44 @@ export const gmail: SourceAdapter = {
             }),
           },
         })
+      }
+
+      /*
+       * What Gmail already knows, asked once.
+       *
+       * The query is assembled in `env.ts` from settings rather than written
+       * here, because it is a judgement about somebody else's mail and the
+       * person whose mail it is has to be able to change it. See that file for
+       * what each clause was measured to remove.
+       */
+      const inbox = await ask(gmailCardQuery())
+      if (inbox) {
+        for (const th of inbox) build(th, false)
+
+        /*
+         * And the rule the narrowing is not allowed to overrule.
+         *
+         * A thread he has answered is a thread he is in, whatever Gmail decided
+         * about its category and whoever the sending address belongs to. It has
+         * to be a second search because Gmail matches per message even when it
+         * returns threads, so `is:unread from:me` wants one message that is both
+         * and answers zero — the two halves are asked separately and joined
+         * here, on thread id, by `carded`.
+         *
+         * Only when the first query answered. A second round trip against a
+         * credential that was just refused buys another copy of the same 401.
+         */
+        if (GMAIL_RESCUE_REPLIED) {
+          for (const th of (await ask(gmailRepliedQuery())) ?? []) {
+            // `from:me` is Gmail's claim, not a fact: an alias, a delegated
+            // mailbox or his address quoted inside a forward all satisfy it. And
+            // that query is deliberately not restricted to unread, so without
+            // this gate every conversation he has touched in a fortnight lands
+            // on the desk — the exact failure this whole change is undoing.
+            if (!rescuedByReply(th.messages ?? [], ME.emails)) continue
+            build(th, true)
+          }
+        }
       }
     }
     // Every configured address came back without a token: nothing was polled,

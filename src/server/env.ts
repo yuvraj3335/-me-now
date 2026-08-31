@@ -95,12 +95,122 @@ export type AlertChannel = {
  * over a year old, it is website-visitor marketing, and every read of it would
  * sit in `settle`'s denominator where a failure marks the whole Slack run
  * not-ok for nothing.
+ *
+ * `SLACK_CHANNELS` below does NOT apply to these three, and that is a decision
+ * rather than an oversight — so please do not "fix" it by folding them into one
+ * list. These are not searched, they are read as history, so there is no
+ * workspace-wide query here for an allowlist to narrow. They are also the whole
+ * route by which Sentry, Datadog and Grafana paging reaches the desk, and the
+ * standing instruction on this deployment is not to disconnect a source that
+ * works. Deleting them from the poll would silence every page; adding them to
+ * the searched list would ask a question that has already been measured
+ * answering nothing.
  */
 export const SLACK_ALERT_CHANNELS: AlertChannel[] = [
   { id: 'C0BERTMS9K4', name: 'sentry-alerts',        family: 'sentry'  },
   { id: 'C05UPHVT2CQ', name: 'truto-api-alerts',     family: 'datadog' },
   { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
 ]
+
+/**
+ * A channel the desk is allowed to carry work from.
+ *
+ * `name` carries no leading `#`, because Slack's own name for a channel does
+ * not either — the hash is rendering. `id` is optional, and the difference is
+ * where the fact came from: the list this deployment ships with was read off
+ * the workspace, and anything typed into the env var is a name and nothing more.
+ */
+export type SlackChannel = { name: string; id?: string }
+
+/** `#Truto `, `truto` and `TRUTO` are one channel. Slack stores names lower-case. */
+export const bareChannel = (s: string | null | undefined): string =>
+  (s ?? '').trim().replace(/^#+/, '').toLowerCase()
+
+/**
+ * The channels a mention is allowed to come from.
+ *
+ * The mention search is workspace-wide, and a workspace is much bigger than the
+ * work. Measured on this deployment on 2026-08-31: a fortnight of `<@me>`
+ * spends four of its twenty slots on `#github-updates`, `#pr-reviews` and a
+ * Slack list rendering as `#FC:F096Q3LBF7C:Sprint Tasks` — places the operator
+ * does not work, taking slots from the customer channels he does. Narrowing the
+ * same query to this list reached a further day back inside the same cap.
+ *
+ * Names first, because a name is what he gave and what he will edit. Ids
+ * beside them, because the name is also the half that moves: a renamed channel
+ * keeps its id, and `parseSlackResults` substitutes the id for the name when a
+ * payload carries no readable one — so a hit can arrive with a good id and a
+ * useless name, and never the other way round. `isAllowedSlackChannel` reads
+ * the id first for exactly that reason and falls back to the name.
+ *
+ * The ids were read off this workspace on 2026-08-31 with
+ * `slack_search_channels`; twelve of the eighteen channels are private, and
+ * both kinds answer to `in:#name` in a search. `WAKE_SLACK_CHANNELS` replaces
+ * the whole list with plain comma-separated names — a person can type names and
+ * cannot be expected to type ids, and a name match on its own is the behaviour
+ * this list had before it carried any.
+ */
+const DESK_CHANNELS: SlackChannel[] = [
+  { name: 'truto',               id: 'C04D9HKDWAV' },
+  { name: 'clonepartner',        id: 'C09BRBLNXNH' },
+  { name: 'sprinto',             id: 'C050LJAMFSN' },
+  { name: 'maximor-truto',       id: 'C0A8B267EE9' },
+  { name: 'spendflo-truto',      id: 'C05CJ0CUV35' },
+  { name: '15five-truto',        id: 'C0AHHQMF08L' },
+  { name: 'komplai-truto',       id: 'C0A437E7UAU' },
+  { name: 'evergrowth-truto',    id: 'C0A25L2QEB0' },
+  { name: 'thoropass-truto',     id: 'C05P80HPYSK' },
+  { name: 'open-truto',          id: 'C08SS821JHG' },
+  { name: 'stax-truto',          id: 'C09TKFVP6AY' },
+  { name: 'naq-truto',           id: 'C09REMSHL14' },
+  { name: 'docsbot-truto',       id: 'C093QFW4U3E' },
+  { name: 'truto-balkanid',      id: 'C07PMS3UYKB' },
+  { name: 'ex-superhawk-truto',  id: 'C0AACN2HYM7' },
+  { name: 'truto-zen',           id: 'C07AVEG7ZHN' },
+  { name: 'framer-clonepartner', id: 'C06UP5J326B' },
+  { name: 'crisp-chats',         id: 'C07351C8Z8E' },
+]
+
+const TYPED_CHANNELS: SlackChannel[] = str('WAKE_SLACK_CHANNELS')
+  .split(',').map(bareChannel).filter(Boolean).map(name => ({ name }))
+
+export const SLACK_CHANNELS: SlackChannel[] =
+  TYPED_CHANNELS.length ? TYPED_CHANNELS : DESK_CHANNELS
+
+/**
+ * Everything the desk carries: the list above, plus the three alert channels.
+ *
+ * The alert channels belong in the *answer* even though they are not in the
+ * searched list, and the reason is a real collision the poll already handles.
+ * Somebody replying `<@yuvraj> can you take this` under a Sentry post is the
+ * standard triage move; the mention search returns that reply, and
+ * `foldThreadIntoAlert` folds it into the alert row so the row can say who is
+ * waiting. Refusing `#sentry-alerts` here would leave every alert nobody's,
+ * which is the opposite of what the allowlist is for.
+ */
+const CARRIED: SlackChannel[] = [...SLACK_CHANNELS, ...SLACK_ALERT_CHANNELS]
+const CARRIED_NAMES = new Set(CARRIED.map(c => bareChannel(c.name)))
+const CARRIED_IDS = new Set(CARRIED.map(c => c.id).filter((v): v is string => !!v))
+
+/**
+ * May a message from this channel become a card?
+ *
+ * The id is asked first because it is the durable half — a channel that gets
+ * renamed keeps it, and a search hit whose `Channel:` line had no readable name
+ * arrives here with the id standing in for one. The name is the fallback, and
+ * it has to stay: an operator's `WAKE_SLACK_CHANNELS` carries names and no ids
+ * at all, so an id-only rule would refuse everything he configured.
+ *
+ * Both halves are `#`-insensitive and case-insensitive, because `meta.channel`
+ * on a stored card is a display name and has been spelled both ways.
+ */
+export function isAllowedSlackChannel(
+  name: string | null | undefined,
+  id?: string | null,
+): boolean {
+  if (id && CARRIED_IDS.has(id)) return true
+  return CARRIED_NAMES.has(bareChannel(name))
+}
 
 /**
  * How many threads one poll is allowed to read in full.
@@ -381,6 +491,145 @@ export const STT_KEY = str('WAKE_STT_KEY')
 /** How long a fetched thread stays usable before Mail refetches it. */
 export const MAIL_CACHE_TTL_MS = num('WAKE_MAIL_CACHE_TTL_MS', 5 * 60_000)
 export const MAIL_PAGE_SIZE = num('WAKE_MAIL_PAGE_SIZE', 25)
+
+/* -------------------------------------------------------------------------- */
+/* Gmail — what earns a card                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The poller's query, as settings rather than as a string inside the adapter.
+ *
+ * What was there read `is:unread newer_than:14d -category:promotions
+ * -category:social`, which is "every unread mail of the last fortnight" wearing
+ * a filter. Measured against this mailbox on 2026-08-31 it matched more than the
+ * fifty threads one page can hold, and the thirty the poller took were Cloudflare
+ * maintenance windows, LinkedIn nudges, Sentry digests, billing updates, a
+ * Notion trend mail and two weekly reports. Thirty of the desk's hundred-and-eight
+ * rows, and not one of them was a person writing to him.
+ *
+ * Three things came back from measuring that mailbox directly, and each one is a
+ * line below rather than a paragraph in a commit message:
+ *
+ *   The categories do the work. `eng@truto.one` and `integrations@truto.one` are
+ *   Google Groups, so their mail is `category:forums`, and the vendor and product
+ *   mail around it is `category:updates`. Excluding those two alongside
+ *   promotions and social took the same fortnight from 50+ threads to 26. The
+ *   old query excluded neither, which is why the desk looked like a mailing list.
+ *
+ *   `is:important` is not usable here, and this is the interesting one. It is
+ *   Gmail's own marker and it is supposed to be tuned by his behaviour, but on
+ *   this mailbox it matched 42 unread threads and what it liked was Zoho CRM
+ *   quota warnings, Mercury 2FA notices, an Anthropic receipt and eighteen
+ *   copies of "Security alert: new trusted device added to your Claude account".
+ *   Twenty-two of the 26 threads left after the category exclusions carry
+ *   IMPORTANT. Requiring it would have kept the noise and dropped the people, so
+ *   it is deliberately absent — see `GMAIL_EXCLUDE_SENDERS` for what replaced it.
+ *
+ *   `category:primary` is not the complement of the other four and must not be
+ *   used as one. With the tabbed inbox switched off it matched effectively
+ *   everything unread — the same 50 the bare query returned — while the negative
+ *   forms read the underlying `CATEGORY_` labels and narrow properly.
+ *
+ * All of it is a flag because a query is a judgement about somebody else's mail,
+ * and the person whose mail it is should be able to widen it at 7am without
+ * waiting for a deploy.
+ */
+
+/**
+ * A comma-separated setting that can be emptied.
+ *
+ * `str()` reads an empty value as absent and hands back the default, which is
+ * right for a URL and wrong for a list of exclusions: `WAKE_GMAIL_EXCLUDE_SENDERS=`
+ * in an env file is a person saying "stop excluding anything", and answering
+ * that with the default is the tool arguing with them. Widening has to be as
+ * available as narrowing or the settings below are decoration.
+ */
+const gmailList = (k: string, d: string): string[] =>
+  (process.env[k] ?? d).split(',').map(s => s.trim()).filter(Boolean)
+
+/** Gmail's own buckets for mail sent to a crowd. Cleared with an empty value. */
+export const GMAIL_EXCLUDE_CATEGORIES = gmailList(
+  'WAKE_GMAIL_EXCLUDE_CATEGORIES',
+  'promotions,social,updates,forums',
+).map(s => s.toLowerCase())
+
+/**
+ * Address conventions a machine announces itself with — not a list of senders.
+ *
+ * The distinction is the whole point. A blocklist of domains is a list somebody
+ * maintains forever and it is wrong the first morning a new noisy vendor appears;
+ * `noreply` is a promise the sender makes about itself, in the address, before
+ * anyone has heard of them. Gmail matches these as `from:` tokens, so
+ * `no-reply-EeEWwHBV22C0_3tdrmTqIQ@mail.anthropic.com` is caught by the same
+ * three words as `noreply@mailer.truto.one`, and a vendor onboarded next week is
+ * caught on their first send.
+ *
+ * Measured: adding these took the fortnight from 26 threads to 5.
+ *
+ * What it trades away is the automated mail that is genuinely urgent — a
+ * password reset, a failed payment. That is the honest cost, and it is bounded
+ * two ways: those senders reach him by other means, and the Mail page still
+ * lists the whole inbox untouched. Emptying this setting puts them all back.
+ */
+export const GMAIL_EXCLUDE_SENDERS = gmailList(
+  'WAKE_GMAIL_EXCLUDE_SENDERS',
+  'noreply,no-reply,donotreply',
+)
+
+/** Anything else, appended verbatim. The escape hatch for a query nobody predicted. */
+export const GMAIL_QUERY_EXTRA = str('WAKE_GMAIL_QUERY_EXTRA')
+
+/**
+ * Threads one poll may read, per query.
+ *
+ * Clamped rather than trusted: `gmailmcp.googleapis.com` answers
+ * `page_size must be greater than 0 and less than or equal to 50` and fails the
+ * whole request, which is a poll lost to a number somebody typed.
+ */
+export const GMAIL_PAGE_SIZE = Math.max(1, Math.min(num('WAKE_GMAIL_PAGE_SIZE', 30), 50))
+
+/**
+ * Whether a thread he has already answered is fetched on its own.
+ *
+ * It has to be a second query, and that is a fact about Gmail rather than a
+ * preference. Gmail evaluates a search per *message* even when it returns
+ * threads, so `is:unread from:me` asks for one message that is both unread and
+ * sent by him and answers zero — verified against this mailbox, where
+ * `from:me newer_than:365d` returns plenty and `is:unread ... from:me` returns
+ * nothing. The two halves cannot travel in one query, so they travel in two and
+ * are unioned by thread id in the adapter.
+ *
+ * On the day it was written this costs one round trip for zero rows: he had sent
+ * nothing from this address in a fortnight. It is on by default anyway, because
+ * the poll it matters for is the one after he finally replies to a customer.
+ */
+export const GMAIL_RESCUE_REPLIED = str('WAKE_GMAIL_RESCUE_REPLIED', '1') !== '0'
+
+/**
+ * The query that decides what becomes a card.
+ *
+ * `in:inbox` is load-bearing and was missing before. His own Gmail filters
+ * already archive the group mail he does not read, and without this the poller
+ * reached straight past them and put it on the desk anyway — a filter he wrote
+ * himself, overruled by a tool that is supposed to be working for him.
+ */
+export const gmailCardQuery = (days = LOOKBACK_DAYS): string =>
+  [
+    'is:unread',
+    'in:inbox',
+    `newer_than:${days}d`,
+    ...GMAIL_EXCLUDE_CATEGORIES.map(c => `-category:${c}`),
+    ...GMAIL_EXCLUDE_SENDERS.map(s => `-from:${s}`),
+    GMAIL_QUERY_EXTRA,
+  ].filter(Boolean).join(' ')
+
+/**
+ * Threads he has spoken in. Deliberately not `is:unread` — see
+ * `GMAIL_RESCUE_REPLIED` for why that combination cannot be asked — so the
+ * adapter keeps the ones carrying something unread and drops the rest.
+ */
+export const gmailRepliedQuery = (days = LOOKBACK_DAYS): string =>
+  `from:me newer_than:${days}d -in:trash -in:spam`
 
 /* -------------------------------------------------------------------------- */
 /* Safety                                                                     */
