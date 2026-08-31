@@ -1263,7 +1263,15 @@ Four processes, each because the one before it cannot do the job:
 
 * **tmux** owns the session's lifetime. This is what makes closing the tab
   harmless, what lets a laptop and a phone attach to one screen at once, and what
-  makes restarting Wake a non-event for work already running. Holding the process
+  makes restarting Wake a non-event for work already running — though only after
+  `deploy/wake.service` was corrected, because tmux daemonises into its parent's
+  cgroup and systemd's default `KillMode=control-group` therefore killed every
+  session on every restart. This paragraph claimed the property for a week
+  before it was true, and `wake-deploy.timer` restarts on every push, so the
+  cost was landing on whatever he happened to be in the middle of. `mixed` is
+  not sufficient — measured — because the group-wide SIGKILL still follows the
+  main process out. `KillMode=process` is the one that signals the main process
+  and nothing else. Holding the process
   in Bun would tie a conversation's life to a web server's, which is the `claude
   -p` mistake of #26 in a nicer coat.
 * **`ptybridge.py`** owns the pseudo-terminal. `tmux attach` refuses to run

@@ -25,6 +25,32 @@ ExecStart=/home/yuvraj/.bun/bin/bun src/server/index.ts
 Restart=on-failure
 RestartSec=5s
 
+# Kill this process, not everything it ever started.
+#
+# systemd's default is KillMode=control-group: on stop it signals every process
+# in the unit's cgroup. Wake starts a tmux server to hold Claude Code sessions,
+# and a tmux server daemonises into whatever cgroup its parent was in — so it
+# landed here, and every restart of Wake killed every session the operator had
+# running. Measured: `systemctl --user restart wake` took a live session with
+# eight minutes of work in it, and `wake-deploy.timer` restarts Wake on every
+# push, so a deploy quietly cost him whatever he was in the middle of.
+#
+# `mixed` is not enough and was measured not to be: it sends SIGTERM to the main
+# process only, but systemd still SIGKILLs whatever is left in the cgroup once
+# that process exits, so tmux died anyway. `process` is the one that signals the
+# main process and nothing else, which is what leaves a session running across a
+# redeploy — the property DECISIONS.md #39 claims and did not have.
+#
+# What `process` costs is that a genuinely stuck child would leak instead of
+# being reaped. The only children are this tmux server, which is the thing being
+# protected, and `ptybridge.py`, whose stdin closes when Wake exits and which
+# ends on its own.
+#
+# The sessions are deliberately NOT cleaned up on stop. They are the operator's
+# conversations, not Wake's resources; `DELETE /api/claude/terminals/:id` is how
+# one ends, and a server restart is not an instruction to end anything.
+KillMode=process
+
 # One line per request plus the poll summary land here:
 #   journalctl --user -u wake -f
 StandardOutput=journal
