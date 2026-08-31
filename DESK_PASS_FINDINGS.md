@@ -145,8 +145,17 @@ using `inputClass` resolves to **14px** on iOS, so the page zooms on focus and n
 zooms back. The comment describes an intent the cascade does not deliver.
 
 Compounding it: `Sheet` is capped at `max-h-[88vh]` (`primitives.tsx:195`) — `vh`, not
-`dvh`, alone in an app that uses `dvh` everywhere else — and Work's sheets pass no
-`footer`, so `Add task` lives inside the scrolled body instead of a pinned footer.
+`dvh`, alone in an app that uses `dvh` everywhere else.
+
+**And the reachability half turned out not to be the sheet at all.** Work's sheets
+already pass a `footer`, and the footer measures correctly — but `App.tsx:161` is
+`<main className="relative z-10 …">`, which opens a stacking context, and every `Sheet`
+in the product renders *inside* main rather than portalling. So a sheet's `z-50` is
+capped at main's `z-10`, while the phone tab bar at `App.tsx:189` is `z-30` and a
+**sibling** of main — it paints over the bottom 53px of every sheet on every page.
+Hit-tested: `elementFromPoint` at the centre of `Add task` returned **"Sessions"**.
+That is the real reason he could not press it, and it also meant the modal scrim never
+covered the desktop left rail.
 
 ---
 
@@ -239,3 +248,39 @@ D: tiles, repo first, Active/Archived/All, an archive Wake owns, and a delete wh
 is visible instead of implied by a grey icon.
 E: a real Menu primitive, repository before session, and a session list that respects it.
 F: real columns that scroll sideways, a `customer — who` heading, and a long-press peek.
+
+---
+
+## What shipped, and what was argued down
+
+Four commits on `main`, deployed to https://yuvraj-wake.truto.dev at `88716ee`:
+
+- `14fa927` — the shared primitives the five surfaces needed: `Menu` (the product had no
+  dropdown at all), `DateTimePicker`, `CountBadge`, `rowStateClass`. Plus the iOS
+  focus-zoom cascade bug and `Sheet`'s `vh`→`dvh`.
+- `5c58dbb` — the five surfaces: bucketing, the phone table, Work's one tree and its real
+  detail pane, Sessions as tiles with an archive, repository-before-session, and Sync.
+- `805b573` — the layering fix (`Sheet` portals), Mail's row treatment, one repository
+  rule instead of two, and the bucket-aware glyph, scope and search.
+- `8b04628` + `88716ee` — what two fresh-eyes QA passes over the deployed site found.
+
+Three findings were argued down rather than fixed, with the measurements recorded in the
+code beside them:
+
+- **A `Where` column on the laptop Desk.** The QA's own condition was "without touching
+  Title", and with the pane column reserved the list ends at x1016 of 1440 with its four
+  columns full — `Where` costs Title ~140px. The honest version of the complaint is that
+  *Kind's word* is redundant with its own glyph, which is a different change and a
+  retirement of `test/table.test.ts`, not something to slip in under a QA pass.
+- **The two "duplicate" add-task buttons.** Measured, they are 258px apart at 375 and
+  738px apart at 1440, at opposite corners. A toolbar action and an empty state's answer
+  to its own sentence are not one control twice.
+- **Making the skills list a `Menu`.** `Menu` rows are `menuitemradio` and it closes on
+  pick; a multi-select that shuts after every choice is worse than a porthole, and
+  changing the shared primitive to suit it would put the two pickers this pass exists to
+  fix at risk. It shows six and offers the rest instead, which removes the scroller
+  inside a scroller without touching the primitive.
+
+Known and deliberately left: `~/.local/share/wake` on the laptop fails ingest with
+`table cards has no column named pile` — a stale local database that predates that
+column. The devbox database is fine; this only affects running the server locally.
