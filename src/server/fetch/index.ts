@@ -128,9 +128,40 @@ export function startFetch(only?: FetchScope): { running: true } {
 export const fetchStatus = (): { running: boolean; report: FetchReport | null } =>
   ({ running: !!running, report: last })
 
-/** The connectors one scope asks. An unscoped Fetch asks all of them. */
+/**
+ * The connectors one scope asks. An unscoped Fetch asks all of them.
+ *
+ * Not widened the way the poll below is, and the difference is provable rather
+ * than a judgement call: every card this file mints for Slack — `slackCard` and
+ * `toCard` alike — carries `kind: 'mention'`, and the desk files a Slack member
+ * under Sentry only when it is `kind: 'alert'` *and* carries a Sentry identity.
+ * So no row the Slack connector can return will ever appear on the Sentry tab,
+ * and asking it from there would spend forty seconds of the operator's time
+ * landing rows on a tab he is not looking at, then count them in his answer.
+ */
 const askedBy = (only?: FetchScope): readonly Connector[] =>
   only ? CONNECTORS.filter(c => c === only) : CONNECTORS
+
+/**
+ * The pipe-1 pollers a scope has to run, beyond the one it is named after.
+ *
+ * The mirror of `pipesFor` in `src/web/lib/bucket.ts`, and it exists twice
+ * because pipe 1 runs on this side: the browser can pick its own pollers when
+ * it presses Sync, but Fetch runs `ingest` in here, before the connectors.
+ * **If one changes, both change** — `test/bucket.test.ts` fails if they drift.
+ *
+ * `#sentry-alerts` is read by the *Slack* adapter, so the forty Sentry rows on
+ * the Sentry tab are refreshed by polling Slack and by nothing else. Pressing
+ * Fetch there used to re-ask the Sentry API and leave every visible row on the
+ * tab exactly as stale as it found it.
+ */
+const ALSO_POLLED: Partial<Record<FetchScope, readonly SourceName[]>> = {
+  sentry: ['slack'],
+}
+
+/** Empty for an unscoped run, which polls everything in one go regardless. */
+const alsoPolled = (only?: FetchScope): readonly SourceName[] =>
+  (only && ALSO_POLLED[only]) || []
 
 async function doFetch(only?: FetchScope): Promise<FetchReport> {
   const t0 = Date.now()
@@ -155,6 +186,13 @@ async function collectAll(t0: number, only?: FetchScope): Promise<FetchReport> {
   // Scoped too: pressing Fetch on the Slack tab must not quietly re-poll the
   // inbox, or "fetch just this source" is only true of the half you can see.
   await ingest(only).catch(() => {})
+
+  // Then whatever else carries rows onto the tab that was asked. One at a time,
+  // and after rather than beside: `ingest()` refuses to run two polls at once
+  // and hands a second caller the first one's promise, so fired together the
+  // Slack half of a Sentry scope would be answered with the Sentry poll's
+  // report and never actually run.
+  for (const carrier of alsoPolled(only)) await ingest(carrier).catch(() => {})
 
   const reach = reachableConnectors()
   const results = await Promise.all(askedBy(only).map(c => collect(c, reach)))

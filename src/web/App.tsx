@@ -157,7 +157,22 @@ export default function App() {
           removes it by killing the target it exists for. Clipping here removes
           the overflow and leaves the target hittable, because the target never
           reaches this edge — only its claim on the scroll region did. `clip`,
-          not `hidden`: this must not become a scroll container. */}
+          not `hidden`: this must not become a scroll container.
+
+          `relative z-10` is the page's ceiling, and it is deliberate. It makes
+          main a stacking context, so nothing a page draws — a sticky table
+          head, a swipe drawer, a resize grip — can ever paint over the rails or
+          the tab bar, whatever z-index it picks. The shell owns 30 and up.
+
+          The price is that a page's overlay cannot climb out either: a `fixed
+          inset-0 z-50` sheet rendered by a page is ranked 50 *among main's
+          children* and main still paints at 10, so the phone tab bar covered
+          the bottom 53px of every sheet in the product — the footer, which is
+          where the control that commits lives. That is paid, once, by every
+          overlay leaving the page subtree instead: `Sheet`, `Menu`, `Peek` and
+          the desk's push sheet all portal to `document.body`. Do not answer a
+          future covered-overlay report by raising a number here; the answer is
+          that the overlay is still being drawn inside the page. */}
       <main className={`relative z-10 min-w-0 sm:flex-1 pad-top overflow-x-clip ${active.flush ? '' : 'pad-x'}`}>
         {error && !store.state && (
           <p className="mt-24 pad-x text-sm text-bad">{error}</p>

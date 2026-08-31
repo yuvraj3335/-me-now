@@ -23,16 +23,50 @@
  * disagreeing about what "here" means.
  */
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { JSX } from 'react'
 import { ChevronDown, Loader2, RefreshCw } from 'lucide-react'
 import { refresh, useStore, type SyncReport } from '../lib/api'
+import { pipesFor } from '../lib/bucket'
+import { toast } from '../lib/toast'
 import type { SourceName } from '../lib/types'
 import { ago, timeOfDay } from '../lib/time'
 import { Button, Menu, type MenuItem } from './primitives'
 import { SOURCE_LABEL } from './sources'
 
 type Scope = SourceName | 'all'
+
+/** What either control on the header row answers with when it is done. */
+export type ResultLine = { text: string; title?: string }
+
+/** Tailwind's `sm`: the width at which the header row can afford a sentence. */
+const ROOM_FOR_A_SENTENCE = '(min-width: 40rem)'
+
+/**
+ * The answer, on every width — used by Sync and by Fetch, from one place.
+ *
+ * Both controls printed their result into a `hidden sm:inline` span, so below
+ * 640px both of them spun, stopped, and said nothing at all: the one width
+ * where the operator cannot see the desk change under the button, and the one
+ * where he has most likely walked away from it. The line stays where it is
+ * where there is room for it, and where there is not it goes to the toast bar —
+ * which is already how this product answers a phone, is `aria-live`, and gets
+ * out of the way on its own.
+ *
+ * One hook rather than two implementations, because the failure being fixed is
+ * exactly that these two siblings drifted apart once already.
+ */
+export function useResultLine(): [ResultLine | null, (l: ResultLine) => void] {
+  const [line, setLine] = useState<ResultLine | null>(null)
+  const say = useCallback((l: ResultLine) => {
+    setLine(l)
+    // Asked at the moment the answer lands rather than subscribed to: this is
+    // one reading of one number, and a resize between the press and the result
+    // is not a thing worth re-rendering the header for.
+    if (!window.matchMedia(ROOM_FOR_A_SENTENCE).matches) toast(l.text)
+  }, [])
+  return [line, say]
+}
 
 /**
  * The same five, in the same order, as the tab strip above the desk. The order
@@ -95,9 +129,22 @@ export function syncLine(r: SyncReport): { text: string; title: string } {
 }
 
 export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
-  const { state } = useStore()
-  const [busy, setBusy] = useState(false)
-  const [line, setLine] = useState<{ text: string; title: string } | null>(null)
+  const { state, syncing } = useStore()
+  const [mine, setMine] = useState(false)
+  const [line, say] = useResultLine()
+
+  /**
+   * Busy is the store's, plus this control's own for the last tick of a press.
+   *
+   * The store's flag is what makes the palette's Sync visible here — it is the
+   * same poll, and a control sitting still through one it did not start is
+   * denying what the page is doing. The local half is not redundant with it:
+   * `refresh` clears the store in its `finally`, which runs a tick before the
+   * line arrives, so on the store's flag alone the button would go idle under
+   * the *previous* result for a frame. Cleared beside the line, they land
+   * together.
+   */
+  const busy = mine || syncing
 
   const word = source === 'all' ? null : label(source)
   const runs = new Map((state?.lastSync ?? []).map(r => [r.source, r]))
@@ -125,13 +172,26 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
   ]
 
   const run = async (scope: Scope) => {
-    setBusy(true)
+    setMine(true)
     const r = await refresh(scope === 'all' ? undefined : scope)
-    setBusy(false)
-    setLine(r.ok
+    setMine(false)
+    say(r.ok
       ? syncLine(r.report)
       : { text: `Sync failed · ${timeOfDay(Date.now())}`, title: r.error })
   }
+
+  /**
+   * The pollers this press will actually run, so the tooltip can say so.
+   *
+   * A name on this desk means the rows filed under it, not the pipe that
+   * carried them — that is the whole of the bucketing ruling, and it has to
+   * hold in the menu too or the same five words mean two different things one
+   * control apart. So `Sentry` re-polls Slack as well, because that is where
+   * the alerts on the Sentry tab come from, and the tooltip names it rather
+   * than leaving the operator to notice a second source in the result line.
+   */
+  const pipes = source === 'all' ? [] : pipesFor(source)
+  const carriers = pipes.filter(p => p !== source)
 
   /* The chevron cannot be a `Button`: it is a menu trigger and has to say so
      with `aria-haspopup` and `aria-expanded`, which `Button` does not take and
@@ -148,7 +208,8 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
     <span className="flex items-center gap-3 shrink-0">
       {/* Capped rather than free, because Fetch's own line sits on this row too
           and an uncapped one pushes the other control sideways as it lands. The
-          whole of it is on `title`. */}
+          whole of it is on `title`. Below `sm` this span is not rendered at all
+          and the same sentence is a toast — see `useResultLine`. */}
       {line && !busy && (
         <span className="hidden sm:inline text-sm text-fg-mute tnum truncate max-w-[22ch]"
           title={line.title}>
@@ -159,9 +220,11 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
       <span className="inline-flex items-center">
         <Button size="md" variant="ghost" className="rounded-r-none pr-2"
           onClick={() => void run(source)} disabled={busy}
-          title={word
-            ? `Poll ${word} again with the credential Wake already holds`
-            : 'Poll every source Wake is connected to'}>
+          title={!word
+            ? 'Poll every source Wake is connected to'
+            : carriers.length
+              ? `Poll ${names(pipes)} again — part of the ${word} tab arrives through ${names(carriers)}`
+              : `Poll ${word} again with the credential Wake already holds`}>
           {/* Same rule as Fetch: the word is the control and the glyph is
               decoration, so the glyph is dropped on the narrow screens where
               this row cannot spend 22px on decoration. Nothing is lost — the

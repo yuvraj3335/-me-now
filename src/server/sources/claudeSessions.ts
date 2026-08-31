@@ -11,6 +11,7 @@ import {
   CLAUDE_HOME, CLAUDE_PROJECTS_DIR, FETCH_LEGACY_RUN_DIR, FETCH_RUN_DIR, LOOKBACK_DAYS,
 } from '../env'
 import { extractRefsFromElidable, subjectRef } from '../dedup'
+import { sessionInRepo } from '../../shared/sessionRepo'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
 import { titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
 
@@ -363,21 +364,23 @@ export function listSessions(limit = 30, windowDays = 30): SessionRow[] {
  * — so a repo filter still walks until it has filled a page, and an unfiltered
  * read still parses only a page's worth of tails.
  *
- * `repo` names one place exactly. It used to be a substring test over
- * `cwd` + `project`, which is a different question with the same shape: on this
- * machine `?repo=truto` answered with `truto`, `truto-app`, `truto-monitoring`
- * and `truto-skills` — four of the five repositories that have sessions — so a
- * picker built on it could narrow to everything or to nothing and never to one
- * repository. Both spellings are still accepted because both are real names for
- * where a session ran: the recorded `cwd` (`/Users/me/work/truto`) and the
- * basename it is shown under (`truto`). A session that never recorded a `cwd`
- * has the same string for both, which is the case `placeOf` leaves behind.
+ * `repo` names one repository and everything inside it — `sessionInRepo`, the
+ * same function the browser filters with, from `src/shared/sessionRepo.ts`.
+ * Two wrong answers were shipped before it: a substring test over `cwd` +
+ * `project`, which answered `?repo=truto` with `truto-app`, `truto-monitoring`
+ * and `truto-skills`; and then an exact match on the recorded directory, which
+ * cured that by making `truto-app/packages/web` a repository called `web`. The
+ * rule is exact-or-under, it is written down once, and `test/sessions.test.ts`
+ * asserts that this function's answer *equals* what that predicate selects from
+ * the same rows — which is what stops this side drifting from the other again.
  */
 export function listAllSessions(
   opts: { windowDays?: number; repo?: string; limit?: number } = {},
 ): SessionRow[] {
   const { windowDays = 30, repo, limit = 200 } = opts
-  const wanted = repo?.trim().toLowerCase() || null
+  // Empty is "no repository asked about", not "a repository named nothing".
+  // Case is folded inside the predicate, so the wanted name is kept as typed.
+  const wanted = repo?.trim() || null
 
   const out: SessionRow[] = []
   for (const file of sessionFiles(windowDays)) {
@@ -386,7 +389,7 @@ export function listAllSessions(
     // record of where it ran rather than the name it is filed under.
     if (isWakeRun({ cwd: info.cwd })) continue
     const row = rowOf(file, info)
-    if (wanted && row.cwd.toLowerCase() !== wanted && row.project.toLowerCase() !== wanted) continue
+    if (wanted && !sessionInRepo(row, wanted)) continue
     out.push(row)
     if (out.length >= limit) break
   }

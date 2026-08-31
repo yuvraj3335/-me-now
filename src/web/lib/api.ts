@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import type { Analytics, CardPriority, CardStatus, SourceStatus, State, SourceName } from './types'
+import { pipesFor } from './bucket'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
 export type ConnectStart = {
@@ -30,6 +31,14 @@ type Store = {
   state: State | null
   error: string | null
   loading: boolean
+  /**
+   * A pipe-1 poll is in flight, wherever it was started from.
+   *
+   * Read by the Sync control, which is why it is here rather than in that
+   * control's own `useState`: the command palette runs the same poll, and a
+   * button that sat still through a sync somebody had just ordered was a button
+   * denying what the page was doing.
+   */
   syncing: boolean
 }
 
@@ -122,9 +131,37 @@ export type SyncResult =
   | { ok: false; error: string }
 
 /**
+ * Two reports of one press, as one report.
+ *
+ * Keyed by source, last answer winning, because `ingest()` refuses to run two
+ * polls at once and hands a second caller the first one's promise — so a press
+ * that lands while the three-minute timer is mid-poll can be answered with a
+ * report naming every source, twice over. `groups` is the desk as it stands
+ * after the last of them; `newGroups` adds up, because each poll counted the
+ * groups that were not there when *it* ran.
+ */
+function mergeSync(a: SyncReport | null, b: SyncReport): SyncReport {
+  if (!a) return b
+  const sources = new Map(a.sources.map(s => [s.source, s]))
+  for (const s of b.sources) sources.set(s.source, s)
+  return {
+    at: Math.max(a.at, b.at),
+    sources: [...sources.values()],
+    groups: b.groups,
+    newGroups: a.newGroups + b.newGroups,
+  }
+}
+
+/**
  * Sync — pipe 1, on demand. Poll the sources Wake already holds a credential
- * for, then reload the desk. With `only`, poll that one and leave the rest
- * exactly as they are.
+ * for, then reload the desk. With `only`, poll what feeds that tab and leave
+ * the rest exactly as they are.
+ *
+ * `only` is a tab, not a pipe, and `pipesFor` is the difference: the Sentry tab
+ * is fed by the Sentry poller *and* by the Slack one reading `#sentry-alerts`,
+ * so syncing it asks both and a press that named Sentry stops refreshing
+ * everything except what is on the screen. One at a time — fired together, the
+ * second would be handed the first's promise and never run.
  *
  * It answers rather than throws, and the two callers are why. The palette runs
  * it as `void refresh()`, where a rejection is an unhandled one; the Sync
@@ -136,9 +173,13 @@ export type SyncResult =
 export async function refresh(only?: SourceName): Promise<SyncResult> {
   set({ syncing: true })
   try {
-    const report = await post<SyncReport>('/refresh', only ? { only } : undefined)
+    let report: SyncReport | null = null
+    for (const pipe of only ? pipesFor(only) : [undefined]) {
+      report = mergeSync(report, await post<SyncReport>('/refresh', pipe ? { only: pipe } : undefined))
+    }
     await reload()
-    return { ok: true, report }
+    // The loop runs at least once, so there is a report by here or a throw.
+    return { ok: true, report: report! }
   } catch (e) {
     const error = (e as Error).message
     set({ error })

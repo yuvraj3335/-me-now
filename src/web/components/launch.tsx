@@ -47,6 +47,7 @@ import {
   useLaunchBasket, type LaunchState, type PackItem, type PermissionMode, type Session,
 } from '../lib/launch'
 import { handoffFor } from '../../shared/handoff'
+import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
 import { ago } from '../lib/time'
 import { Mic } from './voice'
 
@@ -395,52 +396,33 @@ function GrowingField({
 const NEW_SESSION = ':new'
 
 /**
- * Claude Code's own name for a directory: every character that is not
- * alphanumeric becomes a dash.
- *
- * A transcript that never wrote down where it ran has only the directory it is
- * *filed* under, and the server hands that name back as the session's `cwd` —
- * so `-Users-yuvrajmuley-work-truto` is a real value on this wire, and on this
- * machine it is two of the thirty.
- */
-const filedAs = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-')
-
-/**
- * Whether a session ran in this repository, or in a directory inside it.
- *
- * A path test rather than a name test, and `===` or a `/`-terminated prefix
- * rather than `includes`. Both of the loose spellings are wrong in the same
- * direction here: `truto` is a substring of `truto-app`, `truto-skills` and
- * `truto-monitoring`, and `/Users/yuvrajmuley/work/truto` is a prefix of
- * `/Users/yuvrajmuley/work/truto-app`. The server's own `?repo=` filter is the
- * substring version, which is precisely why this is recomputed here instead of
- * being taken on trust.
- *
- * The filed name is matched exactly and never as a prefix. `-…-work-truto` is
- * unambiguously this repository, but `-…-work-truto-app` and `-…-work-truto-cli`
- * are a sibling repository and a directory inside this one wearing the same
- * shape — the encoding threw away the separator that told them apart, so the
- * only honest thing to do with a dash there is nothing.
- */
-export const sessionInRepo = (cwd: string, repo: string) =>
-  cwd === repo || cwd.startsWith(`${repo}/`) || cwd === filedAs(repo)
-
-/**
  * The rows the session menu offers, in the order it prints them.
  *
  * Exported because the filter is the whole of what this control does, and it is
  * the part that cannot be seen to be right by looking at it.
  *
- * `chosen` is offered whatever repository it ran in. A brief that is already
- * about a session must be able to name it — dropping the row would leave the
- * trigger printing a dash over a brief that says otherwise — so it survives the
- * filter, and its `title` is the fallback for a session so old that this
- * window has never seen it.
+ * Two things keep a row out, and they are the same two everywhere else in the
+ * product. It ran in another repository — `sessionInRepo`, the server's own
+ * filter, so this menu and the Sessions page cannot disagree about what
+ * "truto's sessions" means. Or he has archived it: putting a session away is
+ * saying he is done with it, and a thing you are done with is not the default
+ * context for new work. Thirteen of the thirty on this machine could be
+ * archived, and offering them is what archiving exists to stop.
+ *
+ * `chosen` outranks both. A brief that is already about a session must be able
+ * to name it — dropping the row would leave the trigger printing a dash over a
+ * brief that says otherwise — so the session this brief carries survives the
+ * repository filter *and* the archive filter, and its `title` is the fallback
+ * for a session so old that this window has never seen it. Which is also the
+ * way back to an archived one: open it from the Sessions page's Archived view
+ * and it arrives here as the chosen row, named and pickable. Put away is not
+ * out of reach; it is only out of the way.
  */
 export function sessionChoices(
   sessions: readonly Session[],
   repo: string | null,
   chosen: { id: string; title: string | null } | null,
+  known: readonly string[] = [],
 ): MenuItem[] {
   const seen = new Set<string>()
   const rows = sessions
@@ -448,29 +430,43 @@ export function sessionChoices(
       // The two reads overlap by construction: `/state` sends the machine's
       // newest thirty and the repository read sends that repository's own.
       if (seen.has(s.id)) return false
-      if (repo && !sessionInRepo(s.cwd, repo) && s.id !== chosen?.id) return false
+      if (s.id !== chosen?.id) {
+        if (repo && !sessionInRepo(s, repo)) return false
+        if (s.archived) return false
+      }
       seen.add(s.id)
       return true
     })
     .sort((a, b) => b.lastTs - a.lastTs)
 
   /*
-   * Grouped by the directory each session recorded.
+   * Grouped by the repository each session is in — `known`, the repositories
+   * this machine actually has, and the recorded directory only when none of
+   * them contains it.
+   *
+   * The directory alone was the heading until the filter learned to match
+   * under a repository, and then it broke the list it was meant to organise:
+   * with `wake` chosen the menu printed three headings — `wake`,
+   * `reverent-hertz-369f69`, `QA_EVIDENCE` — for one repository, and since
+   * grouping reorders, the newest row of the second group sat below the oldest
+   * of the first. A menu already scoped to one repository has one heading.
    *
    * `Menu` prints a heading whenever the group changes rather than nesting, so
    * rows sharing one have to arrive together — the sorted list alone would
    * print `truto` above every third row. Insertion order into the map is the
    * order of each group's newest session, which is the order to read them in.
    */
-  const byDir = new Map<string, Session[]>()
+  const byRepo = new Map<string, { label: string; list: Session[] }>()
   for (const s of rows) {
-    const key = s.project || s.cwd
-    const list = byDir.get(key)
-    list ? list.push(s) : byDir.set(key, [s])
+    const home = repoForSession(s, known)
+    const id = home ?? (s.project || s.cwd)
+    const at = byRepo.get(id)
+    if (at) { at.list.push(s); continue }
+    byRepo.set(id, { label: home ? home.split('/').pop() || home : id, list: [s] })
   }
 
   const items: MenuItem[] = [{ id: NEW_SESSION, label: 'A new conversation' }]
-  for (const [dir, list] of byDir) {
+  for (const { label: dir, list } of byRepo.values()) {
     for (const s of list) {
       items.push({
         id: s.id,
@@ -555,9 +551,10 @@ function SessionPicker({
   const chosen = value
     ? { id: value, title: current?.title ?? attached.find(i => i.ref === sessionRef(value))?.title ?? null }
     : null
+  const repoPaths = useMemo(() => repos.map(r => r.path), [repos])
   const items = useMemo(
-    () => sessionChoices(known, repo, chosen),
-    [known, repo, chosen?.id, chosen?.title],
+    () => sessionChoices(known, repo, chosen, repoPaths),
+    [known, repo, chosen?.id, chosen?.title, repoPaths],
   )
 
   const pick = (s: Session | null) => {
@@ -568,9 +565,12 @@ function SessionPicker({
 
     setLaunchSession(s.id)
     // A session that ran somewhere else moves the repository to where it ran,
-    // rather than sitting in a list that has just stopped describing it.
-    const home = repos.find(r => r.path === s.cwd) ?? repos.find(r => sessionInRepo(s.cwd, r.path))
-    if (home) setCwd(home.path)
+    // rather than sitting in a list that has just stopped describing it. A
+    // session from a subdirectory or a worktree moves it to the repository that
+    // contains it — the innermost one, so a checkout kept inside another
+    // checkout is credited to itself.
+    const home = repoForSession(s, repoPaths)
+    if (home) setCwd(home)
     attachSession(s)
   }
 

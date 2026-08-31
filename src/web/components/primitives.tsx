@@ -464,6 +464,32 @@ export function Menu<T extends string>({
  *
  * The body scroll lock is not owned here: `useOverlay` owns it, so two sheets
  * closing in the wrong order cannot leave the page frozen at `hidden`.
+ *
+ * It portals to `document.body`, and that is the whole of why a sheet is
+ * reachable on a phone.
+ *
+ * A sheet is `fixed inset-0 z-50`, but `z-50` is only a number inside whatever
+ * stacking context it happens to be painted in. Every sheet in the product is
+ * rendered by a page, every page is rendered inside the shell's `<main>`, and
+ * `main` is `relative z-10` — a stacking context, so the sheet's 50 is a
+ * ranking *among main's own children* and main's whole subtree still paints at
+ * 10. The phone tab bar is `z-30` and a sibling of main, so it painted over the
+ * bottom 53px of every sheet in the app: the footer, which is where the one
+ * control that commits lives. Hit-tested at 375×812, the centre of `Add task`
+ * returned the `Sessions` tab.
+ *
+ * Fixing it by lowering the bar or raising the number would be a fix for one
+ * pair. The rule instead: **the shell owns everything above z-30, page content
+ * is capped at main's 10, and anything that must cover the shell leaves the
+ * page subtree.** `Menu`, `Peek` and the desk's push sheet already portal for
+ * this reason; `Sheet` was the last overlay still drawn inside the page. Out
+ * here, `z-50` means what it says, and it also survives a page that later grows
+ * a `transform` or a `filter` — either of which would re-trap a fixed child no
+ * matter what its z-index said.
+ *
+ * `main`'s `relative z-10` stays. It is not the bug; it is the cap that keeps a
+ * page's own sticky headers under the rails, and it is what makes the rule
+ * above enforceable rather than a convention every new overlay has to remember.
  */
 export function Sheet({
   open, onClose, title, children, footer, wide,
@@ -488,7 +514,7 @@ export function Sheet({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, onClose])
 
-  return (
+  return createPortal(
     <AnimatePresence>
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center">
@@ -580,7 +606,8 @@ export function Sheet({
           </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   )
 }
 

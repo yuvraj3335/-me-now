@@ -26,10 +26,11 @@
  * pass.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
-import { bucketOf, bucketsOf, inBucket } from '../src/web/lib/bucket'
-import { contextLine, waitingOn } from '../src/web/components/kinds'
-import type { Card, CardSource } from '../src/web/lib/types'
+import { bucketOf, bucketsOf, inBucket, pipesFor } from '../src/web/lib/bucket'
+import { cardKind, contextLine, waitingOn } from '../src/web/components/kinds'
+import type { Card, CardSource, SourceName } from '../src/web/lib/types'
 
 /** A member of a group, with only the fields the bucket is allowed to read. */
 const member = (over: Partial<CardSource> & { source: CardSource['source'] }): CardSource => ({
@@ -225,6 +226,136 @@ describe('a card is on every tab one of its members claims', () => {
       meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
     })
     expect([bucketOf(s), bucketOf(s), bucketOf(s)]).toEqual(['sentry', 'sentry', 'sentry'])
+  })
+})
+
+/* ------------------------- what the row draws ----------------------------- */
+
+/**
+ * One member of every shape the desk can hold, including both halves of the
+ * Slack split. The three tests below are all one claim asked three ways: the
+ * tab, the mark and the button have to agree about which rows are whose.
+ */
+const SPECIMENS: CardSource[] = [
+  member({ source: 'slack', kind: 'thread', meta: { channel: '#15five-truto' } }),
+  member({
+    source: 'slack', kind: 'alert', title: 'TRUTO-39 · Error',
+    meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
+  }),
+  member({
+    source: 'slack', kind: 'alert', title: 'p99 latency is high',
+    meta: { alert: true, channel: '#truto-api-alerts', short_id: null },
+  }),
+  member({ source: 'sentry', kind: 'error', title: 'Error', meta: { project: 'truto' } }),
+  member({ source: 'github', kind: 'review', meta: { repo: 'trutohq/truto', is_pr: true } }),
+  member({ source: 'gmail', kind: 'email', account: 'yuvraj@truto.one' }),
+  member({ source: 'claude', kind: 'session', meta: { project: 'truto' } }),
+]
+
+describe('the mark on the row is the mark of the tab it is on', () => {
+  test('every row draws its bucket, not its pipe', () => {
+    // `cardKind` took its hue and glyph from `sources[0].source`, so the forty
+    // rows the strip had just moved to the Sentry tab went on drawing a
+    // Slack-coloured bell there. Two claims about one row, computed twice.
+    for (const s of SPECIMENS) {
+      expect(cardKind(card({ sources: [s] })).source, `a ${s.source} ${s.kind} row`)
+        .toBe(bucketOf(s))
+    }
+  })
+
+  test('a Sentry issue announced in Slack draws Sentry\'s own mark', () => {
+    const viaSlack = card({
+      sources: [member({
+        source: 'slack', kind: 'alert', title: 'TRUTO-39 · Error',
+        meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
+      })],
+    })
+    const viaSentry = card({
+      sources: [member({ source: 'sentry', kind: 'error', title: 'Error', meta: { project: 'truto' } })],
+    })
+    const conversation = card({
+      sources: [member({ source: 'slack', kind: 'thread', meta: { channel: '#truto-eng' } })],
+    })
+
+    expect(cardKind(viaSlack).Icon, 'the same issue told twice draws two marks')
+      .toBe(cardKind(viaSentry).Icon)
+    expect(cardKind(viaSlack).Icon, 'an issue and a conversation share a mark')
+      .not.toBe(cardKind(conversation).Icon)
+    // The word does not move, and that is not an oversight: Slack's alert and
+    // Sentry's are both `Alert`, which is why the Kind column and the search
+    // haystack that reads it are unchanged by any of this.
+    expect(cardKind(viaSlack).word).toBe('Alert')
+  })
+})
+
+/* --------------------------- what the button asks ------------------------- */
+
+/** The five the strip offers, in its order. */
+const TABS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
+
+describe('a scoped press asks the pipes that feed the tab it was pressed on', () => {
+  test('whatever tab a row lands on, that tab asks the pipe it came through', () => {
+    // The property the whole of `pipesFor` exists for. `Fetch Sentry` asked the
+    // Sentry collector while every visible row on the Sentry tab came through
+    // the Slack poller, so the control refreshed nothing you could see.
+    for (const s of SPECIMENS) {
+      expect(pipesFor(bucketOf(s)), `a ${s.source} ${s.kind} row is on the ${bucketOf(s)} tab`)
+        .toContain(s.source)
+    }
+  })
+
+  test('and asks nothing else', () => {
+    // Widening is not the safe direction to be wrong in either: a scope that
+    // asked every pipe would be an unscoped press wearing a source name.
+    expect(pipesFor('sentry')).toEqual(['sentry', 'slack'])
+    for (const t of TABS.filter(t => t !== 'sentry')) expect(pipesFor(t)).toEqual([t])
+  })
+
+  test('the server widens the same scopes the browser does', () => {
+    // Fetch runs pipe 1 inside the server, so the table is written twice — once
+    // here for Sync, once there for Fetch — and neither can import the other.
+    // This is the thing that fails when only one of them is taught a new pipe.
+    const src = readFileSync('src/server/fetch/index.ts', 'utf8')
+    const table = /const ALSO_POLLED[^{]*\{([\s\S]*?)\n\}/.exec(src)?.[1]
+    expect(table, 'ALSO_POLLED is gone or no longer a literal table').toBeTruthy()
+
+    const server = new Map<string, string[]>()
+    for (const m of table!.matchAll(/(\w+):\s*\[([^\]]*)\]/g)) {
+      server.set(m[1]!, [...m[2]!.matchAll(/'([a-z]+)'/g)].map(q => q[1]!))
+    }
+
+    for (const t of TABS) {
+      expect(server.get(t) ?? [], `the two halves disagree about the ${t} tab`)
+        .toEqual(pipesFor(t).filter(p => p !== t))
+    }
+  })
+})
+
+/* --------------------- what the button says it just did ------------------- */
+
+/**
+ * Not a bucket, but the same failure one layer out, and this pass is where both
+ * were found: the tab strip stopped lying about which rows were whose, and the
+ * two controls above it went on saying nothing at all on a phone.
+ */
+describe('both controls on the header row answer at every width', () => {
+  const sync = readFileSync('src/web/components/sync.tsx', 'utf8')
+  const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
+
+  test('the answer is one decision, made once', () => {
+    expect(sync, 'the shared result line is gone').toMatch(/export function useResultLine/)
+    // The inline line is `hidden sm:inline` in both controls, so below `sm`
+    // something else has to speak. The hook is what checks the width and hands
+    // the same sentence to the toast bar.
+    expect(sync, 'the result no longer reaches a phone')
+      .toMatch(/matchMedia[\s\S]{0,200}toast\(/)
+  })
+
+  test('and both of them make it', () => {
+    for (const [name, src] of [['sync.tsx', sync], ['Home.tsx', home]] as const) {
+      expect(src, `${name}: a control on this row went back to answering only on a desktop`)
+        .toMatch(/useResultLine\(\)/)
+    }
   })
 })
 

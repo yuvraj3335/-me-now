@@ -24,6 +24,7 @@ import {
   SquareTerminal, TriangleAlert, type LucideIcon,
 } from 'lucide-react'
 import type { Card, CardSource, SourceName } from '../lib/types'
+import { bucketOf } from '../lib/bucket'
 import { SOURCE_COLOR } from './sources'
 
 export type Kind = {
@@ -76,11 +77,26 @@ export function kindOf(source: SourceName, kind: string, meta: Record<string, an
   }
 }
 
-/** The kind of a whole card, taken from the source that speaks for it. */
+/**
+ * The kind of a whole card, taken from the source that speaks for it — read as
+ * the thing it *is* rather than as the pipe that carried it.
+ *
+ * `lead.source` was the wrong question here for the same reason it was the
+ * wrong question in the tab strip. A `#sentry-alerts` row is minted
+ * `source: 'slack'`, so `TRUTO-39 · Error` sat on the Sentry tab drawing a
+ * Slack-coloured `BellRing`: the strip said Sentry, the mark said Slack, and
+ * the row itself is an issue. One fact, claimed in two places, has to be
+ * computed once — so the mark asks `bucketOf` too.
+ *
+ * Only the *identity* moves. `card.meta` and the lead's own meta are still what
+ * they were, because they are the row's facts and the row really did arrive
+ * through Slack; `whereOf` still answers `sentry-alerts` from them, which is
+ * where it came from and is not in conflict with what it is.
+ */
 export function cardKind(card: Card): Kind {
   const lead = card.sources[0]
   if (!lead) return kindOf('github', card.kind, card.meta)
-  return kindOf(lead.source, card.kind || lead.kind, { ...lead.meta, ...card.meta })
+  return kindOf(bucketOf(lead), card.kind || lead.kind, { ...lead.meta, ...card.meta })
 }
 
 /** The glyph, in its source's hue. Sized for a row (16px) or a pane (14px). */

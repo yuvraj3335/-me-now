@@ -36,14 +36,14 @@ import {
   useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
-import { Sync } from '../components/sync'
+import { Sync, useResultLine } from '../components/sync'
 import { TaskSheet } from '../components/TaskSheet'
 import {
   Button, Empty, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
 } from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
-import { inBucket } from '../lib/bucket'
+import { bucketsOf, inBucket, pipesFor } from '../lib/bucket'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { useStill } from '../lib/motion'
@@ -206,6 +206,13 @@ export function Home() {
    * Why, who, channel, repo, project, excerpt and every account a group was
    * seen under. Those facts left the table; they did not stop being how he
    * remembers a row.
+   *
+   * The source names in it are the row's *tabs* rather than its pipes, for the
+   * same reason the strip above is: typing `slack` here and pressing the Slack
+   * tab are one question asked two ways, and on `c.sources` they answered
+   * differently — forty Sentry alerts came back for `slack` and none of them
+   * were on the tab. `cardKind(c).word` is a bucket now too, so both halves of
+   * this list agree without being told to.
    */
   const matchQuery = useCallback((c: CardT) => {
     const q = query.trim().toLowerCase()
@@ -219,7 +226,7 @@ export function Home() {
       channel ? cleanChannel(String(channel)) : null,
       STATUS_LABEL[c.status],
       ...c.sources.map(s => s.account ?? ''),
-      ...c.sources.map(s => SOURCE_LABEL[s.source]),
+      ...bucketsOf(c).map(b => SOURCE_LABEL[b]),
     ]
     return hay.some(v => v && String(v).toLowerCase().includes(q))
   }, [query])
@@ -969,9 +976,21 @@ function FilterRow({
  */
 function Fetch({ source }: { source: SourceName | 'all' }) {
   const [busy, setBusy] = useState(false)
-  const [line, setLine] = useState<{ text: string; title?: string } | null>(null)
+  const [line, say] = useResultLine()
   const only = source === 'all' ? undefined : source
   const word = only ? SOURCE_LABEL[only] : null
+
+  /**
+   * The pipes this press re-polls beyond the one it is named after.
+   *
+   * Named in the tooltip rather than left to be discovered, because the server
+   * is the half that widens — the scope reaches `ingest` in there — and a
+   * control whose stated reach and real reach differ is the thing this whole
+   * pass is about. The Sentry tab is fed by the Slack poller reading
+   * `#sentry-alerts`, so `Fetch Sentry` re-polls Slack; the connector it asks
+   * afterwards is still Sentry's alone.
+   */
+  const carriers = only ? pipesFor(only).filter(p => p !== only).map(p => SOURCE_LABEL[p]) : []
 
   const run = async () => {
     setBusy(true)
@@ -979,7 +998,7 @@ function Fetch({ source }: { source: SourceName | 'all' }) {
       const r = await fetchNow(only)
       const asked = r.connectors.filter(c => c.via !== 'none')
       const quiet = asked.filter(c => !c.ok).map(c => c.name)
-      setLine({
+      say({
         text: [
           `Fetched ${r.found}`,
           `${r.fresh} new`,
@@ -990,7 +1009,7 @@ function Fetch({ source }: { source: SourceName | 'all' }) {
       })
       await reload()
     } catch (e) {
-      setLine({ text: `Fetch failed · ${timeOfDay(Date.now())}`, title: (e as Error).message })
+      say({ text: `Fetch failed · ${timeOfDay(Date.now())}`, title: (e as Error).message })
     } finally {
       setBusy(false)
     }
@@ -998,15 +1017,21 @@ function Fetch({ source }: { source: SourceName | 'all' }) {
 
   return (
     <span className="flex items-center gap-3 shrink-0">
+      {/* Below `sm` this span is not rendered and the same sentence arrives as
+          a toast, which is the one answer both controls on this row give — see
+          `useResultLine`. */}
       {line && !busy && (
         <span className="hidden sm:inline text-sm text-fg-mute tnum truncate" title={line.title}>
           {line.text}
         </span>
       )}
       <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
-        title={only
-          ? `Ask ${SOURCE_LABEL[only]} alone what is on you — the other sources are left as they are`
-          : 'Ask every connector this machine can reach what is on you'}>
+        title={!only
+          ? 'Ask every connector this machine can reach what is on you'
+          : carriers.length
+            ? `Ask ${SOURCE_LABEL[only]} what is on you, and re-poll ${carriers.join(' and ')}`
+              + ` — part of this tab arrives through it`
+            : `Ask ${SOURCE_LABEL[only]} alone what is on you — the other sources are left as they are`}>
         {/* The word is the control; the glyph is decoration, and on a phone it
             is 22px this row does not have to spend. It comes back at the width
             where the tabs get their names. The busy state is still legible

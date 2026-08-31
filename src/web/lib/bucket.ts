@@ -124,3 +124,29 @@ export function bucketsOf(card: Card): SourceName[] {
 export function inBucket(card: Card, tab: SourceName | 'all'): boolean {
   return tab === 'all' || card.sources.some(s => bucketOf(s) === tab)
 }
+
+/**
+ * The pollers that can put a row on one tab — the same ruling read backwards.
+ *
+ * Fetch and Sync are scoped by the tab you are standing on, and both of them
+ * scoped by *pipe*: `Fetch Sentry` asked the Sentry collector, which is not
+ * where the forty rows on the Sentry tab come from. They come from the Slack
+ * poller reading `#sentry-alerts`, so the tab and the button pointed at
+ * different sets and the control was reporting a refresh of something the
+ * operator could not see. A scope is a bucket now, and a bucket may be fed by
+ * more than one pipe.
+ *
+ * Slack is the only polyvalent pipe — `bucketOf` sends every non-Slack member
+ * to itself — so this table has exactly one entry, and it is one-way: the
+ * Sentry tab needs Slack, the Slack tab does not need Sentry. A scoped press is
+ * still scoped; `Fetch Slack` asks Slack alone, and asking a pipe that cannot
+ * reach the tab would put the button back to refreshing what you are not
+ * looking at, from the other direction.
+ *
+ * **Mirrored in `src/server/fetch/index.ts` as `ALSO_POLLED`, because Fetch
+ * runs pipe 1 inside the server and cannot ask the browser.** `test/bucket.test.ts`
+ * fails if the two ever drift.
+ */
+export function pipesFor(tab: SourceName): SourceName[] {
+  return tab === 'sentry' ? ['sentry', 'slack'] : [tab]
+}

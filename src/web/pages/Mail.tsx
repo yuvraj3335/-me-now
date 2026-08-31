@@ -21,7 +21,9 @@ import {
   displayName, mailApi, splitAddrs, useMailState,
   type Draft, type MailMessage, type MailState, type MailThread,
 } from '../lib/mail'
-import { Button, Chip, Empty, Field, PageTitle, Sheet, inputClass, useRail } from '../components/primitives'
+import {
+  Button, Chip, Empty, Field, PageTitle, Sheet, inputClass, rowStateClass, useRail,
+} from '../components/primitives'
 import { ago, timeOfDay } from '../lib/time'
 import { openLaunch } from '../lib/launch'
 import { registerPaletteActions } from '../components/palette'
@@ -334,25 +336,43 @@ function ArrivingRows() {
   )
 }
 
+/**
+ * One row treatment, shared with the desk and with Work.
+ *
+ * Two things were wrong here and they were the same thing. `active` and hover
+ * were both `bg-ink-800`, so the thread the pane was actually showing was
+ * indistinguishable from whichever one the pointer happened to be over — the
+ * desk's bug, in the other list. And unread was told *twice* in type and not at
+ * all in the row: the sender went `font-medium text-fg` and the subject went
+ * `text-fg`, two marks for one fact, both of them a shade of grey you have to
+ * compare two rows to see.
+ *
+ * `rowStateClass` answers both. Selection gets its own ground (`row-sel`, a
+ * lightness above hover, so it stays lit while you read it) and unread gets the
+ * warm full-row wash (`row-new`, a hue, because "this arrived" is not a degree
+ * of "your pointer is here"). `active` is the helper's own synonym for
+ * `selected`, so this page keeps its vocabulary.
+ *
+ * The type then stops carrying unread and carries hierarchy instead: subject,
+ * sender, snippet, in that order, on every row. A read thread used to be two
+ * lines of one dim grey; now the line you scan is the line you can read.
+ */
 function ThreadRow({
   thread, active, multiAccount, onOpen,
 }: { thread: MailThread; active: boolean; multiAccount: boolean; onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      className={`w-full text-left py-2 border-b border-rule transition-colors
-        ${active ? 'bg-ink-800' : 'hover:bg-ink-800'}`}
+      aria-current={active ? 'true' : undefined}
+      className={`w-full text-left py-2 border-b border-rule
+        ${rowStateClass({ active, unseen: thread.unread })}`}
     >
       <div className="flex items-baseline gap-2">
-        {/* Weight, not a per-thread accent dot: an unread count of forty was
-            forty amber marks on one screen. */}
-        <span className={`text-sm truncate ${thread.unread ? 'text-fg font-medium' : 'text-fg-dim'}`}>
-          {displayName(thread.from)}
-        </span>
+        <span className="text-sm text-fg-dim truncate">{displayName(thread.from)}</span>
         {thread.messageCount > 1 && <span className="tnum text-sm text-fg-mute">{thread.messageCount}</span>}
         <span className="ml-auto tnum text-sm text-fg-mute shrink-0">{ago(thread.ts)}</span>
       </div>
-      <div className={`mt-0.5 text-sm truncate ${thread.unread ? 'text-fg' : 'text-fg-dim'}`}>
+      <div className="mt-0.5 text-sm text-fg truncate">
         {thread.subject}
       </div>
       <div className="mt-0.5 text-sm text-fg-mute truncate">

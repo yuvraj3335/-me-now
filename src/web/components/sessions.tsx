@@ -5,12 +5,15 @@
  * inside a hand-off — there was no way to see what is on the machine, which of
  * them is still running, or to get rid of one. This is that list.
  *
- * Two facts about the data shape it. Sessions are filed by the directory they
- * *started* in, flattened to dashes, and that encoding is lossy — so the
- * grouping key is the `cwd` the transcript recorded, never the filename. And
- * `turns` is counted from the tail the server read, not from the whole
- * transcript, so it renders as `turns in view` everywhere rather than as a
- * total nobody measured.
+ * Two facts about the data shape it. A session records the directory it ran in
+ * and nothing about what contains that directory — so the grouping key is the
+ * repository that `cwd` is *under*, out of the workspace registry, and never
+ * the directory itself and never the flattened filename it is stored beside.
+ * Where a session ran and which repository it is in are different questions,
+ * and answering the second with the first is what listed `web`, `plans` and
+ * `QA_EVIDENCE` as repositories. And `turns` is counted from the tail the
+ * server read, not from the whole transcript, so it renders as `turns in view`
+ * everywhere rather than as a total nobody measured.
  *
  * Three decisions shape the page itself.
  *
@@ -48,6 +51,7 @@ import { ago } from '../lib/time'
 import { toast } from '../lib/toast'
 import { setParam, useParams } from '../lib/route'
 import { launchApi, openLaunch, type Session } from '../lib/launch'
+import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
 
 /** Typed exactly, or the button stays disabled. */
 const CONFIRM_WORD = 'delete'
@@ -85,36 +89,58 @@ export const ALL_REPOS = 'all'
 /**
  * A session's repository, as an identity rather than as a name.
  *
- * The recorded `cwd` and not the basename: two directories can share a
- * basename, and grouping by it would silently merge `~/work/truto` with
- * `~/elsewhere/truto` into one heading. A session that never recorded a `cwd`
- * falls back to the flattened directory name it is filed under, which is what
- * the server does too — it is not a path and does not pretend to be one.
+ * A path and not the basename: two directories can share a basename, and
+ * grouping by it would silently merge `~/work/truto` with `~/elsewhere/truto`
+ * into one heading.
+ *
+ * `known` is the repositories that exist on this machine — the workspace
+ * registry, the same list the launch sheet's repository picker offers — and it
+ * is what turns *where a session ran* into *which repository it is in*. Without
+ * it the answer was the recorded directory itself, which made a repository out
+ * of every place work happens to have happened: `truto-app/packages/web` became
+ * a repository called `web`, `truto/.cursor/plans` one called `plans`, and
+ * `wake/QA_EVIDENCE` one called `QA_EVIDENCE`. None of those is a repository,
+ * and a picker that offers them is a picker that has invented four.
+ *
+ * With no registry read yet — the first paint, or a failed fetch — this is the
+ * old answer, which is a true statement about where the session ran and only an
+ * over-precise one about what contains it.
+ *
+ * A session that never recorded a `cwd` falls back to the flattened directory
+ * name it is filed under, which is what the server does too; `sessionInRepo`
+ * knows that spelling, so those rows fold into their repository like any other.
  */
-export const repoIdOf = (s: { cwd: string; project: string }): string => s.cwd || s.project
+export const repoIdOf = (
+  s: { cwd: string; project: string }, known: readonly string[] = [],
+): string => repoForSession(s, known) ?? (s.cwd || s.project)
 
 export type RepoChoice = { id: string; label: string; count: number }
 
 /**
  * The repositories that actually have sessions, most recently touched first.
  *
- * Built from the rows rather than from the workspace registry. The registry
- * knows about repositories with no sessions in them and does not know about the
- * places work happens anyway — `/tmp`, a worktree, somebody else's checkout —
- * and a picker that offers you empty repositories while hiding the session you
- * are looking for is worse than no picker.
+ * Counted from the rows and named from the registry, because each answers what
+ * the other cannot. The registry knows about repositories with no sessions in
+ * them, and a picker that offers you empty repositories while hiding the
+ * session you are looking for is worse than no picker. The rows know about the
+ * places work happens anyway — `/private/tmp/wake-ws/scratch` is a live example
+ * — and those keep their own entry rather than being filed under a repository
+ * they are not in.
  *
  * Insertion order is the server's order, which is newest first, so the first
  * entry is the repository the most recent session ran in. That is what the
  * page falls back to when nothing has been chosen.
  */
-export function repoList(rows: readonly Session[]): RepoChoice[] {
+export function repoList(rows: readonly Session[], known: readonly string[] = []): RepoChoice[] {
   const by = new Map<string, RepoChoice>()
   for (const s of rows) {
-    const id = repoIdOf(s)
+    const id = repoIdOf(s, known)
     const seen = by.get(id)
-    if (seen) seen.count++
-    else by.set(id, { id, label: s.project || s.cwd, count: 1 })
+    if (seen) { seen.count++; continue }
+    // The repository's own name when the registry placed it, and the session's
+    // own when nothing did — otherwise a `truto-app` group whose newest session
+    // ran in `packages/web` would be headed `web`.
+    by.set(id, { id, label: id === s.cwd ? s.project || s.cwd : id.split('/').pop() || id, count: 1 })
   }
   return [...by.values()]
 }
@@ -180,6 +206,19 @@ export function SessionsView() {
    */
   const [index, setIndex] = useState<Session[] | null>(null)
   const [scoped, setScoped] = useState<{ repo: string; rows: Session[] } | null>(null)
+  /**
+   * The repositories that exist on this machine, which is a different fact from
+   * the directories sessions ran in.
+   *
+   * Only the registry can tell `truto-app` from `truto-app/packages/web`, and
+   * without it this page made a repository of every directory it saw. It is the
+   * same list the launch sheet's repository picker offers, so the two surfaces
+   * cannot end up with different vocabularies for the word.
+   *
+   * A failure is not an error on this page: the rows are still true, they are
+   * simply grouped by where each one ran rather than by what contains it.
+   */
+  const [known, setKnown] = useState<string[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [doomed, setDoomed] = useState<Session | null>(null)
   const [peek, setPeek] = useState<Session | null>(null)
@@ -204,7 +243,15 @@ export function SessionsView() {
     return () => { alive = false }
   }, [reloads])
 
-  const repos = useMemo(() => repoList(index ?? []), [index])
+  useEffect(() => {
+    let alive = true
+    launchApi.state()
+      .then(d => { if (alive) setKnown(d.repos.map(r => r.path)) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  const repos = useMemo(() => repoList(index ?? [], known), [index, known])
   // Read once. A pick writes the URL as well as the store, and the URL wins, so
   // a stale read here can never outrank what he just chose.
   const remembered = useMemo(storedRepo, [])
@@ -232,7 +279,12 @@ export function SessionsView() {
     const all = index ?? []
     if (repo === ALL_REPOS) return all
     if (scoped?.repo === repo) return scoped.rows
-    return all.filter(s => repoIdOf(s) === repo)
+    // `sessionInRepo` and not `repoIdOf(s) === repo`, because this list has to
+    // be the same list the scoped answer replaces it with — and the server's
+    // filter is exact-or-under. Identity here would drop every subdirectory
+    // session for the second it takes the real answer to arrive, so the tiles
+    // would settle in rather than simply appear.
+    return all.filter(s => sessionInRepo(s, repo))
   }, [index, scoped, repo])
 
   const rows = useMemo(() => inRepo.filter(s => matchesView(s, view)), [inRepo, view])
@@ -282,12 +334,12 @@ export function SessionsView() {
   const groups = useMemo(() => {
     const by = new Map<string, Session[]>()
     for (const s of shown) {
-      const key = repoIdOf(s)
+      const key = repoIdOf(s, known)
       const list = by.get(key)
       list ? list.push(s) : by.set(key, [s])
     }
     return [...by.entries()]
-  }, [shown])
+  }, [shown, known])
 
   /**
    * The row the sheet is showing, looked up again rather than held.
@@ -348,7 +400,11 @@ export function SessionsView() {
               one chosen, the control at the top of the page already says it. */}
           {repo === ALL_REPOS && (
             <h2 className="text-eyebrow uppercase text-fg-mute pb-2">
-              {list[0]?.project || id}
+              {/* The repository's name, out of the same list the control above
+                  offers — not the newest row's own directory, which for a
+                  `truto-app` group whose newest session ran in
+                  `packages/web` would head the group `web`. */}
+              {repos.find(r => r.id === id)?.label || list[0]?.project || id}
             </h2>
           )}
           <ul className="grid gap-2 sm:grid-cols-2">

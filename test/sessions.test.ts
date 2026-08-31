@@ -5,9 +5,17 @@
  * Four things here are easy to break and impossible to notice: the directory a
  * session is filed under is a *lossy* encoding of where it ran, the list the
  * Sessions page renders must not be the newest-N-files list the card pile
- * wants, `?repo=` has to name one repository rather than four that share a
- * prefix, and deleting one removes files under `~/.claude` that nothing else in
- * this product touches.
+ * wants, `?repo=` has to name one repository and everything under it — never
+ * four that merely share a prefix, and never only the one exact directory —
+ * and deleting one removes files under `~/.claude` that nothing else in this
+ * product touches.
+ *
+ * That third one is the reason `sessionInRepo` is imported here from
+ * `src/shared/sessionRepo.ts` rather than restated. The server's filter and the
+ * browser's are the same function, and one test below asserts the server's
+ * answer *equals* what that function would have selected — because the last
+ * time these were two implementations they disagreed, and the Sessions page and
+ * the brief's session picker showed different sets for the same repository.
  *
  * Archive is the fifth, and it is a different kind of fact: Claude Code has no
  * archive, so it lives in Wake's database and is joined onto rows read off the
@@ -28,6 +36,7 @@ import { claudecode } from '../src/server/claudecode/router'
 import {
   ALL_REPOS, chooseRepo, matchesView, readView, repoIdOf, repoList,
 } from '../src/web/components/sessions'
+import { sessionInRepo } from '../src/shared/sessionRepo'
 
 const app = new Hono()
 app.route('/api/claude', claudecode)
@@ -72,6 +81,8 @@ const OLD_CWD = '/Users/me/work/truto-app'
 const OLD_PROJECT = flatten(OLD_CWD)
 /** `OLD_CWD` with its suffix removed — a real, different repository. */
 const PREFIX_CWD = '/Users/me/work/truto'
+/** A directory *inside* a repository, which is not itself one. */
+const INSIDE_CWD = `${PREFIX_CWD}/.cursor/plans`
 
 beforeAll(() => {
   // Own the fixture directory outright. Every caller in this file counts rows,
@@ -95,6 +106,11 @@ beforeAll(() => {
   // machine `truto`, `truto-app`, `truto-monitoring` and `truto-skills` all
   // live side by side under one parent.
   write(flatten(PREFIX_CWD), uuid(105), transcript(PREFIX_CWD, 'the shorter name'), 2)
+  // And a session from a directory inside that repository. Claude Code files it
+  // by its own path, so on the real machine it arrived as a repository called
+  // `plans` — which is the lie exact matching told after it cured the prefix
+  // one. It belongs to `truto`, and every surface has to say so.
+  write(flatten(INSIDE_CWD), uuid(106), transcript(INSIDE_CWD, 'inside the repo'), 3)
   // One that never recorded a cwd, so only the filename is left.
   write(OLD_PROJECT, uuid(102), transcript(null, 'no cwd recorded'), 2)
   // One Wake ran itself.
@@ -165,15 +181,33 @@ describe('which sessions are listed', () => {
 })
 
 describe('which repository a session is in', () => {
-  test('a repository is named exactly, not by prefix', () => {
+  test('a repository, and never one that merely reads like it', () => {
     // The live symptom this replaces: `?repo=truto` answered with `truto`,
     // `truto-app`, `truto-monitoring` and `truto-skills` — four of the five
     // repositories with sessions on the machine — because the filter was a
     // substring test over `cwd` and `project` joined together. A picker built
     // on that can narrow to everything or to nothing, never to one repository.
-    expect(listAllSessions({ repo: 'truto', limit: 500 }).map(s => s.id)).toEqual([uuid(105)])
-    expect(listAllSessions({ repo: PREFIX_CWD, limit: 500 }).map(s => s.id)).toEqual([uuid(105)])
+    expect(listAllSessions({ repo: PREFIX_CWD, limit: 500 }).map(s => s.id))
+      .not.toContain(uuid(101))
     expect(listAllSessions({ repo: 'truto-app', limit: 500 }).map(s => s.id)).toEqual([uuid(101)])
+  })
+
+  test('and everything under it, which is the other half of the same rule', () => {
+    // The cure for the prefix bug was an exact match on the recorded directory,
+    // and it went too far the other way: a session that ran in `.cursor/plans`
+    // stopped being one of `truto`'s and became a repository of its own. A
+    // subdirectory, a package, a worktree inside the checkout — all of them are
+    // sessions in that repository, which is what a person means by the phrase.
+    expect(listAllSessions({ repo: PREFIX_CWD, limit: 500 }).map(s => s.id))
+      .toEqual([uuid(105), uuid(106)])
+  })
+
+  test('a bare name answers for the repository, not for its subdirectories', () => {
+    // `?repo=truto` names a repository without saying which `truto`, so it can
+    // only be matched against the short name a session is listed under — and
+    // `plans` is not that name however plainly it sits inside the directory.
+    // The picker sends the path, which is why this reading is safe to keep.
+    expect(listAllSessions({ repo: 'truto', limit: 500 }).map(s => s.id)).toEqual([uuid(105)])
   })
 
   test('both real names for a place are accepted', () => {
@@ -186,16 +220,33 @@ describe('which repository a session is in', () => {
     expect(byName.map(s => s.id), 'the match stopped being case-insensitive').toEqual([uuid(100)])
   })
 
-  test('the id the picker sends is the id the server answers for', () => {
-    // The client derives a repository id from a row (`repoIdOf`) and hands it
-    // straight back as `?repo=`. If the two ever disagree about what names a
-    // place, every session in the picker leads to an empty list — and the one
-    // row that would prove it is the session that never recorded a `cwd`,
-    // whose id is a flattened directory name rather than a path.
-    const interesting = [uuid(101), uuid(102), uuid(105)]
-    const rows = listAllSessions({ limit: 500 }).filter(r => interesting.includes(r.id))
-    expect(rows).toHaveLength(3)
-    for (const row of rows) {
+  test('the server answers exactly what the browser would have filtered', () => {
+    // The one test that stops the two sides drifting apart again — which they
+    // did, in a single commit: the server matched the recorded directory
+    // exactly while the browser matched exact-or-under, so the Sessions page
+    // and the brief's session picker showed different sets for one repository.
+    //
+    // Set equality, not containment. Containment is what the old version of
+    // this test asserted, and it passes for a server that answers with every
+    // session on the machine just as happily as for one that answers correctly.
+    const rows = listAllSessions({ limit: 500 })
+    // Every id either side could be asked about: what the picker sends
+    // (`repoIdOf`), the short name a hand-typed `?repo=` uses, and the
+    // flattened filename of a transcript that recorded no directory.
+    const asked = new Set([...rows.flatMap(r => [repoIdOf(r), r.project, r.cwd])])
+    expect(asked.size).toBeGreaterThan(5)
+
+    for (const repo of asked) {
+      const server = listAllSessions({ repo, limit: 500 }).map(s => s.id)
+      const browser = rows.filter(r => sessionInRepo(r, repo)).map(s => s.id)
+      expect(server, `the two sides disagree about ${repo}`).toEqual(browser)
+    }
+  })
+
+  test('and every session can be found under the repository it is offered as', () => {
+    // The other direction: a row whose own id leads to a list without it in it
+    // is a tile you can see and a repository you cannot open.
+    for (const row of listAllSessions({ limit: 500 })) {
       expect(
         listAllSessions({ repo: repoIdOf(row), limit: 500 }).map(s => s.id),
         `${row.id} cannot be found under its own repository`,
@@ -319,6 +370,40 @@ describe('what the page shows, before it is rendered', () => {
     // Newest first, because that is what "the repository you were last in"
     // means and it is what the page falls back to.
     expect(repos[0]!.id).toBe('/Users/me/work/busy')
+  })
+
+  test('a directory inside a repository is not offered as one', () => {
+    // What the workspace registry is for on this page. Told which paths are
+    // repositories, the list stops inventing `plans` — and the session that
+    // ran there is counted under `truto`, where a person would look for it.
+    const rows = listAllSessions({ limit: 500 })
+    // Deliberately not every place in the fixture: `quiet` stands for the
+    // directories work happens in that the registry has never heard of.
+    const known = [PREFIX_CWD, OLD_CWD, '/Users/me/work/busy']
+    const repos = repoList(rows, known)
+
+    expect(repos.map(r => r.id), 'a subdirectory is being offered as a repository')
+      .not.toContain(INSIDE_CWD)
+    expect(repos.find(r => r.id === PREFIX_CWD)?.count, 'the session inside it was lost').toBe(2)
+    // Including the transcript that recorded no directory at all: its filed
+    // name is this repository's, flattened, and folding it in is the only way
+    // the picker stops offering `-Users-me-work-truto-app` as a place.
+    expect(repos.find(r => r.id === OLD_CWD)?.count).toBe(2)
+    expect(repos.map(r => r.id)).not.toContain(OLD_PROJECT)
+
+    // Still every session, and still exactly one repository each.
+    expect(repos.reduce((n, r) => n + r.count, 0)).toBe(rows.length)
+    // A place the registry has never heard of keeps its own entry rather than
+    // being filed under a repository it is not in.
+    expect(repos.map(r => r.id)).toContain('/Users/me/work/quiet')
+  })
+
+  test('a folded repository is named for itself, not for its newest session', () => {
+    const rows = listAllSessions({ limit: 500 })
+    // Only the inside-the-repo session, so the group's first row is the one
+    // whose own directory is `plans`. The heading has to read `truto`.
+    const inside = rows.filter(r => r.id === uuid(106))
+    expect(repoList(inside, [PREFIX_CWD])).toEqual([{ id: PREFIX_CWD, label: 'truto', count: 1 }])
   })
 
   test('the first paint is a repository, never the whole machine', () => {
