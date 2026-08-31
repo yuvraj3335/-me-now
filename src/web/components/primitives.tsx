@@ -558,7 +558,26 @@ export function Sheet({
   return createPortal(
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center">
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center
+                     pb-[var(--nav-h)] sm:pb-0"
+          /*
+            The strip the tab bar owns, kept clear on the phone.
+
+            A sheet is `z-50` and the bar is `z-30`, so a footer that reached the
+            bottom edge was still tappable — but it sat *over* all six
+            destinations, and "nothing may cover the tab bar" is a rule this
+            product already paid for once with the card detail. Reserving the
+            strip here rather than on the panel means the panel's own
+            `pad-bottom` is no longer needed below `sm`: `--nav-h` already
+            contains the home indicator, and adding both counted it twice.
+
+            When the keyboard is up it replaces the bar rather than joining it —
+            the bar is behind the keys either way, so paying for both would
+            push the sheet up by 53px of nothing.
+          */
+          style={{ paddingBottom: keyboard > 0 ? 0 : undefined }}
+        >
           <motion.div
             className="absolute inset-0 bg-scrim/70"
             initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
@@ -583,7 +602,7 @@ export function Sheet({
             */
             className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} bg-ink-850
                        border border-edge sm:rounded-panel rounded-t-panel
-                       max-h-[88dvh] flex flex-col pad-bottom`}
+                       max-h-[88dvh] flex flex-col`}
             /*
               The keyboard is lifted out of the panel's way rather than scrolled
               around. `marginBottom` moves the whole bottom-anchored panel up by
@@ -644,7 +663,7 @@ export function Sheet({
 
               The ground is painted explicitly rather than inherited, so the
               strip stays opaque over whatever is passing behind it, and the
-              panel's own `pad-bottom` carries the home indicator — which is why
+              overlay's `--nav-h` pad carries the home indicator — which is why
               this does not add a safe-area pad of its own and must not grow one:
               two would count the indicator twice.
 
