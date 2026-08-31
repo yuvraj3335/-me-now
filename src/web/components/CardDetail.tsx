@@ -41,8 +41,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
-  ArrowUpRight, Check, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
+  ArrowUpRight, Check, ChevronDown, Copy, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
 import type { Card, CardPriority, CardStatus } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
@@ -50,7 +51,8 @@ import { actions, reload } from '../lib/api'
 import { ago, wallClock } from '../lib/time'
 import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } from '../lib/thread'
 import { SOURCE_LABEL, SourceDot } from './sources'
-import { Button, DateField, Select } from './primitives'
+import { Button, DateTimePicker, Select } from './primitives'
+import { useStill } from '../lib/motion'
 import { cardKind, cleanChannel, KindGlyph } from './kinds'
 import { PriorityGlyph, StatusGlyph, isSettled } from './status'
 import { openTarget } from '../lib/appLinks'
@@ -74,8 +76,13 @@ export function CardDetail({
 }) {
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  /** The Due calendar's disclosure. Closed on every card — see the Due row. */
+  const [dueOpen, setDueOpen] = useState(false)
+  const still = useStill()
 
-  useEffect(() => { setCopied(false); setExpanded(false) }, [card.group_key])
+  useEffect(() => {
+    setCopied(false); setExpanded(false); setDueOpen(false)
+  }, [card.group_key])
 
   /**
    * The baseline this card was opened at, held still while it is open.
@@ -217,13 +224,77 @@ export function CardDetail({
               ariaLabel="Priority"
             />
           </Row>
+          {/*
+            The field is the disclosure, and the calendar is behind it.
+
+            This was a bare `<input type="datetime-local">`, which on a card with
+            no date renders as the literal string `dd/mm/yyyy, --:-- --` — on the
+            busiest surface in the product, in the pane that is open by default.
+            `DateTimePicker` is the answer in both sheets on Work and it is the
+            answer here. (`DateField`, the primitive that used to be here, stays:
+            the task detail pane on Work still calls it, and has the same defect
+            waiting for it.)
+
+            It is not expanded in place, though, and that is a decision about the
+            room rather than about the control. A month grid and a time is ~300px
+            tall; this pane is 320px wide at its narrowest and holds the facts,
+            the conversation and four actions under this row, and the field is
+            empty on almost every card. Standing open it would push the card off
+            the fold to ask a question nobody asked.
+
+            So the value states itself where it always did — visible without
+            being pressed, which is the promise this pane makes about status,
+            priority and due — and pressing it unfolds the real calendar
+            full-width directly underneath, inside the pane. Nothing about that
+            is a menu: what the press reveals is the *control*, not the choice,
+            and it is one press with nothing to get out of.
+          */}
           <Row label="Due">
-            <DateField
-              value={card.due_at}
-              onChange={at => void run(() => actions.setDue(card.group_key, at))}
-              ariaLabel="Due date"
-            />
+            <button
+              type="button"
+              onClick={() => setDueOpen(v => !v)}
+              aria-expanded={dueOpen}
+              aria-label={`Due date — ${card.due_at === null ? 'none set' : wallClock(card.due_at)}`}
+              title={card.due_at === null ? undefined : wallClock(card.due_at)}
+              className="hit relative w-full inline-flex items-center justify-between gap-2
+                         h-8 px-2 rounded-control border border-edge text-sm font-medium
+                         text-fg-dim hover:text-fg hover:bg-ink-800
+                         transition-colors duration-100"
+            >
+              {/* The pane's own words for a time — the same `wallClock` the
+                  facts below print `When` with, so the card does not grow a
+                  second vocabulary for the same kind of fact. It truncates at
+                  the 320px floor and carries the full string on `title`. */}
+              <span className={`truncate ${card.due_at === null ? 'text-fg-mute' : ''}`}>
+                {card.due_at === null ? 'No date' : wallClock(card.due_at)}
+              </span>
+              <ChevronDown size={13} aria-hidden
+                className={`shrink-0 transition-transform duration-100 ${dueOpen ? 'rotate-180' : ''}`} />
+            </button>
           </Row>
+          {/* Outside the `Row`, because a `Row` is a fixed 44px line and the
+              calendar wants the pane's whole width — seven cells across 272px is
+              the difference between a usable grid and a decorative one. */}
+          <AnimatePresence initial={false}>
+            {dueOpen && (
+              <motion.div
+                key="due-picker"
+                initial={still ? false : { height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={still ? undefined : { height: 0, opacity: 0 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
+                className="overflow-hidden border-t border-rule"
+              >
+                <div className="py-3">
+                  <DateTimePicker
+                    value={card.due_at}
+                    onChange={at => void run(() => actions.setDue(card.group_key, at))}
+                    ariaLabel="Due date"
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <Row label="Pin">
             <Button size="sm" variant={card.state?.pinned ? 'secondary' : 'ghost'}
               onClick={() => void run(() => actions.pin(card.group_key, !card.state?.pinned))}>

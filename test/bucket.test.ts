@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
 import { bucketOf, bucketsOf, inBucket, pipesFor } from '../src/web/lib/bucket'
-import { cardKind, contextLine, waitingOn } from '../src/web/components/kinds'
+import { cardKind, contextLine, senderOrg, waitingOn } from '../src/web/components/kinds'
 import type { Card, CardSource, SourceName } from '../src/web/lib/types'
 
 /** A member of a group, with only the fields the bucket is allowed to read. */
@@ -379,18 +379,14 @@ describe('a phone row says which customer and which person', () => {
 
   test('the sources with no channel answer in their own vocabulary', () => {
     // The half that differs, in each case: the repository rather than its owner,
-    // the mailbox rather than its domain, the project as it is.
+    // the project as it is. Mail is not in this list any more — it has a
+    // describe of its own below, because the mailbox turned out to be the one
+    // "own vocabulary" that says nothing.
     const gh = card({
       who: 'Nihar',
       sources: [member({ source: 'github', kind: 'review', meta: { repo: 'trutohq/truto-app' } })],
     })
     expect(contextLine(gh)).toBe('Truto-app — Nihar')
-
-    const mail = card({
-      who: 'Aman',
-      sources: [member({ source: 'gmail', kind: 'email', account: 'yuvraj@truto.one', meta: {} })],
-    })
-    expect(contextLine(mail)).toBe('Yuvraj — Aman')
 
     const session = card({
       sources: [member({ source: 'claude', kind: 'session', meta: { project: 'truto' } })],
@@ -426,5 +422,129 @@ describe('a phone row says which customer and which person', () => {
   test('and a row with neither renders nothing rather than a guess', () => {
     const c = card({ who: null, actor: null, sources: [member({ source: 'slack', kind: 'thread' })] })
     expect(contextLine(c)).toBeNull()
+  })
+})
+
+/* ---------------------------------- mail ---------------------------------- */
+
+/**
+ * Twenty-nine rows on the deployed desk read `Yuvraj — <an address>`.
+ *
+ * `Yuvraj` is the mailbox — his own name, identical on every one of them — so
+ * the half of the line that names a customer named nobody, and the half beside
+ * it was a raw envelope address clipped from the wrong end by CSS. What survived
+ * a 375px screen was `Yuvraj — noreply@md.get…`: 132px spent on his own name and
+ * a prefix.
+ */
+describe('a mail row names the sender, not the mailbox', () => {
+  /** The Gmail adapter writes one string into `actor` and `who` alike. */
+  const mail = (from: string | null) =>
+    card({
+      who: from,
+      actor: from,
+      kind: 'email',
+      sources: [member({
+        source: 'gmail', kind: 'email', account: 'yuvraj@truto.one',
+        who: from, actor: from, meta: { account: 'yuvraj@truto.one' },
+      })],
+    })
+
+  test('the mailbox is never on the line', () => {
+    for (const from of ['Aman', 'noreply@md.getsentry.com', 'notify@mail.notion.so']) {
+      expect(contextLine(mail(from)), `${from}: his own mailbox came back`)
+        .not.toMatch(/Yuvraj|truto\.one/i)
+    }
+  })
+
+  test('a display name is the answer, untouched', () => {
+    expect(contextLine(mail('Aman'))).toBe('Aman')
+    // Decoded upstream by `parseAddress`; nothing here re-cases or re-cuts it.
+    expect(contextLine(mail('Burns & McDonnell'))).toBe('Burns & McDonnell')
+    // A name that happens to hold an `@` is still a name — the naive test for
+    // "is this an address" would have swapped this for a domain it does not have.
+    expect(contextLine(mail('Sales @ Acme'))).toBe('Sales @ Acme')
+  })
+
+  test('an address answers with the organisation its domain names', () => {
+    // The four live rows, verbatim off the deployed desk.
+    expect(contextLine(mail('noreply@md.getsentry.com'))).toBe('Sentry')
+    expect(contextLine(mail('notify@mail.notion.so'))).toBe('Notion')
+    expect(contextLine(mail('support@e.read.ai'))).toBe('Read')
+    expect(contextLine(mail('noreply@mailer.truto.one'))).toBe('Truto')
+  })
+
+  test('the transport subdomain falls out and the public suffix stays a suffix', () => {
+    expect(senderOrg('a@spendflo.com')).toBe('Spendflo')
+    expect(senderOrg('a@em.sprinto.com')).toBe('Sprinto')
+    expect(senderOrg('a@mail.monzo.co.uk')).toBe('Monzo')
+  })
+
+  test('`get<brand>` is a convention, not a name — but only when a word is left', () => {
+    expect(senderOrg('a@getsentry.com')).toBe('Sentry')
+    expect(senderOrg('a@getharvest.com')).toBe('Harvest')
+    // Three letters and a two-letter tail is a name, not a convention.
+    expect(senderOrg('a@getty.com')).toBe('Getty')
+  })
+
+  test('a mailbox host is not an organisation', () => {
+    // `Gmail` would be the column's background printed, and it would also be
+    // untrue: Gmail did not send the mail, a person did.
+    expect(senderOrg('someone@gmail.com')).toBeNull()
+    expect(contextLine(mail('someone@gmail.com'))).toBeNull()
+  })
+
+  test('and an unknown sender is nothing, rather than his own address', () => {
+    expect(contextLine(mail(null))).toBeNull()
+  })
+})
+
+/* ------------------------- who the actor stands for ----------------------- */
+
+/**
+ * The `actor` fallback used to be general, and `actor` is not a person on three
+ * of the five sources. Both rows below were live.
+ */
+describe('the fallback to `actor` belongs to a Slack conversation', () => {
+  test('his own pull request stops printing his own login', () => {
+    // The GitHub adapter fills `who` itself and leaves it empty *precisely* when
+    // the author is him — so on `is:pr author:me` the fallback answered "who is
+    // waiting on me" with `yuvraj3335`.
+    const mine = card({
+      who: null,
+      actor: 'yuvraj3335',
+      kind: 'my_pr',
+      sources: [member({
+        source: 'github', kind: 'my_pr', actor: 'yuvraj3335',
+        meta: { repo: 'trutohq/truto-app', is_pr: true },
+      })],
+    })
+    expect(waitingOn(mine)).toBeNull()
+    expect(contextLine(mine)).toBe('Truto-app')
+  })
+
+  test('a Sentry issue does not print its project twice', () => {
+    // `actor` on a Sentry card is the project slug — the same fact `whereOf`
+    // already answers with — so the cell drew `Truto-api — truto-api`.
+    const issue = card({
+      who: null,
+      actor: 'truto-api',
+      kind: 'error',
+      sources: [member({
+        source: 'sentry', kind: 'error', actor: 'truto-api',
+        meta: { project: 'truto-api', short_id: 'TRUTO-39' },
+      })],
+    })
+    expect(waitingOn(issue)).toBeNull()
+    expect(contextLine(issue)).toBe('Truto-api')
+  })
+
+  test('and a Slack thread still falls back to whoever spoke', () => {
+    const c = card({
+      who: null,
+      actor: 'Roopi',
+      sources: [member({ source: 'slack', kind: 'thread', actor: 'Roopi',
+        meta: { channel: '#15five-truto' } })],
+    })
+    expect(waitingOn(c)).toBe('Roopi')
   })
 })

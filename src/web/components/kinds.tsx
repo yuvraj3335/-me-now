@@ -234,21 +234,140 @@ const shortName = (v: string) => {
   return tail.charAt(0).toUpperCase() + tail.slice(1)
 }
 
+/* ---------------------------------- mail ---------------------------------- */
+
+/**
+ * Hosts that carry mail rather than send it.
+ *
+ * `gmail.com` is the mailbox a person happens to keep, in exactly the way
+ * `truto` is the workspace every channel is named after: on a row it is the
+ * column's background, printed. Worse than redundant, it would be untrue —
+ * Gmail did not send the mail, a person did — so these answer with nothing and
+ * whatever display name the envelope carried speaks on its own.
+ */
+const MAILBOX_HOSTS = new Set([
+  'gmail', 'googlemail', 'outlook', 'hotmail', 'live', 'msn',
+  'yahoo', 'ymail', 'icloud', 'me', 'mac', 'aol',
+  'proton', 'protonmail', 'gmx', 'zoho', 'fastmail',
+])
+
+/**
+ * Labels a registry owns rather than a company: the `co` of `co.uk`.
+ *
+ * There is no public-suffix list in this bundle and there must not be — it is a
+ * megabyte to answer a question this file asks about four domains. The rule
+ * below wants the label in front of the suffix, and the suffix is two labels
+ * deep on exactly these, so this is the whole of the correction.
+ */
+const REGISTRY_LABELS = new Set(['co', 'com', 'net', 'org', 'edu', 'gov', 'ac', 'or', 'ne'])
+
+/**
+ * The organisation behind an address, from its domain.
+ *
+ * A sending organisation is carried by its domain far better than by the local
+ * part: `noreply`, `notify` and `support` are the same three words on everyone's
+ * mail, while `md.getsentry.com`, `mail.notion.so` and `mailer.truto.one` each
+ * name a company. Taking the registrable label — the one in front of the public
+ * suffix — throws the transport subdomain away for free, which is most of what
+ * an envelope address is made of.
+ *
+ * `get<brand>` is undone because it is a convention rather than a name:
+ * `getsentry.com` is Sentry's own domain and `getharvest.com` is Harvest's,
+ * which is what a company does when it never owned `<brand>.com`. The tail has
+ * to be a word in its own right — four letters — or `getty` reads as `ty`. It is
+ * not free, and the cost is worth stating: `getaround.com` and `getresponse.com`
+ * are brands whose *own* name begins with those three letters, and they come out
+ * as `Around` and `Response`. Both are still a label a person can read, which is
+ * more than the address they replace was.
+ */
+export function senderOrg(address: string): string | null {
+  const host = address.split('@').pop()!.trim().toLowerCase().replace(/[.>]+$/, '')
+  const labels = host.split('.').filter(Boolean)
+  if (labels.length < 2) return null
+
+  let i = labels.length - 2
+  if (i > 0 && REGISTRY_LABELS.has(labels[i]!)) i -= 1
+
+  let name = labels[i]!
+  if (MAILBOX_HOSTS.has(name)) return null
+  if (/^get[a-z]{4,}$/.test(name)) name = name.slice(3)
+
+  // One capitalisation rule for the whole column: `spendflo` is a slug and
+  // `Spendflo` is a customer, and `shortName` is where that is decided.
+  return shortName(name)
+}
+
+/**
+ * An address rather than a name.
+ *
+ * Not `includes('@')`, which is the obvious version and is wrong on a real
+ * display name: `Sales @ Acme` is a person's own words and would be thrown away
+ * for a domain it does not have. An address has no spaces and its domain has a
+ * dot, and both halves of that are needed — the space rules the display name
+ * back in, and the dot is what makes `senderOrg` have something to answer with.
+ */
+const looksLikeAddress = (v: string) => /^\S+@\S+\.\S+$/.test(v)
+
+/**
+ * Who a mail row is from, in words.
+ *
+ * The Gmail adapter writes `nameOf(sender)` into both `actor` and `who`, and
+ * `nameOf` falls back to the bare address when the envelope carried no display
+ * name — so an address arriving here is not somebody's name, it is the *absence*
+ * of one, and that is the whole of the signal needed to tell the two apart.
+ *
+ * A display name is the honest answer and is returned untouched. An address is
+ * not an answer at all: it is the essay this column exists to not print, and it
+ * clips from the wrong end, so it is replaced by the organisation its domain
+ * names. Where the domain names nothing worth saying — a personal mailbox host —
+ * the line is empty, which is what "we do not know who sent this" looks like.
+ * His own mailbox is never the answer; it is on every one of them.
+ */
+export function mailFrom(who: string | null): string | null {
+  if (!who) return null
+  return looksLikeAddress(who) ? senderOrg(who) : who
+}
+
 /**
  * Who this row is about, or null when nobody is.
  *
  * `who` is the person waiting on him and it is the right answer whenever there
- * is one. `actor` is the fallback and it is only reachable on a conversation:
- * on an alert the actor is the bot that posted it, so `Sentry-alerts — Sentry`
- * would be the row telling him the same thing twice and calling a monitor a
- * person. The adapters already write `who: undefined` on every alert; this does
- * not depend on their having remembered to.
+ * is one. The fallback to `actor` is where this got interesting, because it used
+ * to be general and `actor` is not: it is whatever the source calls the thing
+ * that produced the row, and exactly one source puts a *person* there that `who`
+ * might have missed.
+ *
+ *   * **Slack** is the one that can: its `actor` is the thread's parent author,
+ *     who is a person, so a group whose card-level `who` did not survive the
+ *     merge still has one sitting beside it. That is the path `15five — Roopi`
+ *     takes. Not on an alert, though: there the actor is the bot that posted it,
+ *     and `Sentry-alerts — Sentry` is the row telling him the same thing twice
+ *     and calling a monitor a person. And one case is still wrong and cannot be
+ *     fixed here — a thread *he* started that never named him writes
+ *     `who: undefined` precisely because the author is him, and nothing in the
+ *     browser knows which of the five names on the desk is his. That belongs on
+ *     the server, where `me` actually is.
+ *   * **Sentry** puts a project slug there, and its own adapter says why in as
+ *     many words: nobody is waiting on a Sentry issue, it is waiting on him.
+ *     Fallen back to, it printed `Truto-api — truto-api` — one fact, twice, in
+ *     two capitalisations, in a 132px cell.
+ *   * **GitHub** fills `who` itself and leaves it empty *precisely when the
+ *     author is him*, so on `is:pr author:me` the fallback answered "who is
+ *     waiting on me" with his own login.
+ *   * **Gmail** and **Claude Code** lose nothing by being excluded: mail's actor
+ *     is byte-identical to its `who`, and a session has no actor at all.
+ *
+ * So the fallback belongs to a Slack conversation and to nothing else. It is
+ * asked of `bucketOf` rather than of `lead.source` for the reason `cardKind` is:
+ * a Sentry issue that arrived through `#sentry-alerts` is a Sentry row.
  */
 export function waitingOn(card: Card): string | null {
   if (card.who) return card.who
   const lead = card.sources[0]
-  if (card.kind === 'alert' || lead?.kind === 'alert') return null
-  return card.actor ?? lead?.actor ?? null
+  if (!lead) return null
+  if (bucketOf(lead) !== 'slack') return null
+  if (card.kind === 'alert' || lead.kind === 'alert') return null
+  return card.actor ?? lead.actor ?? null
 }
 
 /**
@@ -261,16 +380,36 @@ export function waitingOn(card: Card): string | null {
  * cell, and a string that truncates carries less than a shorter true one.
  *
  * So: the context in its own system's vocabulary, shortened to the part that
- * differs, paired with the person. Every source answers — Slack the channel,
- * GitHub the repository, Sentry and Claude the project, Gmail the mailbox it
- * landed in — because `whereOf` already answers for all five. Either half may be
- * missing and the line is then just the other one; both missing is `null`, and
- * the cell decides what nothing looks like.
+ * differs, paired with the person. Slack answers with the channel, GitHub with
+ * the repository, Sentry and Claude with the project, because `whereOf` already
+ * answers for all four. Either half may be missing and the line is then just the
+ * other one; both missing is `null`, and the cell decides what nothing looks
+ * like.
+ *
+ * **Mail is the exception, and it earned one on the live desk.** `whereOf`
+ * answers a Gmail row with the mailbox it landed in, and the mailbox is his own
+ * address — the same word on all twenty-nine of them, so the half of the line
+ * that is supposed to name a customer named nobody, while the half beside it was
+ * a raw envelope address clipped from the wrong end. Four real rows read
+ * `Yuvraj — noreply@md.get…`, `Yuvraj — notify@mail.notio…`, and so on: 132px
+ * spent saying his own name and a prefix. A mail row says who sent it instead —
+ * see `mailFrom` — and there is no customer half to pair it with, because the
+ * only address on a mail card is the sender's own and it is spent naming them.
  */
 export function contextLine(card: Card): string | null {
-  const where = whereOf(card.sources[0], card)
-  const customer = where ? shortName(where) : null
+  const lead = card.sources[0]
   const who = waitingOn(card)
+
+  // `bucketOf`, not `lead.source`, for the reason `cardKind` asks it: the line
+  // and the glyph beside it have to be answering about the same row.
+  if (lead && bucketOf(lead) === 'gmail') {
+    // The group's own `who` first — on a merged card that is the better answer —
+    // then the mail member's, which is where a sender actually lives.
+    return mailFrom(who ?? lead.who ?? lead.actor ?? null)
+  }
+
+  const where = whereOf(lead, card)
+  const customer = where ? shortName(where) : null
   if (customer && who) return `${customer} — ${who}`
   return customer ?? who ?? null
 }
