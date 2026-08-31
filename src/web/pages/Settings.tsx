@@ -161,7 +161,21 @@ export function Settings() {
         <Row label="GitHub" value={over?.identity.github ?? '—'} mono />
       </Section>
 
-      <Section title="Sources">
+      {/*
+        The number in this section is `sync_runs.count` — the rows the source's
+        last poll returned, before dedup and before anything reached the desk.
+        Three pages print a number per source and none of them said which
+        number: Settings `Slack 56 · GitHub 4 · Gmail 30 · Sentry 17 · Claude
+        Code 21`, Pulse `37 · 4 · 29 · 12 · 17`, the desk's tabs `14 · 5 · 29 ·
+        35 · 18`. They are three different true measures and they read as one
+        measure disagreeing three ways.
+
+        The noun is said here rather than on each row because the row has no
+        room for it: `synced 1m · 30 fetched · auth 22m` needs 205px of a
+        159px column at 375, and the fact it would push out is the auth age,
+        which is the one thing `synced` cannot tell you.
+      */}
+      <Section title="Sources" note="the number is what the last sync fetched">
         {sourcesError && !sources.length && (
           <Row label="Sources" value={sourcesError} tone="warn" />
         )}
@@ -218,15 +232,25 @@ export function Settings() {
             : '…'}
           title={truto?.profiles.join(' · ')}
         />
+        {/* `0 notes · 0 B` is the same nothing said twice — Work's recorder
+            already drops the size under an empty list, and this row is the same
+            fact about the same store. */}
         <Row
           label="Voice"
           value={over
-            ? `${recordingSupported() ? 'microphone available' : 'no microphone'} · ${over.voice.storage.count} note${over.voice.storage.count === 1 ? '' : 's'} · ${fmtBytes(over.voice.storage.bytes)}`
+            ? [
+              recordingSupported() ? 'microphone available' : 'no microphone',
+              `${over.voice.storage.count} note${over.voice.storage.count === 1 ? '' : 's'}`,
+              ...(over.voice.storage.count ? [fmtBytes(over.voice.storage.bytes)] : []),
+            ].join(' · ')
             : '—'}
         />
       </Section>
 
-      <Section title="Audit">
+      {/* An `AUDIT` eyebrow over a single row reading `Audit trail` is one word
+          printed twice, eleven pixels apart. A section heading earns its line by
+          grouping rows; this is one row, and it says what it opens. */}
+      <section className="mt-6">
         <button
           onClick={() => setAudit(true)}
           className="w-full flex items-center h-11 border-b border-rule text-left text-base text-fg-dim
@@ -235,7 +259,7 @@ export function Settings() {
           <span className="grow">Audit trail</span>
           <ChevronRight size={14} className="text-fg-mute" />
         </button>
-      </Section>
+      </section>
 
       <AuditSheet open={audit} onClose={() => setAudit(false)} />
       <ClientSheet
@@ -250,22 +274,54 @@ export function Settings() {
 
 /* -------------------------------- pieces ---------------------------------- */
 
-/** An eyebrow and rows. There is no wrapper, because there is no card. */
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/**
+ * An eyebrow and rows. There is no wrapper, because there is no card.
+ *
+ * `note` is a caption on the heading's own line, not a paragraph under it: it
+ * names the unit the rows below are counted in, which is a fact about the whole
+ * section and would be a lie repeated N times if it rode each row. It drops the
+ * eyebrow's uppercase and letter-spacing, because it is a sentence and those
+ * are for a label.
+ */
+function Section({
+  title, note, children,
+}: { title: string; note?: string; children: React.ReactNode }) {
   return (
     <section className="mt-6 first:mt-0">
-      <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{title}</h2>
+      <h2 className="text-eyebrow uppercase text-fg-mute mb-2">
+        {title}
+        {note && <span className="normal-case tracking-normal"> — {note}</span>}
+      </h2>
       {children}
     </section>
   )
 }
 
 /**
- * One 44px row: label at the page's x, value at x + 96, action right-aligned.
+ * One 44px row: label at the page's x, value at x + 92, action right-aligned.
  *
  * `Row` used a 112px label column while the Sources rows used 96 and the Mail
  * row had none at all, which is how one page came to have three label x and
  * three value x — two of them two pixels apart.
+ *
+ * 92 rather than 96, and the action's left pad 8 rather than 12 — four pixels
+ * each, and the eight together are the difference between Gmail's status being
+ * readable on a phone and not. Measured at 375: `synced 1m · 30 ·
+ * auth 22m` wants 156px, the value column was 151, and the row shipped reading
+ * `…auth 2…` — the auth age is last on the line and it is the one fact
+ * `synced` cannot carry, so it was the fact being lost. The column is 159 now.
+ *
+ * Nothing else in the row had eight pixels to give. 343px of phone holds an
+ * 84px `Disconnect` that cannot shrink, and `Claude Code` — the widest label on
+ * the page at 76px — needs the column it is in. The air between the end of that
+ * label and the start of the value is bought back from the source dot beside
+ * it, 5px rather than 6, and the gap after it, 6 rather than 8: measured, it is
+ * 5px where it was 6. A straight `w-24 → w-23` would have left 1px, and two
+ * words in two columns separated by less than a space read as one word.
+ *
+ * 159 is the ceiling and it is not enough for everything: `synced 59m · 128 ·
+ * auth 59m` is 172px and still truncates on a phone. Past this, the row has to
+ * say less rather than be given more.
  */
 function Row({
   label, value, tone, mono, action, title,
@@ -278,12 +334,12 @@ function Row({
   const colour = tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : tone === 'warn' ? 'text-warn' : 'text-fg-dim'
   return (
     <div className="flex items-center h-11 border-b border-rule min-w-0">
-      <span className="text-sm text-fg-mute w-24 shrink-0">{label}</span>
+      <span className="text-sm text-fg-mute w-23 shrink-0">{label}</span>
       <span className={`text-sm truncate min-w-0 grow ${colour} ${mono ? 'font-mono' : ''}`}
         title={title ?? value}>
         {value}
       </span>
-      {action && <span className="shrink-0 pl-3">{action}</span>}
+      {action && <span className="shrink-0 pl-2">{action}</span>}
     </div>
   )
 }
@@ -331,8 +387,12 @@ function SourceRow({
   return (
     <>
       <div className="flex items-center h-11 border-b border-rule min-w-0">
-        <span className="w-24 shrink-0 flex items-center gap-2 min-w-0">
-          <SourceDot source={s.name} size={6} />
+        {/* 5px and `gap-1.5`, against the page's usual 6 and 8: this is the
+            only label column with a mark in front of it, and those three pixels
+            are what keep `Claude Code` from touching the value beside it in a
+            column that has been narrowed to fit the value. */}
+        <span className="w-23 shrink-0 flex items-center gap-1.5 min-w-0">
+          <SourceDot source={s.name} size={5} />
           <span className="text-sm truncate">{SOURCE_LABEL[s.name]}</span>
         </span>
         <span className={`text-sm truncate min-w-0 grow ${word.tone}`} title={s.detail || word.text}>
@@ -341,7 +401,7 @@ function SourceRow({
         </span>
         {link && (
           <a href={link} target="_blank" rel="noreferrer"
-            className="shrink-0 pl-3 inline-flex items-center gap-1 text-sm text-fg-mute
+            className="shrink-0 pl-2 inline-flex items-center gap-1 text-sm text-fg-mute
                        hover:text-fg-dim transition-colors duration-100"
             title={link}>
             fix <ExternalLink size={13} />
@@ -352,8 +412,8 @@ function SourceRow({
             client id they just pasted — it is Reconnect, which starts OAuth
             again against the same app. A source Wake cannot obtain a
             credential for offers nothing at all. */}
-        {s.oauthable && s.connectable && (
-          <span className="shrink-0 pl-3">
+        {s.oauthable && s.connectable ? (
+          <span className="shrink-0 pl-2">
             <Button size="sm" variant="ghost" disabled={busy}
               onClick={() => (s.hasWakeToken && s.ok && !s.lastAuthError ? onDisconnect() : onConnect())}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : null}
@@ -361,6 +421,28 @@ function SourceRow({
                   nothing left to disconnect — the honest offer is Connect. */}
               {!s.hasWakeToken ? 'Connect' : s.lastAuthError ? 'Reconnect' : s.ok ? 'Disconnect' : 'Reconnect'}
             </Button>
+          </span>
+        ) : (
+          /*
+            The two sources that are not grants say so, rather than ending in
+            whitespace.
+
+            Slack, Gmail and Sentry end in `Disconnect`; GitHub and Claude Code
+            ended in nothing at all, three rows apart in the same column, and the
+            reason — that there is no token of Wake's to revoke, because GitHub
+            comes from the `gh` login on this box and Claude Code from
+            transcripts on its disk — was true, sound, and nowhere on the page.
+            A reader with an empty cell has to guess between "not applicable"
+            and "broken", and one of those guesses sends them looking for a
+            button that should not exist.
+
+            Muted text at the weight of the ghost buttons above it, so the
+            column reads as one column, and deliberately not a control: there is
+            nothing here to press.
+          */
+          <span className="shrink-0 pl-2 text-sm text-fg-mute"
+            title="Not an OAuth grant — Wake reads this from your own machine, so there is nothing to disconnect">
+            this machine
           </span>
         )}
       </div>
@@ -384,10 +466,11 @@ function SourceRow({
  * you would search for. See DECISIONS.md #36.
  *
  * `not connected` means no credential from any link in the chain. `sync failed`
- * means a credential that was accepted and a poll that was not. `synced` needs
- * `ok`, `connected` and a count. The row used to answer `not connected` for a
- * Slack holding a real, accepted token — flatly wrong, and the opposite of what
- * the footer on the desk said about the same source in the same second.
+ * means a credential that was accepted and a poll that was not. `synced`
+ * needs `ok`, `connected` and a count. The row used to answer `not connected`
+ * for a Slack holding a real, accepted token — flatly wrong, and the opposite
+ * of what the footer on the desk said about the same source in the same
+ * second.
  *
  * `detail` is the slot beside the word. A working source spends it on when the
  * credential last actually authenticated, which is the fact `ok` cannot carry:
@@ -407,6 +490,13 @@ export function stateWord(s: SourceStatus): { text: string; tone: string; detail
   // this page that has none — `synced now · 30 · auth ok 3m` needed 174px of a
   // 151px slot at 375, and the truncation ate the auth fact, which is the one
   // thing here `synced` cannot already tell you.
+  //
+  // The same 20px argument reaches the end of `synced` itself, and stops there.
+  // `sync 1m · 30 · auth 22m` is 141px against this string's 156, which is the
+  // difference between fitting a 59-minute-old poll of 128 rows on a phone and
+  // not — but the word is asserted literally by `test/settings-state.test.ts`,
+  // which is not a file this pass owns. The eight pixels came out of the row's
+  // geometry instead; see `Row`.
   const authOk = s.lastAuthOkAt ? `auth ${ago(s.lastAuthOkAt)}` : undefined
   if ((s.lastSync && !s.lastSync.ok) || (s.hasWakeToken && !s.ok)) {
     return { text: 'sync failed', tone: 'text-warn' }
@@ -545,6 +635,15 @@ function ClientSheet({
  * 80px of text in 76px of column, ellipsised to `System · li…`. The resolution
  * is the whole reason this row has a value, and Light and Dark resolve to
  * themselves — they get no value at all rather than an echo of the button.
+ *
+ * That left `Theme  light  [System | Light | Dark]` with System pressed, which
+ * is a row that contradicts itself read cold: the value says one word and the
+ * control says another, and nothing on the line says the first is a
+ * *consequence* of the second. `now` is the whole fix — one word that turns a
+ * setting into an observation — and the sentence that spells it out appears
+ * where there is room for it and not where there is not. Measured: the value
+ * column is 67px at 375 and `light now` is 54 of it; the whole sentence is
+ * 192px and the column that has to hold it is 316 at `sm`.
  */
 function ThemeChoice() {
   const { theme, resolved, set } = useTheme()
@@ -555,9 +654,14 @@ function ThemeChoice() {
   ]
   return (
     <div className="flex items-center h-11 border-b border-rule">
-      <span className="text-sm text-fg-mute w-24 shrink-0">Theme</span>
+      <span className="text-sm text-fg-mute w-23 shrink-0">Theme</span>
       <span className="text-sm text-fg-dim grow truncate">
-        {theme === 'system' ? resolved : ''}
+        {theme === 'system' && (
+          <>
+            <span className="hidden sm:inline">following your system · </span>
+            {resolved} now
+          </>
+        )}
       </span>
       <Segmented options={options} value={theme} onChange={set} ariaLabel="Theme" />
     </div>

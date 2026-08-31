@@ -39,8 +39,18 @@ type Scope = SourceName | 'all'
 /** What either control on the header row answers with when it is done. */
 export type ResultLine = { text: string; title?: string }
 
-/** Tailwind's `sm`: the width at which the header row can afford a sentence. */
-const ROOM_FOR_A_SENTENCE = '(min-width: 40rem)'
+/**
+ * Tailwind's `lg`: the width at which the header row can afford a sentence.
+ *
+ * It used to be `sm`, and 640px is not enough room — measured rather than
+ * guessed. *Two* controls sit on this row and each has an answer of its own,
+ * and each answer is a full sentence: `Slack synced 55 · 0 new · 11:55am` is 33
+ * characters, `Fetched 12 · 3 new · 11:55am` is 28. Two of those plus two
+ * labelled buttons plus the page title need about 850px, so between 640 and
+ * 1024 both lines were squeezed until each was truncating the timestamp that is
+ * the point of it. Below this width the answer is a toast, in full.
+ */
+const ROOM_FOR_A_SENTENCE = '(min-width: 64rem)'
 
 /**
  * The answer, on every width — used by Sync and by Fetch, from one place.
@@ -205,21 +215,40 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
     + 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'
 
   return (
-    <span className="flex items-center gap-3 shrink-0">
+    <span className="flex items-center gap-3 min-w-0">
       {/* Capped rather than free, because Fetch's own line sits on this row too
           and an uncapped one pushes the other control sideways as it lands. The
-          whole of it is on `title`. Below `sm` this span is not rendered at all
-          and the same sentence is a toast — see `useResultLine`. */}
+          cap is 34ch because the line this control always produces is 33 —
+          `Slack synced 55 · 0 new · 11:55am` — and at the old 22 it truncated
+          its own timestamp on every single press. Anything longer than the
+          usual sentence still elides, and the whole of it is on `title`.
+
+          The line is also the half of this row that gives way. It may shrink
+          (`min-w-0` here and on the wrapper above), the two controls may not
+          (`shrink-0` on each), so a long answer landing in a narrow header
+          truncates itself rather than pushing a button off the screen — which
+          is exactly what it did on a phone, where `<main>` clips its own
+          horizontal overflow and there was no way to scroll to what had left.
+
+          Below `lg` this span is not rendered at all and the same sentence is a
+          toast — see `useResultLine`. */}
       {line && !busy && (
-        <span className="hidden sm:inline text-sm text-fg-mute tnum truncate max-w-[22ch]"
+        <span className="hidden lg:inline min-w-0 text-sm text-fg-mute tnum truncate max-w-[34ch]"
           title={line.title}>
           {line.text}
         </span>
       )}
 
-      <span className="inline-flex items-center">
+      <span className="inline-flex items-center shrink-0">
         <Button size="md" variant="ghost" className="rounded-r-none pr-2"
           onClick={() => void run(source)} disabled={busy}
+          /* The source is in the name even where it is not on the screen.
+             `display: none` takes a word out of the accessibility tree as well
+             as out of the layout, so below `lg` — where the label is the verb
+             alone — this is what keeps the control called `Sync Claude Code` to
+             a screen reader. It tracks the busy word rather than pinning `Sync`,
+             so the visible label is always a substring of the spoken one. */
+          ariaLabel={word ? `${busy ? 'Syncing' : 'Sync'} ${word}` : undefined}
           title={!word
             ? 'Poll every source Wake is connected to'
             : carriers.length
@@ -243,9 +272,21 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
               four-letter word is that same gap, and `Sync  Slack` reads as two
               labels. So the scoped button does change width between its states,
               which is the trade Fetch makes for the same reason: both halves
-              are disabled for the whole of the state that moves. */}
+              are disabled for the whole of the state that moves.
+
+              And the source name is only *printed* from `lg`. `Sync Claude Code`
+              is 131px and `Fetch Claude Code` is 141: with a chevron and a page
+              title that is 305px of controls in the 343 a 375px phone has, so
+              the second button hung 58px past the right edge of a column that
+              clips its own overflow — unreachable, on the width he actually
+              reads on. The name is not information the row is missing: the tab
+              strip six pixels below keeps the pressed source's name on a phone
+              precisely so this can be a verb — and the `ariaLabel` above is what
+              keeps the control called `Sync Claude Code` where the word is not
+              printed, since `display: none` takes it out of the name too. */}
           <span className={word ? '' : 'w-14 text-center'}>
-            {busy ? 'Syncing' : 'Sync'}{word ? ` ${word}` : ''}
+            {busy ? 'Syncing' : 'Sync'}
+            {word ? <span className="hidden lg:inline">{` ${word}`}</span> : null}
           </span>
         </Button>
 

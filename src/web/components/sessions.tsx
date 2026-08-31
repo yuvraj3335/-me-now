@@ -12,8 +12,17 @@
  * Where a session ran and which repository it is in are different questions,
  * and answering the second with the first is what listed `web`, `plans` and
  * `QA_EVIDENCE` as repositories. And `turns` is counted from the tail the
- * server read, not from the whole transcript, so it renders as `turns in view`
- * everywhere rather than as a total nobody measured.
+ * server read, not from the whole transcript, so it is a floor rather than a
+ * total.
+ *
+ * That caveat used to ride every row as the words `turns in view`, which is a
+ * phrase nobody has at seven in the morning and which cost the row 92px on the
+ * one screen that has none to spare. The count is `12 turns` now — one word,
+ * the same word in the list and in the sheet — and the caveat is stated once,
+ * in the sheet, where there is room to say it in prose. `turns` and not
+ * `prompts` or `messages`, tempting as either is: the server counts every
+ * `type: "user"` record in the tail, and a tool result is one of those, so both
+ * of the plainer words would name something smaller than what is being counted.
  *
  * Three decisions shape the page itself.
  *
@@ -50,7 +59,7 @@ import { SWIPE_ACTION_W } from '../lib/swipe'
 import { ago } from '../lib/time'
 import { toast } from '../lib/toast'
 import { setParam, useParams } from '../lib/route'
-import { launchApi, openLaunch, type Session } from '../lib/launch'
+import { PERMISSION_MODES, launchApi, openLaunch, type Session } from '../lib/launch'
 import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
 
 /** Typed exactly, or the button stays disabled. */
@@ -165,6 +174,34 @@ export function chooseRepo(
 }
 
 /**
+ * What a screen with no rows on it says.
+ *
+ * `Empty`'s default is a dash, which is right for a value that has nothing in
+ * it and wrong for a whole page: `Archived` with nothing archived rendered one
+ * `—` on an otherwise blank 1440x900 window, which is not an answer to any
+ * question a person had. The old reasoning — that the control which set the
+ * filter already names it — holds for the *filter* and not for the *state*:
+ * knowing that Archived is pressed is not knowing whether this repository has
+ * ever had anything archived in it, or whether it has any sessions at all.
+ *
+ * So three sentences, and each of them is a different fact:
+ *   - the repository has no sessions in any view,
+ *   - it has some and none of them are archived,
+ *   - it has some and all of them are.
+ * The machine having nothing on it at all is a fourth, and it keeps the window
+ * the index was read over, because "in the last year" is the difference between
+ * an empty machine and an old one.
+ */
+function nothingShown(view: SessionView, where: string, anyInRepo: boolean): string {
+  if (!anyInRepo) return `No sessions ${where}.`
+  if (view === 'archived') return `Nothing archived ${where}.`
+  if (view === 'active') return `Every session ${where} is archived.`
+  // `all` matches every row, so an empty list under it means an empty
+  // repository, which the first line already answered.
+  return `No sessions ${where}.`
+}
+
+/**
  * The repository survives a reload through the URL and a *visit* through here.
  *
  * Same reasoning as the launch sheet's permission mode: which repository he
@@ -183,7 +220,7 @@ const rememberRepo = (id: string) => {
 
 /* ---------------------------------- page ---------------------------------- */
 
-export function SessionsView() {
+export function SessionsView({ onCount }: { onCount?: (n: number | null) => void }) {
   const p = useParams(['repo', 'show', 'page'])
   const view = readView(p.show ?? null)
   const page = Math.max(1, Number(p.page ?? '1') || 1)
@@ -290,6 +327,30 @@ export function SessionsView() {
   const rows = useMemo(() => inRepo.filter(s => matchesView(s, view)), [inRepo, view])
 
   /**
+   * How many sessions this page is standing over, reported to the header.
+   *
+   * Every other page in the product prints its count beside its title — Desk
+   * 99, Mail 25, Work 2 — and this one did not, although the repository control
+   * six pixels below it was printing `truto 38` the whole time. The number
+   * belongs to the list, which lives here, and the title belongs to the page,
+   * which lives in `pages/Sessions.tsx`; a callback is how those two meet.
+   *
+   * `null` until the index has arrived, because a header that prints `0` while
+   * the first read is in flight is asserting a fact it has not measured — the
+   * same rule Mail's `list.answered` and Work's `loaded` already keep.
+   *
+   * `rows.length` and not the repository's own total: this counts what is on
+   * the page, so switching to Archived moves it. The menu's count is the other
+   * question — every session in that repository, whatever view is on — and it
+   * is answered where it is asked.
+   */
+  useEffect(() => {
+    onCount?.(index ? rows.length : null)
+    // `onCount` is a `useState` setter at the only call site, so its identity is
+    // stable; listing it keeps that from being a silent requirement.
+  }, [rows.length, index, onCount])
+
+  /**
    * Move one row's archived flag in both answers at once.
    *
    * Archiving is one row in Wake's own database, and re-reading two lists of
@@ -389,10 +450,17 @@ export function SessionsView() {
   const body = err
     ? <p className="text-sm text-bad pt-4">{err}</p>
     : !rows.length
-      // The filter that is empty is named by the control that set it, so this
-      // does not name it again. The machine having nothing on it at all is a
-      // different claim, and worth making.
-      ? (index?.length ? <Empty /> : <Empty>Nothing on this machine in the last year.</Empty>)
+      ? (index?.length
+        ? (
+          <Empty>
+            {nothingShown(
+              view,
+              repo === ALL_REPOS ? 'on this machine' : 'in this repository',
+              inRepo.length > 0,
+            )}
+          </Empty>
+        )
+        : <Empty>Nothing on this machine in the last year.</Empty>)
       : groups.map(([id, list]) => (
         <section key={id} className="pt-1 pb-3">
           {/* The heading is the answer to "which repository is this row in",
@@ -407,7 +475,14 @@ export function SessionsView() {
               {repos.find(r => r.id === id)?.label || list[0]?.project || id}
             </h2>
           )}
-          <ul className="grid gap-2 sm:grid-cols-2">
+          {/* Two columns from `md`, not from `sm`.
+
+              At 640 the shell's 200px rail leaves 392px of content, so a
+              two-column grid draws tiles 192px wide — half a phone — and every
+              flexible thing inside one measured zero: the branch line rendered
+              as literally nothing between 640 and 900. The grid is the thing
+              that was wrong there, not the row inside it. */}
+          <ul className="grid gap-2 md:grid-cols-2">
             {list.map(s => (
               <Tile
                 key={s.id}
@@ -510,6 +585,11 @@ const openInClaude = (s: Session) => openLaunch(
       session_id: s.id,
       cwd: s.cwd,
       branch: s.branch ?? null,
+      // `turns_in_view` and not `turns`, here and only here. The reader of this
+      // key is a model rather than a person: the screen states the caveat once,
+      // in the sheet, where a person can read it, and a brief has no sheet — so
+      // the caveat rides the key name, which is the one place a model will see
+      // it before treating the number as a total.
       turns_in_view: s.turns,
     },
   }],
@@ -531,12 +611,37 @@ const openInClaude = (s: Session) => openLaunch(
  * the tile opens. The branch stays, because "which of my four sessions in this
  * repository" is exactly what it answers.
  *
- * Only the branch gives up width. Joined into one truncating string, a shared
- * branch prefix ate the whole line on a phone: six consecutive rows rendered
- * `fix/sync-job-v4-paginati…` and nothing else, so the two facts that actually
- * tell two sessions in one repository apart — how far it got and how long ago —
- * were the two that never survived. The branch is the part most likely to be
- * identical on every row, so it is the part that truncates.
+ * Only the branch gives up width, and it gives up the *front* of itself.
+ *
+ * Joined into one truncating string, a shared branch prefix ate the whole line
+ * on a phone: six consecutive rows rendered `fix/sync-job-v4-paginati…` and
+ * nothing else. Splitting the line so that only the branch truncates fixed the
+ * other two facts and not that one — measured again on a 375px screen, the
+ * branch held 42px against a 256px string, so
+ * `fix/webhook-patch-cross-environment-idor` rendered `fix/…` and two different
+ * sessions in one repository were `fix/syn…` and `fix/syn…`, each with its own
+ * Delete.
+ *
+ * Two changes, because one was not enough. The count leaves the line until
+ * `xl`, which is 110px of a 213px column handed back to the branch — measured
+ * at 375, the branch goes from 55px to 176px against that same 256px string.
+ * (The deployed build reported 42px; the difference is one word of the title
+ * above it, and the conclusion is the same either way.) And what is left
+ * truncates from the left: `direction: rtl` on an otherwise
+ * left-aligned box moves the ellipsis to the start and keeps the *tail*, which
+ * is the distinguishing half of a branch name, where the front is the half
+ * every branch in a repository shares.
+ *
+ * The `<bdi dir="ltr">` is not decoration and it is not optional. An RTL box
+ * resolves its content as an RTL paragraph, which leaves any *edge* character
+ * with no strong direction of its own at the paragraph's level rather than the
+ * text's — so `feat/foo-` renders `-feat/foo` and, much worse, a branch named
+ * for its ticket renders `2034-fix-thing` as `fix-thing-2034`. Both were
+ * reproduced in a browser before this shipped. An isolate with an explicit
+ * direction makes the branch its own LTR paragraph inside the RTL box, which
+ * fixes both while leaving the clip at the left where it was put; verified on
+ * the same five strings. The text itself never moves: it reads forwards, it
+ * copies forwards, and only which end survives the clip has changed.
  */
 function Tile({
   session: s, selected, onPeek, onArchive, onDelete,
@@ -575,12 +680,20 @@ function Tile({
           <span className="mt-0.5 flex items-baseline gap-2 min-w-0 text-sm text-fg-mute">
             {s.branch && (
               <>
-                <span className="truncate min-w-0">{s.branch}</span>
+                {/* `text-left` is not redundant beside `direction: rtl` — it is
+                    what keeps a branch that fits flush with the title above it
+                    instead of ragged against the far edge. */}
+                <span className="truncate min-w-0 [direction:rtl] text-left" title={s.branch}>
+                  <bdi dir="ltr">{s.branch}</bdi>
+                </span>
                 <span className="shrink-0" aria-hidden>—</span>
               </>
             )}
-            <span className="shrink-0 tnum">{s.turns} turns in view</span>
-            <span className="shrink-0" aria-hidden>—</span>
+            {/* The count is the first thing off the line, and it stays off it
+                until `xl`: it is a floor read off the tail of the transcript,
+                where the branch is exact, and it is the wider of the two. */}
+            <span className="hidden xl:inline shrink-0 tnum">{s.turns} turns</span>
+            <span className="hidden xl:inline shrink-0" aria-hidden>—</span>
             <span className="shrink-0 tnum">{ago(s.lastTs)}</span>
           </span>
         </button>
@@ -591,11 +704,24 @@ function Tile({
             the title. Measured: the title column got 133px against a 438px
             string, so four different sessions rendered as `As you can see the…`,
             `fix(mfa): make the login…`, `You're working a cross-…`. The tile is
-            the thing being read; the action is one of three on it. So below
-            `sm` the label collapses to the mark every "this leaves Wake"
-            control in the product already carries, and the name lives on
-            `title` and `aria-label` — which is where a control with no room for
-            a word keeps its name.
+            the thing being read; the action is one of three on it. So the label
+            collapses to the mark every "this leaves Wake" control in the
+            product already carries, and the name lives on `title` and
+            `aria-label` — which is where a control with no room for a word
+            keeps its name.
+
+            It collapses at `xl` and not at `sm`, because the phone is not the
+            narrow case. A tile in the two-column grid is narrower than a phone
+            until about 1150, and the same 110px comes out of the same two lines
+            there. Branch width against a 256px branch name, measured in a
+            browser with the 200px rail in place, before this pass and after it:
+
+              375 → 55, then 176      1024 → 14, then 217
+              640 →  0, then 225      1280 → 142, then 186
+              768 →  0, then  89      1440 → 222, then 256 (the whole name)
+              900 →  0, then 155
+
+            Three of those widths were rendering the branch at zero pixels.
           */}
           <Button
             size="sm"
@@ -603,8 +729,8 @@ function Tile({
             ariaLabel="Open in Claude"
             onClick={() => openInClaude(s)}
           >
-            <span className="hidden sm:inline">Open in Claude</span>
-            <ArrowUpRight size={14} className="sm:hidden" />
+            <span className="hidden xl:inline">Open in Claude</span>
+            <ArrowUpRight size={14} className="xl:hidden" />
           </Button>
           <Button
             size="sm"
@@ -731,8 +857,20 @@ function PeekSheet({
       open={!!s}
       onClose={onClose}
       title={s?.title}
+      /*
+        Three words, and the destructive one is not the exception.
+
+        Delete was a bare trash glyph between two labelled buttons, so the only
+        control on the surface whose name had to be guessed was the only one
+        that cannot be undone. It carries the word now, and the mark with it.
+
+        `ml-auto` puts it at the far edge rather than a thumb's width from
+        Archive, and `flex-wrap` is what keeps three labelled `lg` buttons from
+        running off a 343px phone: they take a second line instead of a clipped
+        one.
+      */
       footer={s && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* The commit, at the one size reserved for a commit. */}
           <Button size="lg" onClick={() => { onClose(); openInClaude(s) }}>
             Open in Claude
@@ -741,9 +879,8 @@ function PeekSheet({
             {s.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
             {s.archived ? 'Unarchive' : 'Archive'}
           </Button>
-          <Button size="lg" variant="ghost" ariaLabel="Delete" title="Delete"
-            onClick={onDelete}>
-            <Trash2 size={14} />
+          <Button size="lg" variant="ghost" className="ml-auto" onClick={onDelete}>
+            <Trash2 size={14} /> Delete
           </Button>
         </div>
       )}
@@ -757,13 +894,25 @@ function PeekSheet({
           <div className="mt-4">
             <Fact label="Repository" mono>{s.cwd}</Fact>
             {s.branch && <Fact label="Branch" mono>{s.branch}</Fact>}
-            <Fact label="Turns in view">{s.turns}</Fact>
+            {/* The one place the count's caveat is spelled out, which is why
+                this row is allowed to wrap and the rest are not. Every other
+                surface says `12 turns` and means exactly this. */}
+            <Fact label="Turns" wrap>
+              {s.turns}
+              <span className="text-fg-mute">
+                {' '}— counted in the tail of the transcript Wake reads, not in the whole session
+              </span>
+            </Fact>
             <Fact label="Last active">{ago(s.lastTs)}</Fact>
             {s.live && <Fact label="Running">on this machine right now</Fact>}
             {s.archived && <Fact label="Archived">in Wake, not on disk</Fact>}
             {/* Only what the last recorded turn actually said. A session that
                 never wrote one of these gets no row rather than a guess. */}
-            {s.permissionMode && <Fact label="Mode" mono>{s.permissionMode}</Fact>}
+            {s.permissionMode && (
+              <Fact label="Mode" mono={!modeWord(s.permissionMode)}>
+                {modeWord(s.permissionMode) ?? s.permissionMode}
+              </Fact>
+            )}
             {s.version && <Fact label="Claude Code" mono>{s.version}</Fact>}
             {s.pr && (
               <Fact label="Pull request">
@@ -780,14 +929,41 @@ function PeekSheet({
   )
 }
 
-/** A labelled fact, on the row grid the rest of the product reads at. */
+/**
+ * The launch sheet's word for a permission mode, or nothing.
+ *
+ * `Mode  bypassPermissions` printed the raw `--permission-mode` enum at a
+ * reader who, four clicks away in the brief sheet, is offered the same two
+ * values as `Bypass permissions` and `Accept edits` in a segmented control.
+ * One product, one word — so the words come from that control's own list
+ * rather than from a second copy of it here.
+ *
+ * `plan` and `default` are the two Claude Code modes the brief never offers and
+ * a transcript can still record, so they are named here and nowhere else.
+ * Anything beyond those four is returned unrecognised, and the caller prints
+ * the enum verbatim in monospace: inventing a title-cased phrase for a mode
+ * this build has never heard of would be a guess wearing prose.
+ */
+const EXTRA_MODES: Record<string, string> = { plan: 'Plan', default: 'Ask before acting' }
+const modeWord = (m: string): string | null =>
+  PERMISSION_MODES.find(x => x.id === m)?.label ?? EXTRA_MODES[m] ?? null
+
+/**
+ * A labelled fact, on the row grid the rest of the product reads at.
+ *
+ * `wrap` is for the one fact on this sheet that is a sentence rather than a
+ * value. Truncation is right for a path and a branch — they are long because
+ * they are precise — and wrong for an explanation, which is worth nothing at
+ * all if its second half is an ellipsis.
+ */
 function Fact({
-  label, mono, children,
-}: { label: string; mono?: boolean; children: React.ReactNode }) {
+  label, mono, wrap, children,
+}: { label: string; mono?: boolean; wrap?: boolean; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-3 py-2 border-b border-rule last:border-0">
       <span className="text-sm text-fg-mute w-28 shrink-0">{label}</span>
-      <span className={`text-sm text-fg-dim min-w-0 truncate ${mono ? 'font-mono' : ''}`}>
+      <span className={`text-sm text-fg-dim min-w-0 ${wrap ? 'leading-snug' : 'truncate'}
+                        ${mono ? 'font-mono' : ''}`}>
         {children}
       </span>
     </div>

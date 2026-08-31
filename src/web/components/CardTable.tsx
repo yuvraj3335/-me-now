@@ -104,6 +104,74 @@ const drawerFor = (card: Card, actions: RowAction) => ({
   },
 })
 
+/* ------------------------ what a card's text says ------------------------- */
+
+/**
+ * The lengths a collector cuts a title at.
+ *
+ * Slack's thread card takes the first 120 characters of the parent message and
+ * its alert families take 160, both with a bare `.slice` — so a title that ran
+ * on stops dead, mid-word, with nothing on the screen to say it was cut:
+ * `…on the NetSuite Tax module and recently com`. In a cell that truncates, CSS
+ * hides the seam; in the pane's wrapping heading and in the phone's peek the
+ * raw cut is what a person reads.
+ *
+ * A title that happens to be exactly 120 or 160 characters long gains an
+ * ellipsis it did not earn, and that trade is deliberate: it is a rounding
+ * error against a cut that shows every time a Slack thread has a long parent,
+ * and of the two claims the ellipsis is the weaker one — "there may be more" is
+ * wrong far less often than "this is all of it".
+ *
+ * The collectors should say so themselves, and `github.ts` and
+ * `claudeSessions.ts` already do — they cut on a word boundary and append the
+ * mark. This is the half that renders honestly whatever is already in the
+ * database, which is every row on the desk this morning.
+ */
+const HARD_CUTS = new Set([120, 160])
+
+/** A card's own name, with a collector's hard cut acknowledged. */
+export function titleOf(card: Card): string {
+  const t = card.title
+  if (!HARD_CUTS.has(t.length) || t.endsWith('…')) return t
+  // The same trailing trim the collectors that do this properly apply: a cut
+  // that landed on a space or a comma should not keep it in front of the mark.
+  return `${t.replace(/[\s,;:–—-]+$/, '')}…`
+}
+
+/**
+ * A Markdown body, read as prose.
+ *
+ * GitHub hands over the raw body of a pull request — `## The vulnerability`,
+ * `**complete login with only their password**`, backticked paths — and the
+ * pane draws an excerpt of it into a `whitespace-pre-wrap` block, so every
+ * marker is on the screen as a character. Nothing here renders them instead: an
+ * excerpt is three clipped lines of a glance, and a heading level inside a
+ * three-line clip is not information, it is noise wearing a hash.
+ *
+ * Two things it deliberately leaves alone, and both are the same judgement. A
+ * lone `_` is never emphasis here — `group_key`, `thread_ts`, `is_pr` are the
+ * words this product's own text is made of, and eating the middle of an
+ * identifier is a worse lie than a stray underscore is noise — and `__` is left
+ * for the same reason, since GitHub authors write bold with asterisks. The
+ * contents of a fenced block stay; only the fence goes, because the code is
+ * usually the sentence the excerpt is about.
+ */
+export function plainMarkdown(s: string): string {
+  return s
+    .replace(/^\s*```+[^\n]*\n?/gm, '')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}([-*_])(\s*\1){2,}\s*$/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^(\s*)[*+]\s+/gm, '$1- ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|~~)(.+?)\1/g, '$2')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/`+([^`\n]+)`+/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /** The width at which a table stops being a diagram of one. */
 export const TABLE_MIN = 1024
 
@@ -274,6 +342,11 @@ export function CardRow({
   const ref = useRef<HTMLTableRowElement>(null)
   const kind = cardKind(card)
   const swipe = useSwipe(card.group_key, 3)
+  // Printed through `titleOf` rather than raw, here and on the `title`
+  // attribute beside it, so a collector's hard cut is admitted wherever the
+  // name is read — including the tooltip, which is the one place on this row
+  // that shows the whole string.
+  const name = titleOf(card)
 
   // Keyboard focus scrolls the row into view; without this, `j` past the fold
   // moves a selection nobody can see.
@@ -306,9 +379,9 @@ export function CardRow({
           costs the elastic column about 26px on the rows that have one and
           nothing at all on the rows that do not. */}
       <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
-        title={card.title}>
+        title={name}>
         <span className="flex items-center gap-2 min-w-0">
-          <span className="truncate">{card.title}</span>
+          <span className="truncate">{name}</span>
           <CountBadge count={card.activity.count} plus title={NEW_TITLE} />
         </span>
       </td>
@@ -481,17 +554,24 @@ function PhoneCols() {
  *
  * A table that scrolls sideways needs them more than one that does not: they
  * are the only thing that says what the column you have just scrolled to is.
- * They do not stick — a sticky `top` resolves against the nearest scrollport,
- * which here is the horizontal scroller rather than the page, so it would have
- * a zero-length range and pin nothing. The page is what scrolls vertically and
- * a page of rows is `PAGE_SIZE` long, so the heading is a few flicks away
- * rather than gone.
+ * They do not stick *vertically* — a sticky `top` resolves against the nearest
+ * scrollport, which here is the horizontal scroller rather than the page, so it
+ * would have a zero-length range and pin nothing. The page is what scrolls
+ * vertically and a page of rows is `PAGE_SIZE` long, so the heading is a few
+ * flicks away rather than gone.
+ *
+ * Horizontally, Title is pinned exactly as the cells beneath it are, or the
+ * heading and its column would part company on the first flick. It takes the
+ * page's own ground rather than `groundOf` — a heading has no row state to
+ * carry — and the same 1px shadow edge, so the pinned column reads as one
+ * column from its heading down.
  */
 function PhoneHead() {
   return (
     <thead>
       <tr className="border-b border-edge">
-        <th className={HEAD} scope="col">Title</th>
+        <th className={`${HEAD} sticky left-0 z-10 bg-ink-900 shadow-[1px_0_0_0_var(--color-rule)]`}
+          scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
         <th className={HEAD} scope="col">Where</th>
         <th className={HEAD} scope="col">Due</th>
@@ -532,6 +612,32 @@ function PhoneHead() {
  * itself, so there is no gesture there to protect.
  */
 const PANS = { touchAction: 'manipulation' } as const
+
+/**
+ * The ground a row is painted in, as a colour rather than as a class.
+ *
+ * The pinned Title cell has to be opaque. Every other column slides underneath
+ * it, and `background: inherit` answers `transparent` on a row with no wash — so
+ * a `Not started` picker would scroll straight through the row's own name,
+ * which is the one thing the pinning exists to keep. It cannot simply paint the
+ * page ground either: a selected row and a row with news are painted, and a
+ * title cell left at `ink-900` would break the wash at exactly the point the
+ * row is identified.
+ *
+ * `rowStateClass` in `primitives.tsx` is still the authority on which ground a
+ * row is in — this is the same four states read out as a token, because a cell
+ * needs a `background-color` where a `<tr>` takes a class. They are one thought
+ * in two forms and they move together: a fifth row state is added in both, or
+ * the pinned column starts disagreeing with the row it belongs to.
+ *
+ * The cursor is the exception and it is handled at the cell instead. It is a
+ * `background-image` on the row — see `.row-cursor`, and the note above
+ * `rowStateClass` for why a `<tr>` under `border-collapse` cannot use a border —
+ * and an opaque cell paints over its parent's image as well as its colour, so
+ * the focused cell draws the same 2px rule itself.
+ */
+const groundOf = (selected: boolean, focused: boolean, unseen: boolean) =>
+  selected ? 'row-sel' : focused ? 'ink-700' : unseen ? 'row-new' : 'ink-900'
 
 /**
  * How long a press has to be held before it is a peek, and how far it may drift.
@@ -636,6 +742,8 @@ export function CardLine({
   const overdue = card.due_at !== null && card.due_at < Date.now()
   const kind = cardKind(card)
   const where = contextLine(card)
+  const name = titleOf(card)
+  const unseen = card.activity.count > 0
   const swipe = useSwipe(card.group_key, 3)
   const press = useLongPress(() => onPeek(card))
 
@@ -658,12 +766,40 @@ export function CardLine({
       onClick={() => actions.onOpen(card)}
       aria-selected={selected}
       className={`cursor-pointer border-b border-rule
-        ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
+        ${rowStateClass({ selected, focused, unseen })}`}
     >
-      {/* The identity column, and the one the gesture belongs to. It keeps the
-          stylesheet's `pan-y`, so a horizontal drag here is the drawer. */}
-      <td className={`${CELL} ${ROW_TITLE} ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
-        title={card.title}>
+      {/*
+        The identity column, and the one the gesture belongs to. It keeps the
+        stylesheet's `pan-y`, so a horizontal drag here is the drawer.
+
+        **It is pinned to the left edge, and that is the whole of the second
+        fix.** The table is 540px wide inside the 343 a 375px phone leaves, so
+        it scrolls 197 — and at the end of that scroll the Title column sat at
+        x −181 with 3 pixels of itself showing. You could read `Sep 4` against a
+        row you could no longer name, which is the one state a desk must never
+        be in. Pinned, the name is on the screen at every scroll position and
+        the four columns are still drawn at a width they can be read at, which
+        is the trade this table was built around.
+
+        Painted opaquely — see `groundOf` — because the columns pass beneath it,
+        and lifted to `z-10` because `Select` is `relative`: a positioned
+        sibling later in the row paints over a pinned cell that is merely
+        sticky, so the status picker slid across the title and the pinning
+        looked broken in exactly the way it was meant to fix. The drawer's
+        anchor cell answers with `z-20`, which keeps `Done · Status · Delete`
+        above this — it is the one thing that is *supposed* to cover the row.
+
+        The right edge is a `box-shadow` rather than a border: under
+        `border-collapse` the table paints the collapsed borders, not the cell,
+        so a border on a pinned cell stays behind at the x it was collapsed at
+        while the cell travels.
+      */}
+      <td
+        className={`${CELL} ${ROW_TITLE} sticky left-0 z-10
+                    shadow-[1px_0_0_0_var(--color-rule)] ${focused ? 'row-cursor' : ''}
+                    ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
+        style={{ backgroundColor: `var(--color-${groundOf(selected, focused, unseen)})` }}
+        title={name}>
         <span className="flex items-center gap-2 min-w-0">
           {/* Named for the source rather than the kind: the shape is what a
               sighted reader tells them apart by, and the hue that carries the
@@ -672,7 +808,7 @@ export function CardLine({
             className="w-5 shrink-0 flex items-center">
             <KindGlyph kind={kind} size={14} />
           </span>
-          <span className="truncate">{card.title}</span>
+          <span className="truncate">{name}</span>
           <CountBadge count={card.activity.count} plus title={NEW_TITLE} />
         </span>
       </td>
@@ -700,7 +836,9 @@ export function CardLine({
         {words ?? '—'}
       </td>
 
-      <td className="sticky right-0 w-0 p-0 align-middle" style={PANS}>
+      {/* `z-20`, above the pinned Title cell's `z-10`: the drawer is the one
+          thing on this row that is supposed to cover the row. */}
+      <td className="sticky right-0 z-20 w-0 p-0 align-middle" style={PANS}>
         <SwipeDrawer
           dx={swipe.dx} width={swipe.width} onClose={swipe.close}
           {...drawerFor(card, actions)}
@@ -829,10 +967,13 @@ function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
         )}
       </span>
 
-      <span className={`${ROW_TITLE} line-clamp-2`}>{card.title}</span>
+      <span className={`${ROW_TITLE} line-clamp-2`}>{titleOf(card)}</span>
       <span className="text-sm text-fg-mute">{card.why}</span>
+      {/* Read as prose: a GitHub body arrives as raw Markdown, and three
+          clipped lines of `## The vulnerability` is a glance spent on syntax.
+          See `plainMarkdown`. */}
       {card.excerpt && (
-        <span className={`${ROW_SECOND} line-clamp-3`}>{card.excerpt}</span>
+        <span className={`${ROW_SECOND} line-clamp-3`}>{plainMarkdown(card.excerpt)}</span>
       )}
     </div>,
     document.body,

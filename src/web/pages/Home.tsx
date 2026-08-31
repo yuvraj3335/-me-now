@@ -33,13 +33,13 @@ import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../l
 import { timeOfDay } from '../lib/time'
 import {
   CardRow, PANE_MIN, PhoneTable, TABLE_MIN, TableCols, TableHead, maxPaneFor,
-  useViewport, type DueSort, type RowAction,
+  titleOf, useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { Sync, useResultLine } from '../components/sync'
 import { TaskSheet } from '../components/TaskSheet'
 import {
-  Button, Empty, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
+  Button, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
 } from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
@@ -357,8 +357,23 @@ export function Home() {
    * settled list and wrong for an undo, because it also destroys a due date or
    * a pin the action never touched.
    */
-  const undoable = (c: CardT, text: string, undo: 'status') =>
-    toast(text, {
+  const undoable = (c: CardT, verb: string, undo: 'status') =>
+    /*
+     * The row is named, and that is not decoration.
+     *
+     * Every one of these writes takes the row off the screen or out from under
+     * the thumb, and the swipe drawer — three 88px actions over a 343px row —
+     * has already covered everything but the first two or three words of the
+     * title while you press `Delete`. `TRUTO-3A · TypeError` and `TRUTO-39 ·
+     * Error` both read as `TRUTO-` behind it. A bar that then says `Won't do.`
+     * closes no loop at all: it names the verb you just chose and withholds the
+     * one thing you cannot see. The undo is only worth having if you can tell
+     * what it will bring back.
+     *
+     * `titleOf` rather than the raw title, so a collector's hard cut is admitted
+     * here too, and the bar's own `truncate` elides whatever is left over.
+     */
+    toast(`${verb} — ${titleOf(c)}`, {
       label: 'Undo',
       run: async () => {
         await actions.restore(c.group_key, undo)
@@ -384,7 +399,7 @@ export function Home() {
     }
     await actions.setStatus(c.group_key, next)
     setWritten(v => v + 1)
-    undoable(c, next === 'done' ? 'Done.' : `${STATUS_LABEL[next]}.`, 'status')
+    undoable(c, next === 'done' ? 'Done' : STATUS_LABEL[next], 'status')
     void reload()
   }
 
@@ -489,7 +504,7 @@ export function Home() {
     registerPaletteActions(() =>
       rows.slice(0, 8).map(c => ({
         id: `card:${c.group_key}`,
-        label: c.title,
+        label: titleOf(c),
         hint: c.why,
         group: `Cards — ${rows.length}`,
         run: () => openDetail(c.group_key),
@@ -502,11 +517,26 @@ export function Home() {
   if (!state) return <div className="pad-x pt-4"><Header source={filter} /></div>
 
   /**
-   * A filter that matches nothing is one line.
+   * Whether anything is narrowing this list besides the tab.
    *
-   * Not a heading and a count and an apology. One word, with no source name
-   * appended either — the pressed tab already names the source, so the suffix
-   * restates the question inside the answer.
+   * The tab is deliberately not in it: it is a strip of six controls directly
+   * above the answer, with the pressed one lit, so "you are in Slack" is
+   * already on the screen and the empty state has a different thing to say
+   * about it — see `Blank`.
+   */
+  const filtered = !!query || due !== 'any' || pri !== 'any' || status !== 'any'
+
+  /**
+   * A filter that matches nothing is one line — but it is a line, not a word.
+   *
+   * Still no heading, no count, no apology, and nothing per-pile: the rule this
+   * page was rebuilt around holds. What changed is that the word was `Nothing`,
+   * at 13px, in the top-left corner of a 900px void, and it named neither the
+   * state nor the way out of it — a search that matches nothing looks exactly
+   * like a desk that is clear, and the reader who mistyped one letter has to
+   * work out which. `Blank` says which of the two it is and, where there is
+   * one, offers the way back. Work's own empty state is the pattern and this is
+   * deliberately the same shape as it.
    */
   const list = (
     <div className="min-w-0 grow pad-x pb-24 lg:pb-8">
@@ -515,7 +545,7 @@ export function Home() {
       <FilterRow query={query} due={due} pri={pri} status={status} />
 
       {rows.length === 0 ? (
-        <Empty>Nothing</Empty>
+        <Blank query={query} filtered={filtered} source={filter} />
       ) : isTable ? (
         <>
           <table className="w-full table-fixed border-collapse">
@@ -804,7 +834,12 @@ function Header({ count, source }: { count?: number; source: SourceName | 'all' 
     <header className="pt-4 pb-2 flex items-center gap-3">
       <PageTitle>Desk</PageTitle>
       {count !== undefined && <span className="tnum text-sm text-fg-mute">{count}</span>}
-      <span className="ml-auto shrink-0 flex items-center gap-2">
+      {/* `min-w-0`, not `shrink-0`. This group holds two controls and two result
+          lines, and a group that refuses to shrink hands its overflow to the
+          page column — which clips it, so the rightmost control simply stops
+          being reachable and nothing on screen says why. Shrinkable, the
+          pressure lands on the two lines inside, which are built to elide. */}
+      <span className="ml-auto min-w-0 flex items-center gap-2">
         <Sync source={source} />
         <Fetch source={source} />
       </span>
@@ -888,6 +923,67 @@ function SourceTabs({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Nothing here, and which nothing it is.
+ *
+ * `Empty` — one muted word on the row grid — is the right answer for a value
+ * that has nothing in it and the wrong one for a whole surface. Measured on the
+ * deployed desk, a search that matched nothing rendered the single word
+ * `Nothing` at 13px in the corner of a 900px hole: it did not say whether the
+ * desk was clear or the search was wrong, and it did not say what to press. The
+ * two states are one keystroke apart and they mean opposite things.
+ *
+ * So: one line that names the state, and — where there is one — the way out, as
+ * a real control rather than an instruction to go and press something else.
+ * It is deliberately not a tutorial and deliberately not three chapters with
+ * counts, which is what this page's empty state was before the table.
+ *
+ * The button is `secondary`, not the amber, for the reason Work's is: `Fetch`
+ * is sitting on the header row above it and one surface spends the accent once.
+ *
+ * There is no way out of a genuinely clear desk, so it is not offered one. That
+ * is not an omission — nothing being on you is the good state, and `Fetch` is
+ * already on the row above for the reader who does not believe it.
+ */
+function Blank({
+  query, filtered, source,
+}: { query: string; filtered: boolean; source: SourceName | 'all' }) {
+  /* Everything but the tab, and the page with it: page 3 of a list you are
+     about to widen is not where the answer starts. The tab is left alone
+     because the strip above says which one is pressed and unpressing it is one
+     tap on that strip — see the second button. */
+  const clear = () => {
+    for (const k of ['q', 'due', 'pri', 'status', 'page']) setParam(k, null)
+  }
+
+  return (
+    <div className="py-2">
+      <p className="text-base text-fg-dim max-w-prose">
+        {filtered
+          ? query
+            // Not quoted back at him: the search field is directly above this
+            // line with the words still in it, and the same rule that keeps the
+            // source name out of here keeps the query out of here.
+            ? 'Nothing on the desk matches this search.'
+            : 'Nothing on the desk matches these filters.'
+          : source === 'all'
+            ? 'Nothing is on you.'
+            : `Nothing from ${SOURCE_LABEL[source]} is on you.`}
+      </p>
+      {filtered ? (
+        <Button size="lg" variant="secondary" className="mt-3" onClick={clear}>
+          Clear filters
+        </Button>
+      ) : source !== 'all' ? (
+        <Button size="lg" variant="secondary" className="mt-3"
+          onClick={() => { setParam('src', null); setParam('page', null) }}>
+          Show every source
+        </Button>
+      ) : null}
     </div>
   )
 }
@@ -1016,16 +1112,25 @@ function Fetch({ source }: { source: SourceName | 'all' }) {
   }
 
   return (
-    <span className="flex items-center gap-3 shrink-0">
-      {/* Below `sm` this span is not rendered and the same sentence arrives as
+    <span className="flex items-center gap-3 min-w-0">
+      {/* Below `lg` this span is not rendered and the same sentence arrives as
           a toast, which is the one answer both controls on this row give — see
-          `useResultLine`. */}
+          `useResultLine`. Capped and shrinkable for the reasons `Sync`'s line
+          spells out: it is the half of this row that gives way, so a long
+          answer elides instead of pushing the button it belongs to off a screen
+          that cannot scroll sideways to reach it. */}
       {line && !busy && (
-        <span className="hidden sm:inline text-sm text-fg-mute tnum truncate" title={line.title}>
+        <span className="hidden lg:inline min-w-0 text-sm text-fg-mute tnum truncate max-w-[34ch]"
+          title={line.title}>
           {line.text}
         </span>
       )}
-      <Button size="md" variant="default" onClick={() => void run()} disabled={busy}
+      <Button size="md" variant="default" className="shrink-0"
+        onClick={() => void run()} disabled={busy}
+        /* Named for a screen reader at every width, because the printed half of
+           the label is `display: none` below `lg` and that takes it out of the
+           accessibility tree too. See the same line on `Sync`. */
+        ariaLabel={word ? `${busy ? 'Fetching' : 'Fetch'} ${word}` : undefined}
         title={!only
           ? 'Ask every connector this machine can reach what is on you'
           : carriers.length
@@ -1045,9 +1150,16 @@ function Fetch({ source }: { source: SourceName | 'all' }) {
             reads as two controls rather than one label. The scoped button does
             change width between its two states, and that is the better trade —
             it is right-aligned so only its left edge moves, and it is disabled
-            for the whole of the state that moves it. */}
+            for the whole of the state that moves it.
+
+            The source name is printed from `lg`, in step with `Sync` beside it
+            and for the reason spelled out there: the two names together are
+            272px of a 343px phone, and this is the button that was pushed off
+            the edge. The `ariaLabel` above is what keeps it called `Fetch Claude
+            Code` where the word is not printed. */}
         <span className={word ? '' : 'w-14 text-left'}>
-          {busy ? 'Fetching' : 'Fetch'}{word ? ` ${word}` : ''}
+          {busy ? 'Fetching' : 'Fetch'}
+          {word ? <span className="hidden lg:inline">{` ${word}`}</span> : null}
         </span>
       </Button>
     </span>

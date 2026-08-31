@@ -36,7 +36,7 @@ import { actions } from '../lib/api'
 import type { Analytics, SourceName } from '../lib/types'
 import { duration } from '../lib/time'
 import {
-  Bars, Donut, Legend, PartBar, Ring, WEEKDAY, WeekdayBars, type DonutSlice,
+  Bars, Donut, Legend, PartBar, Ring, WeekdayBars, type DonutSlice,
 } from '../components/charts'
 import { SOURCE_COLOR, SOURCE_LABEL } from '../components/sources'
 import { Empty, PageTitle, Segmented } from '../components/primitives'
@@ -133,6 +133,62 @@ const partColor = (weight: number) =>
  */
 const partWeight = (i: number, n: number) => (n < 2 ? 100 : 25 + (75 * i) / (n - 1))
 
+/**
+ * A single day, in the words the rest of the product uses for one.
+ *
+ * `08-30` was `day.slice(5)` reaching the screen: the wire format, which is
+ * `YYYY-MM-DD` because that is what sorts, printed at a reader who has never
+ * been told the year is missing rather than the day. Everywhere else Wake says
+ * a day the way `wallClock` does — Today and Yesterday replace the date on the
+ * two days he already knows which day it is, and every other day is
+ * `Sat 30 Aug`. This is that rule, minus the clock, because a day has no time
+ * of day in it.
+ *
+ * Lowercase, unlike `wallClock`'s, because these follow a number: `4 yesterday`
+ * rather than `4 Yesterday`. And parsed at noon local, like `dayLabel` already
+ * does — `new Date('2026-08-30')` is midnight *UTC*, which is the day before in
+ * every timezone west of Greenwich.
+ */
+function dayWords(iso: string, now = Date.now()): string {
+  const d = new Date(`${iso}T12:00:00`)
+  const midnight = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((midnight(d) - midnight(new Date(now))) / 864e5)
+  if (days === 0) return 'today'
+  if (days === -1) return 'yesterday'
+  return `on ${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}`
+}
+
+/**
+ * The weekday names in full, Sunday first.
+ *
+ * Sunday first because that is how the *data* is indexed — the server writes
+ * `getUTCDay()` into `weekday` — and this is a lookup, not a layout. Where the
+ * week is drawn rather than indexed it starts on Monday; see `MONDAY_FIRST`.
+ *
+ * Built from a known Sunday (2023-01-01) rather than a hard-coded list, so the
+ * name follows the reader's locale the way every other date in this product
+ * does. The plural `s` the caller appends is English, like every other word
+ * Wake says.
+ */
+const WEEKDAY_LONG = Array.from({ length: 7 }, (_, i) =>
+  new Date(2023, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'long' }))
+
+/**
+ * The order the week is *drawn* in.
+ *
+ * `By weekday` read `Sun Mon Tue Wed Thu Fri Sat` while the calendar behind
+ * every date field in the product — the new-task deadline, the remind-me grid —
+ * reads `MON … SUN`, so one product had two week-shapes in it and the busiest
+ * column moved depending on which screen you were on. The calendar's is the one
+ * that stays: it is the one he picks dates in, and a working week that ends at
+ * the weekend is the shape the rest of the data already has.
+ *
+ * A permutation of indices rather than a re-labelling, so the bars, their
+ * counts and their names all move together — `WeekdayBars` keys every one of
+ * those off the row's own `weekday`, and the row is what is being reordered.
+ */
+const MONDAY_FIRST = [1, 2, 3, 4, 5, 6, 0]
+
 export function Pulse() {
   const days = Number(useParam('days') ?? 30) || 30
   const [a, setA] = useState<Analytics | null>(null)
@@ -161,17 +217,35 @@ export function Pulse() {
    * empty series already uses is where a number goes.
    *
    * `value` is that day's count when there is exactly one, so the row can say
-   * what it has rather than an em dash it would be lying with.
+   * what it has rather than an em dash it would be lying with — and it says the
+   * day in words, because this row is prose and `08-30` is a wire format.
    */
   const shape = (series: Array<{ day: string; value: number }>) => {
     const marked = series.filter(d => d.value > 0)
     return {
       thin: marked.length < 2,
-      value: marked.length === 1 ? `${marked[0]!.value} on ${marked[0]!.day.slice(5)}` : undefined,
+      value: marked.length === 1 ? `${marked[0]!.value} ${dayWords(marked[0]!.day)}` : undefined,
     }
   }
   const done = shape(a.throughput.done)
   const clearedShape = shape(a.throughput.cleared)
+
+  /**
+   * The two Flow totals, over the window rather than over the drawn extent.
+   *
+   * `Bars` compacts a sparse series to the days that actually have something in
+   * them, and it does that from the primary series — so every day that cleared
+   * anything is always drawn, and the `Cleared` total always equals the bars
+   * beside it. `Arrived` is looked up per day, so a burst of arrivals in a week
+   * where nothing was cleared can fall outside the compacted slice. The number
+   * stays the window's, because the window is what the range control at the top
+   * of the page selects and what every other figure here is measured over; the
+   * narrower thing is the picture, not the fact.
+   */
+  const flow = {
+    cleared: a.throughput.cleared.reduce((n, d) => n + d.value, 0),
+    arrived: a.throughput.appeared.reduce((n, d) => n + d.value, 0),
+  }
 
   /**
    * The same rule, over the week rather than over the window.
@@ -181,14 +255,26 @@ export function Pulse() {
    * shape the throughput charts were collapsed for, six sevenths of the way.
    * Seven empty slots do not put Sunday's number next to anything, so it says
    * the number instead, the way every other thin series here already does.
+   *
+   * `on Sundays`, plural, and that is the whole difference from the date rows
+   * above it: they name one day that happened, this names every Sunday in the
+   * window at once. `22 on Sun` read as a date — a date with no number on it —
+   * which is the same mistake `08-30` makes from the other end.
    */
   const weekday = (() => {
     const marked = a.rhythm.byWeekday.filter(d => d.value > 0)
     return {
       thin: marked.length < 2,
-      value: marked.length === 1 ? `${marked[0]!.value} on ${WEEKDAY[marked[0]!.weekday]}` : undefined,
+      value: marked.length === 1
+        ? `${marked[0]!.value} on ${WEEKDAY_LONG[marked[0]!.weekday]}s`
+        : undefined,
     }
   })()
+
+  // The same seven rows, in the order the calendar draws them.
+  const week = MONDAY_FIRST
+    .map(i => a.rhythm.byWeekday.find(d => d.weekday === i))
+    .filter((d): d is { weekday: number; value: number } => !!d)
 
   /* --- panel 1: what is on the desk, by source --------------------------- */
   const bySource = new Map(a.aging.map(r => [
@@ -244,7 +330,24 @@ export function Pulse() {
 
   const panels: Array<{ title: string; empty: boolean; value?: string; node: React.ReactNode }> = [
     {
-      title: 'On the desk',
+      /**
+       * The title carries the measure, because three surfaces print a number
+       * per source and none of them was counting the same thing.
+       *
+       * Measured on one morning: Pulse `37 · 4 · 29 · 12 · 17`, Settings
+       * `56 · 4 · 30 · 17 · 21`, the desk's own tabs `14 · 5 · 29 · 35 · 18`.
+       * Three measures — rows fetched, rows on the desk by the pipe that
+       * carried them, rows on the desk by what they *are* — and with nothing
+       * naming any of them they read as one measure disagreeing three ways.
+       *
+       * This one is the middle: `analytics.aging` groups the open desk by
+       * `cards.source`, which is the pipe. That is why Slack is large here and
+       * small on the tab strip — a Sentry issue announced in `#sentry-alerts`
+       * arrived through Slack and *is* a Sentry row, and `inBucket` sorts the
+       * tabs the second way. Both numbers are true; only one of them was said
+       * out loud.
+       */
+      title: 'On the desk, by where it arrived',
       empty: !desk.length,
       // Stacked until `lg`. Between 640 and 1023 a panel is half of a narrow
       // page, and a 240px ring beside a legend there left `Claude Code`
@@ -278,13 +381,27 @@ export function Pulse() {
       // side by side with independent maxima, so the one comparison worth making
       // — is more coming in than going out — had to be done in the reader's head
       // against two different rulers.
+      //
+      // And the two series are named underneath. This is the only panel here
+      // that draws more than one thing, and the only place either word appeared
+      // was an SVG `title` attribute — which is the rule this whole page was
+      // rewritten to keep: a legend with counts beats a tooltip with counts,
+      // because a phone fires no pointer events at all.
       node: (
-        <Bars
-          data={a.throughput.cleared}
-          secondary={a.throughput.appeared}
-          title="cards cleared each day, against the cards that arrived"
-          label={d => `${d.day.slice(5)} · ${d.value} cleared`}
-        />
+        <div>
+          <Bars
+            data={a.throughput.cleared}
+            secondary={a.throughput.appeared}
+            title="cards cleared each day, against the cards that arrived"
+            label={d => `${d.day.slice(5)} · ${d.value} cleared`}
+          />
+          <SeriesKey
+            items={[
+              { label: 'Cleared', value: flow.cleared, color: 'var(--color-fg-dim)' },
+              { label: 'Arrived', value: flow.arrived, color: 'var(--color-ink-700)' },
+            ]}
+          />
+        </div>
       ),
     },
     {
@@ -326,7 +443,7 @@ export function Pulse() {
             <SubLabel>By weekday</SubLabel>
             {weekday.thin
               ? <Empty>{weekday.value ?? '—'}</Empty>
-              : <WeekdayBars data={a.rhythm.byWeekday} />}
+              : <WeekdayBars data={week} />}
           </div>
         </div>
       ),
@@ -334,6 +451,11 @@ export function Pulse() {
     {
       title: 'Goals',
       empty: !a.goals.length,
+      /* An em dash is the right mark for a series that *could* have had
+         something in it this window and did not. A goal is not a measurement —
+         it exists because he made one — so the absence of any is a state, and a
+         state has a name. `GOALS —` read as a panel that had failed to load. */
+      value: 'none set',
       node: (
         <div className="flex flex-wrap gap-6">
           {a.goals.map(g => (
@@ -492,3 +614,44 @@ function Panel({
 const SubLabel = ({ children }: { children: React.ReactNode }) => (
   <div className="text-eyebrow uppercase text-fg-mute mb-2">{children}</div>
 )
+
+/**
+ * Which mark is which, for a chart of counted series.
+ *
+ * Deliberately not `Legend`, and the difference is arithmetic rather than
+ * taste: that one divides each row by the sum of the rows and prints a
+ * percentage, which is the right thing for a donut — where the slices really
+ * are parts of one whole — and a fabricated statistic here. Cleared and
+ * arrived are two independent counts of two different events; `120 · 55%` of
+ * their sum answers no question anyone has.
+ *
+ * The grammar is `PartBar`'s legend — the swatch, the word, the count in
+ * `tnum`, one flex-wrapped row — so the two keys on this page look like one
+ * thing. The swatch is a bar rather than that one's dot because the mark it
+ * names is a bar.
+ *
+ * The fills are exactly what `charts.tsx` paints — `fg-dim` for the primary
+ * series, `ink-700` for the secondary — because a swatch brightened until it
+ * was easy to see would be a key pointing at a mark that is not on the chart.
+ * What the recessive one gets instead is the product's own structural hairline:
+ * measured at 8×16 on the light ground, `ink-700` is 1.15:1, which is legible
+ * as a 114px bar in the chart above and is nothing at all at swatch size. Both
+ * swatches take the edge, not just the faint one — outlining one of a pair says
+ * the two marks differ in a way that they do not.
+ */
+function SeriesKey({
+  items,
+}: { items: Array<{ label: string; value: number; color: string }> }) {
+  return (
+    <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
+      {items.map(s => (
+        <li key={s.label} className="flex items-center gap-2">
+          <span className="w-2 h-4 rounded-chip border border-edge shrink-0"
+            style={{ background: s.color }} aria-hidden />
+          <span className="text-sm text-fg-dim">{s.label}</span>
+          <span className="tnum text-sm text-fg-mute">{s.value}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}

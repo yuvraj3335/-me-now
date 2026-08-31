@@ -53,7 +53,8 @@ import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } fro
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, DateTimePicker, Select } from './primitives'
 import { useStill } from '../lib/motion'
-import { cardKind, cleanChannel, KindGlyph } from './kinds'
+import { cardKind, KindGlyph } from './kinds'
+import { plainMarkdown, titleOf } from './CardTable'
 import { PriorityGlyph, StatusGlyph, isSettled } from './status'
 import { openTarget } from '../lib/appLinks'
 import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
@@ -148,6 +149,19 @@ export function CardDetail({
    */
   const partial = card.sources.some(s => s.meta?.thread_partial)
 
+  /**
+   * The excerpt, with its Markdown read rather than printed.
+   *
+   * A GitHub body arrives raw — `## The vulnerability`, `**complete login with
+   * only their password**`, backticked paths — and this pane draws it into a
+   * `whitespace-pre-wrap` block, so every marker was on the screen as a
+   * character while the thread lines directly above it read cleanly. Stripped
+   * rather than rendered: an excerpt is three clipped lines of a glance, and a
+   * heading level inside a three-line clip is not information. See
+   * `plainMarkdown`, which says what it deliberately leaves alone.
+   */
+  const excerpt = plainMarkdown(card.excerpt ?? '')
+
   const run = async (fn: () => Promise<unknown>) => { await fn(); await reload() }
 
   const kind = cardKind(card)
@@ -168,7 +182,11 @@ export function CardDetail({
     await actions.setStatus(card.group_key, next)
     await reload()
     if (isSettled(next)) onClose()
-    toast(next === 'done' ? 'Done.' : `${STATUS_LABEL[next]}.`, {
+    /* Named, not merely verbed. `Done.` on its own does not close the loop on
+       *which* row went — and this pane shuts on a settled card, so by the time
+       the bar appears the row it is about to undo is no longer on the screen at
+       all. The desk's own writes say it the same way. */
+    toast(`${next === 'done' ? 'Done' : STATUS_LABEL[next]} — ${titleOf(card)}`, {
       label: 'Undo',
       run: async () => { await actions.restore(card.group_key, undo); await reload() },
     })
@@ -183,9 +201,13 @@ export function CardDetail({
             400px pane. The glyph moves onto the metadata line, where it is one
             more fact rather than an indent. */}
         <div className="flex items-start gap-2">
+          {/* Through `titleOf`, because this heading wraps. A cell elides what
+              a collector cut and hides the seam; three wrapped lines put the raw
+              stop on the screen — `…on the NetSuite Tax module and recently com`
+              — and a sentence that simply ends reads as the whole of it. */}
           <h2 className={`grow ${DETAIL_TITLE} line-clamp-3
                           ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
-            {card.title}
+            {titleOf(card)}
           </h2>
           <Button variant="ghost" size="sm" onClick={onClose} title="Close" ariaLabel="Close">
             <X size={14} />
@@ -303,7 +325,9 @@ export function CardDetail({
           </Row>
         </div>
 
-        <Facts card={card} />
+        {/* The parent of the thread is the person who actually posted it, and
+            that is a different fact from `who` — see the `From` row. */}
+        <Facts card={card} author={lines.find(l => l.parent)?.who ?? null} />
 
         <Thread card={card} lines={conversation} baseline={opened.current.baseline}
           partial={partial} />
@@ -318,11 +342,11 @@ export function CardDetail({
           <div className="mt-6">
             {partial && <p className={`${EYEBROW} mb-1`}>partial</p>}
             <p className={`${DETAIL_BODY} whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
-              {card.excerpt}
+              {excerpt}
             </p>
             {/* Three lines, then a way to see the rest. `line-clamp-6` with no
                 expand made a silent clip read as the whole thing. */}
-            {card.excerpt.length > 160 && (
+            {excerpt.length > 160 && (
               <button onClick={() => setExpanded(v => !v)}
                 className="mt-1 text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100">
                 {expanded ? 'Less' : 'Show all'}
@@ -390,10 +414,20 @@ export function CardDetail({
           error and does not navigate, so there is no honest way to detect that
           `slack://` went nowhere. One quiet line costs a person with the app
           nothing and saves the one without it.
+
+          It is a control rather than a line of type, and that was measured: an
+          18px link sitting 8px under `Task` is a trap, because the tap that
+          misses it by 21px lands on the button that silently creates a task.
+          `.hit` takes it to 44px on a finger and `mt-6` is what keeps that
+          collar from overlapping the one `Task` already has — 24px of clear
+          space, since each collar reaches about 8px past its own box. `-ml-2`
+          puts the words back on the single left edge everything else in this
+          pane starts on, which its own padding would otherwise move them off.
         */}
         {app && (
           <a href={href} target="_blank" rel="noreferrer"
-            className="mt-2 inline-block text-sm text-fg-mute hover:text-fg-dim
+            className="hit relative mt-6 -ml-2 inline-flex items-center h-8 px-2 rounded-control
+                       text-sm text-fg-mute hover:text-fg-dim hover:bg-ink-800
                        transition-colors duration-100">
             Open in browser
           </a>
@@ -491,6 +525,44 @@ const Mono = ({ children }: { children: React.ReactNode }) => (
 )
 
 /**
+ * A Slack canvas, which is not a channel and arrives in the channel field.
+ *
+ * `fc:F096Q3LBF7C:sprint tasks` is what the search hands back for a hit inside
+ * a canvas: a file id with the canvas's name after it. Printed under a label
+ * that says Channel it is an opaque string naming a place that does not exist,
+ * so it is labelled for what it is and the name is what is shown.
+ */
+const CANVAS = /^fc:[A-Z0-9]+:\s*(.+)$/i
+
+/** A name Slack would recognise: lower case, no spaces — so it takes the `#`. */
+const CHANNEL_SLUG = /^[a-z0-9][a-z0-9._-]*$/
+
+/**
+ * Where this was said, in the words you could paste into Slack's own search.
+ *
+ * Not `cleanChannel`. That drops the `#` and the workspace token — which is
+ * exactly right on a phone row, where the job is to name the *customer* in
+ * 136px and `spendflo` does it better than `#spendflo-truto` — and exactly
+ * wrong under a label that says Channel, where `spendflo` names a channel that
+ * is not there. The two jobs are different and each keeps its own answer.
+ *
+ * A bare channel id survives unchanged: it is uppercase, so it takes no `#`,
+ * and an id is still the channel — merely the unreadable half of it, which is
+ * all the collector was given when a hit carried no name.
+ */
+function whereSaid(raw: unknown): { label: string; text: string } | null {
+  const v = String(raw ?? '')
+    // A name read out of a rendered line sometimes trails the id it resolved
+    // from — `#sentry-alerts (ID: C0BERTMS9K4)`. The id is not worth showing.
+    .replace(/\s*\(ID:\s*[A-Z0-9]+\)\s*$/i, '')
+    .trim()
+  if (!v) return null
+  const canvas = CANVAS.exec(v)
+  if (canvas) return { label: 'Canvas', text: canvas[1]!.trim() }
+  return { label: 'Channel', text: CHANNEL_SLUG.test(v) ? `#${v}` : v }
+}
+
+/**
  * The facts, merged across sources, in one fixed order.
  *
  * It used to render one `Block` and one `FactTable` per source, so a card seen
@@ -505,7 +577,11 @@ const Mono = ({ children }: { children: React.ReactNode }) => (
  * read. Order does the work the cap used to: the five that are true of every
  * card come first, then whatever the sources themselves know.
  */
-function Facts({ card }: { card: Card }) {
+function Facts({ card, author }: {
+  card: Card
+  /** Who posted the thread this row is about, when it has one. */
+  author: string | null
+}) {
   const by = (s: string) => card.sources.find(x => x.source === s)
   const gh = by('github')
   const claude = by('claude')
@@ -519,13 +595,27 @@ function Facts({ card }: { card: Card }) {
     rows.push([k, v])
   }
 
+  const who = card.who ?? card.actor
+
   add('Why', card.why)
-  add('Who', card.who ?? card.actor)
+  add('Who', who)
   add('When', wallClock(card.ts))
   if (slack) {
-    const channel = slack.meta?.channel ?? card.meta?.channel
-    add('Channel', channel ? <Mono>{cleanChannel(String(channel))}</Mono> : null)
-    add('From', slack.who ?? slack.actor)
+    const said = whereSaid(slack.meta?.channel ?? card.meta?.channel)
+    if (said) add(said.label, <Mono>{said.text}</Mono>)
+    /*
+     * Who wrote it, which is not who is waiting on him.
+     *
+     * `From` read `slack.who ?? slack.actor` and `Who` read `card.who ??
+     * card.actor`, and on a Slack card those are the same value on the way in —
+     * so the pane printed `Varad` twice, on two adjacent rows, under two labels,
+     * while the person who actually posted the thread was named nowhere. The
+     * thread's parent is that person. When the two do come out the same the row
+     * is dropped rather than repeated: one fact said twice is a fact the eye
+     * stops reading.
+     */
+    const from = author ?? slack.who ?? slack.actor
+    add('From', from && from !== who ? from : null)
     if (slack.meta?.paged) add('Paged', 'your group was named')
     add('Alert', slack.meta?.short_id ? <Mono>{slack.meta.short_id}</Mono> : null)
     add('Monitor', slack.meta?.monitor ? <Mono>{slack.meta.monitor}</Mono> : null)
@@ -582,8 +672,11 @@ function SeenIn({ card }: { card: Card }) {
       <div className={`${EYEBROW} mb-2`}>Seen in</div>
       <div className="flex items-center gap-3 text-sm text-fg-mute flex-wrap">
         {rows.map(s => {
+          // The same words the Channel row above prints, for the same reason:
+          // one channel named two ways, 200px apart in one pane, is two
+          // channels to anybody reading it.
           const where = s.meta?.channel
-            ? cleanChannel(String(s.meta.channel))
+            ? whereSaid(s.meta.channel)?.text ?? s.kind
             : s.account ?? s.meta?.repo ?? s.meta?.project ?? s.kind
           const external = s.url.startsWith('http')
           const body = (

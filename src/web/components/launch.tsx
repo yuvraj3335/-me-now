@@ -39,7 +39,7 @@ import {
   ArrowUpRight, Check, Copy, FileText, Loader2, Scissors, Search, Sparkles, SquareTerminal, X,
 } from 'lucide-react'
 import {
-  Button, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
+  Button, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
 } from './primitives'
 import {
   PERMISSION_MODES, closeLaunch, launchApi, openLaunch, removeFromLaunch,
@@ -60,6 +60,42 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 const sessionRef = (id: string) => `session:${id}`
+
+/**
+ * The two browsable lists on this sheet — templates, skills — share one shape:
+ * an identity on the left with its check, and the sentence that says what the
+ * thing is filling the rest. These three classes are that shape, in one place,
+ * because the two lists drifted apart the moment they were written twice.
+ *
+ * **The name column is sized by the longest name in it.** It was a number
+ * chosen once per list — `sm:w-40` for templates, `sm:w-52` for skills — and
+ * both were wrong for their own data: measured at 1440×900, `Mapping — unified
+ * vs proxy` wanted 162px against 122px of room, and twelve of the twenty-four
+ * skill slugs on screen wanted up to 261px against 170px. Both lists ellipsised
+ * names while the description beside them was nowhere near the edge of a 760px
+ * dialog. A bigger fixed number is the same bug with a later trigger, since
+ * both lists are data: `templates.ts` owns one and the machine's skill catalog
+ * owns the other, and the next long name added breaks it again silently.
+ *
+ * So the rows share one grid and each row is a `subgrid` of it, which is the
+ * only way separate row elements can agree on a column without one of them
+ * measuring the others. The track is `fit-content(45%)`: as wide as the longest
+ * name and no wider, and never past 45% of the row — the cap is what stops one
+ * runaway slug from eating the description, and past it the `truncate` on the
+ * label still catches the overflow. Measured: 200px for templates, 299px for
+ * skills, nothing clipped in either, row height unchanged at 44px.
+ *
+ * From `sm` up only. Below it the row is a stack — name over description — for
+ * the reason written on the templates section: two columns need about 340px and
+ * a phone has 343 for both.
+ */
+const NAME_GRID = 'sm:grid sm:grid-cols-[fit-content(45%)_minmax(0,1fr)]'
+const NAME_ROW = `w-full flex flex-col items-start gap-1 py-2
+                  sm:grid sm:grid-cols-subgrid sm:col-span-2
+                  sm:items-center sm:gap-0 sm:py-0 sm:min-h-11`
+/** `min-w-0` is what lets the cap bite: without it the cell refuses to shrink
+    below its own content and the row overflows instead of truncating. */
+const NAME_CELL = 'w-full sm:w-auto min-w-0 shrink-0 flex items-center gap-2 sm:pr-4'
 
 export function LaunchSheet() {
   const basket = useLaunchBasket()
@@ -268,47 +304,71 @@ function Composer({
             goes, and the number was already on screen: every chosen row has a
             check on it. */}
         <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Templates</h3>
-        {meta.templates.map(t => {
-          const on = templates.includes(t.id)
-          return (
-            <button
-              key={t.id}
-              onClick={() => onToggleTemplate(t.id)}
-              aria-pressed={on}
-              /* This list stays inline rather than becoming a menu: it is a
-                 multi-select, and its blurbs are the whole reason it is
-                 browsable — a popup that closes on the first pick can be
-                 neither. What it borrows from the rest of the product is the
-                 row treatment, so a chosen row is a lit ground here exactly as
-                 it is on the desk, instead of a check and nothing else. */
-              className={`w-full flex flex-col items-start gap-1 py-2
-                         sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
-                         text-left border-b border-rule last:border-0
-                         ${rowStateClass({ selected: on })}`}
-            >
-              {/* A check, not a filled amber box. One selected template used to
-                  be one accent mark, so choosing three spent the budget. */}
-              <span className="w-full sm:w-40 shrink-0 flex items-center gap-2 sm:pr-4">
-                <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
-                <span className={`text-sm truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>{t.label}</span>
-              </span>
-              {/* Two lines, not one clipped one. The blurb is the whole of what
-                  tells `Sentry issue` from `Sync job failure`, and at 760px of
-                  dialog a one-line clamp ellipsised half of them — the picker
-                  then reads by title, which is the one thing 26 of these titles
-                  cannot be told apart by. Two 18px lines still sit inside the
-                  44px row, so the grid does not move. */}
-              <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{t.blurb}</span>
-            </button>
-          )
-        })}
+        <div className={NAME_GRID}>
+          {meta.templates.map(t => {
+            const on = templates.includes(t.id)
+            return (
+              <button
+                key={t.id}
+                onClick={() => onToggleTemplate(t.id)}
+                aria-pressed={on}
+                /* This list stays inline rather than becoming a menu: it is a
+                   multi-select, and its blurbs are the whole reason it is
+                   browsable — a popup that closes on the first pick can be
+                   neither. What it borrows from the rest of the product is the
+                   row treatment, so a chosen row is a lit ground here exactly as
+                   it is on the desk, instead of a check and nothing else. */
+                className={`${NAME_ROW} text-left border-b border-rule last:border-0
+                           ${rowStateClass({ selected: on })}`}
+              >
+                {/* A check, not a filled amber box. One selected template used to
+                    be one accent mark, so choosing three spent the budget. */}
+                <span className={NAME_CELL}>
+                  <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
+                  <span className={`text-sm truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>{t.label}</span>
+                </span>
+                {/* Two lines, not one clipped one. The blurb is the whole of what
+                    tells `Sentry issue` from `Sync job failure`, and at 760px of
+                    dialog a one-line clamp ellipsised half of them — the picker
+                    then reads by title, which is the one thing 26 of these titles
+                    cannot be told apart by. Two 18px lines still sit inside the
+                    44px row, so the grid does not move. */}
+                <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{t.blurb}</span>
+              </button>
+            )
+          })}
+        </div>
       </section>
 
       <SkillPicker all={meta.skills} selected={skills} onChange={setSkills} />
 
       <section className="py-4">
-        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Attachments</h3>
-        {items.length === 0 && <p className="text-sm text-fg-mute h-11 flex items-center">—</p>}
+        {/*
+          The unit once, over the column — not glued to every number.
+
+          The cell read `36c`: a bare `c` with no header, no tooltip and nothing
+          else on the sheet to expand it, which is a unit only the person who
+          wrote it can read. What the eye wants to do with that column is
+          compare down it, so the word moves up into an eyebrow beside the
+          section's own and the cells stay numeric.
+
+          The 38px is the remove control's own footprint — a `sm` Button's 30px
+          plus the 8px it is padded by — so the eyebrow's right edge lands on
+          the numbers' right edge instead of over the crosses.
+        */}
+        <div className="flex items-baseline mb-2">
+          <h3 className="text-eyebrow uppercase text-fg-mute">Attachments</h3>
+          {items.length > 0 && (
+            <span className="ml-auto pr-[38px] text-eyebrow uppercase text-fg-mute">Characters</span>
+          )}
+        </div>
+        {/* A line that names the state, not a dash. A dash is what a cell prints
+            when a value is missing; a section with nothing in it is not a
+            missing value, it is a brief that is going to be carried entirely by
+            what is above and below this. */}
+        {items.length === 0 && (
+          <Empty>Nothing attached — this brief carries the templates above and your own instruction.</Empty>
+        )}
         {items.map(i => (
           <div key={`${i.kind}:${i.ref}`} className="flex items-center h-11 border-b border-rule last:border-0">
             <span className="text-sm text-fg-mute w-24 shrink-0">{KIND_LABEL[i.kind] ?? i.kind}</span>
@@ -316,9 +376,10 @@ function Composer({
               {i.title ?? i.ref}
             </span>
             {/* What this attachment costs the link, before Write rather than
-                after: the budget is the URL, and one long quote can spend it. */}
+                after: the budget is the URL, and one long quote can spend it.
+                The unit is the column's, up in the eyebrow. */}
             <span className="text-sm text-fg-mute tnum shrink-0 pl-3">
-              {Math.min(i.excerpt?.length ?? 0, 2000).toLocaleString()}c
+              {Math.min(i.excerpt?.length ?? 0, 2000).toLocaleString()}
             </span>
             <span className="shrink-0 pl-2">
               <Button size="sm" variant="ghost" title="Remove" ariaLabel="Remove"
@@ -726,6 +787,15 @@ function blurbOf(s: { description?: string | null; whenToUse?: string | null } |
 }
 
 /**
+ * How many skill rows the section paints before it offers the rest.
+ *
+ * Six 44px rows is 264px on a laptop — within a pixel or two of what the
+ * porthole it replaces was painting — so the desktop list keeps its size and
+ * only stops being a scroller.
+ */
+const PEEK = 6
+
+/**
  * Which skills the brief names.
  *
  * Named, never inlined — a skill body is tens of kilobytes and the brief has to
@@ -736,11 +806,35 @@ function blurbOf(s: { description?: string | null; whenToUse?: string | null } |
  * zero skill names — so the answer to "which skills are there?" was "type one
  * and find out". The catalogs are 28 rows; a browsable list is what a list of
  * 28 things is. The search narrows it rather than summoning it.
+ *
+ * **And then it showed them through a porthole.** The list was
+ * `max-h-64 overflow-y-auto` — measured on a phone, 256px of window over
+ * 2555px of content, which is two and a half rows at a time, inside a sheet
+ * body that was itself 665px over 1727px, under a ten-row template list.
+ * A scroll inside a scroll inside a sheet, on the surface whose entire job is
+ * "read this and tap once".
+ *
+ * It is not a `Menu`, and the two menus above it are the argument rather than
+ * the counter-argument: both are single-choice, both close on the pick, and
+ * neither carries a field. `Menu` rows are `menuitemradio` and its `onClick`
+ * closes the panel — a multi-select that shuts after every choice is worse than
+ * anything it would replace, and there is nowhere in it to put the search this
+ * list is built around. Reaching for it would mean changing the shared
+ * primitive that the repository and session pickers depend on, to make it
+ * something neither of them wants.
+ *
+ * So the porthole goes instead of the list. A scroll inside a scroll is fixed
+ * by removing the inner one, not by moving it into a popup that has its own.
+ * The section shows `PEEK` rows and says how many more there are; pressing that
+ * prints the rest inline, exactly as the template list above already prints all
+ * of its ten. One scroller on the surface, and the commit strip is sticky, so
+ * an expanded list cannot push the one button that commits out of reach.
  */
 function SkillPicker({
   all, selected, onChange,
 }: { all: LaunchState['skills']; selected: string[]; onChange: (next: string[]) => void }) {
   const [q, setQ] = useState('')
+  const [expanded, setExpanded] = useState(false)
 
   const matches = useMemo(() => {
     const term = q.trim().toLowerCase()
@@ -748,12 +842,18 @@ function SkillPicker({
     // human title, the catalog letter, and the sentence saying when to use it.
     // Searching only `name` meant "customer" found nothing while three skills
     // said "customer issue" in their own descriptions.
-    if (!term) return all.slice(0, 24)
+    if (!term) return all
     return all
       .filter(s => `${s.name} ${s.title ?? ''} ${s.whenToUse ?? ''} ${s.description ?? ''} ${s.catalog}`
         .toLowerCase().includes(term))
-      .slice(0, 24)
   }, [all, q])
+
+  // The cap used to be a flat 24 rows behind a 256px window, so it was invisible
+  // twice over: you could not see the rows it kept and you could not see that it
+  // had kept any. Six is a browse window rather than a peephole — the same 264px
+  // the porthole painted on a laptop — and what it hides is now on screen as a
+  // count you can press.
+  const shown = expanded ? matches : matches.slice(0, PEEK)
 
   const toggle = (id: string) =>
     onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id])
@@ -784,13 +884,25 @@ function SkillPicker({
         </div>
       ))}
 
+      {/* The field is 32px of box and, on a phone, was 18px of target: the input
+          sat at its own line height inside the box and only that 18px band took
+          a tap, so a thumb aimed at the middle of a control it could see missed
+          it by 3px. `.hit-native` is the answer the product already has for a
+          control that generates no `::after` — it grows the input itself to 44
+          and hands the height straight back as a negative margin, so the box
+          keeps painting 32. `h-full` is what makes the painted 32 the target on
+          a mouse as well, instead of the same 18px band. */}
       <div className="mt-2 flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850">
         <Search size={14} className="text-fg-mute shrink-0" />
         <input
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder={`Search ${all.length} skills`}
-          className="flex-1 min-w-0 bg-transparent outline-none text-sm text-fg placeholder:text-fg-mute"
+          // The placeholder is the only name this field has, and it is gone the
+          // moment there is a character in it.
+          aria-label="Search skills"
+          className="hit-native [--hit-ink:32px] h-full flex-1 min-w-0 bg-transparent outline-none
+                     text-sm text-fg placeholder:text-fg-mute"
         />
       </div>
 
@@ -800,8 +912,8 @@ function SkillPicker({
           26 of the 28 catalog `title` values are the slug again — so what makes
           a list of 28 readable is the description beside it, not the name
           printed twice, and a description cut at 181px is not one. */}
-      <div className="max-h-64 overflow-y-auto">
-        {matches.map(s => {
+      <div className={NAME_GRID}>
+        {shown.map(s => {
           const on = selected.includes(s.id)
           return (
             <button
@@ -813,12 +925,10 @@ function SkillPicker({
                  pick and has nowhere to put the field. What it does take from
                  the menu is the answer to "which of these have I already
                  chosen?" — the row's own lit ground, not a check alone. */
-              className={`w-full flex flex-col items-start gap-1 py-2
-                         sm:flex-row sm:items-center sm:gap-0 sm:py-0 sm:min-h-11
-                         text-left border-b border-rule last:border-0
+              className={`${NAME_ROW} text-left border-b border-rule last:border-0
                          ${rowStateClass({ selected: on })}`}
             >
-              <span className="w-full sm:w-52 shrink-0 flex items-center gap-2 sm:pr-4">
+              <span className={NAME_CELL}>
                 <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
                 <span className={`text-sm font-mono truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>
                   {s.name}
@@ -829,7 +939,33 @@ function SkillPicker({
           )
         })}
       </div>
-      {!matches.length && <p className="text-sm text-fg-mute h-11 flex items-center">—</p>}
+
+      {/* The rest of the list, as a count rather than as a scrollbar. It says
+          the number because the number is the fact being withheld, and it is
+          the one place on this sheet a count belongs — the section heading is a
+          label, not a readout.
+
+          Bordered rather than ghost, because `Pager` is what this is: the
+          control that reveals the rest of a list. A lone muted label under a
+          list of muted rows reads as the list's caption. */}
+      {matches.length > PEEK && (
+        <div className="mt-2">
+          <Button size="sm" variant="default" onClick={() => setExpanded(v => !v)}>
+            {expanded ? 'Show fewer' : `Show all ${matches.length}`}
+          </Button>
+        </div>
+      )}
+
+      {/* Two different nothings, and they are not the same sentence: a search
+          that matched none of the catalog, and a machine with no catalog on it
+          at all. Neither is a dash. */}
+      {!matches.length && (
+        <Empty>
+          {q.trim()
+            ? `No skill here matches ${q.trim()}.`
+            : 'No skills on this machine.'}
+        </Empty>
+      )}
     </section>
   )
 }

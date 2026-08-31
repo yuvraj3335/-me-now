@@ -19,11 +19,12 @@ import {
 } from 'lucide-react'
 import {
   displayName, mailApi, splitAddrs, useMailState,
-  type Draft, type MailMessage, type MailState, type MailThread,
+  type Address, type Draft, type MailMessage, type MailState, type MailThread,
 } from '../lib/mail'
 import {
   Button, Chip, Empty, Field, PageTitle, Sheet, inputClass, rowStateClass, useRail,
 } from '../components/primitives'
+import { senderOrg } from '../components/kinds'
 import { ago, timeOfDay } from '../lib/time'
 import { openLaunch } from '../lib/launch'
 import { registerPaletteActions } from '../components/palette'
@@ -129,7 +130,14 @@ export function Mail() {
               onChange={e => setQ(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') submitSearch(); if (e.key === 'Escape') clearSearch() }}
               placeholder="Search"
-              className="flex-1 bg-transparent outline-none text-sm text-fg placeholder:text-fg-mute"
+              /* `hit-native`, because a bare `<input>` is a replaced element and
+               `.hit`'s ::after generates nothing on one. Measured 322×18 with
+               nothing but the sticky header ±21px above and below it — the one
+               control on this page a thumb is most likely to reach for. The ink
+               it hands back is the 32px row it sits in, not the 28px of a row
+               control, so `--hit-ink` says so and the layout does not move. */
+            className="hit-native [--hit-ink:32px] flex-1 min-w-0 bg-transparent outline-none
+                       text-sm text-fg placeholder:text-fg-mute"
             />
             {/* A bare glyph is a 14px target. `Button` paints the same 14px
                 and carries the 44 underneath it. */}
@@ -145,9 +153,21 @@ export function Mail() {
               was cut back to the 32px the chip paints. And the rail fades at
               its right edge while there is more past it — six filters need
               384px inside 343, and `All mail` was simply sliced off by the
-              screen edge with nothing to say the strip scrolls. */}
+              screen edge with nothing to say the strip scrolls.
+
+              From `sm` up it wraps instead, because from `sm` up the strip is
+              not the page: it is a 360px column with an 880px reading pane
+              beside it, and a horizontal scroller there needs a gesture almost
+              nobody makes with a mouse. Measured at 1440 with a thread open —
+              six chips needing 379px inside 311, `All mail` at x541 against a
+              box ending at 535. A phone keeps the scroller: a second row of
+              chips there is 32px off the top of the list, and a thumb swipes a
+              rail without being asked to. Wrapped, `useRail` measures no
+              overflow, so the fade turns itself off. */}
           <div className="rail mt-2" data-spill={rail.spill || undefined}>
-            <div ref={rail.ref} className="flex gap-2 overflow-x-auto no-scrollbar py-1.5">
+            <div ref={rail.ref}
+              className="flex gap-2 overflow-x-auto no-scrollbar py-1.5
+                         sm:flex-wrap sm:gap-y-1 sm:overflow-x-visible">
               {state.boxes.map(b => (
                 <Chip key={b.id} active={box === b.id} onClick={() => { setBox(b.id); setSelected(null) }}>
                   {b.label}
@@ -235,6 +255,47 @@ function BoxError({ account, error }: { account: string; error: string }) {
       <span className="text-sm text-fg-mute shrink-0 pl-3">didn't load</span>
     </div>
   )
+}
+
+/* ------------------------------- who sent it ------------------------------ */
+
+/**
+ * The name on a row, when the envelope carried no name at all.
+ *
+ * `displayName` falls back to the local part, and the local part is the half of
+ * an address that is least likely to identify anybody: measured on one live
+ * inbox of 25, `noreply` was Sentry twice, Cloudflare once and Truto's own
+ * mailer once, `notify` was two different Notion domains, and `eng` was ten
+ * rows from at least four unrelated systems. Twelve distinct senders arrived as
+ * eight tokens, and the collisions were between the *most* unrelated pairs.
+ *
+ * So the domain speaks instead, through the same `senderOrg` the desk's phone
+ * column uses — `md.getsentry.com` is Sentry, `e.read.ai` is Read, and the
+ * transport subdomain is thrown away for free. It fixes nine of those rows.
+ *
+ * **It cannot fix `eng@truto.one`, and that is the interesting half.** That is
+ * an internal group alias: Cloudflare's status alerts, Crisp's chat replies and
+ * npm's publish receipts all land through it, and the Gmail payload really does
+ * report the alias as the sender at both the thread and message level — the
+ * original author is not in the data Wake has. Answering `Truto` there would be
+ * the workspace token printed on the column's own background, which is what
+ * `cleanChannel` exists to strip, and it would also be false: Truto did not
+ * send Cloudflare's maintenance notice. So an address on his own organisation's
+ * domain — the account's, whatever that account is — is not allowed to be
+ * summarised, and the full address stands as itself. `eng@truto.one` is not who
+ * sent it, but it is exactly what Wake knows, and it does not read as a
+ * person's name the way a bare `eng` does.
+ *
+ * A personal mailbox host takes the same path, for the same reason in reverse:
+ * `senderOrg` answers nothing for `gmail.com` because Gmail did not send the
+ * mail, so the address is the most that can be said.
+ */
+function senderLabel(from: Address | null, account: string): string {
+  if (!from) return 'unknown'
+  if (from.name) return from.name
+  const org = senderOrg(from.addr)
+  if (org && org !== senderOrg(account)) return org
+  return from.addr || 'unknown'
 }
 
 /* --------------------------------- list ----------------------------------- */
@@ -368,7 +429,7 @@ function ThreadRow({
         ${rowStateClass({ active, unseen: thread.unread })}`}
     >
       <div className="flex items-baseline gap-2">
-        <span className="text-sm text-fg-dim truncate">{displayName(thread.from)}</span>
+        <span className="text-sm text-fg-dim truncate">{senderLabel(thread.from, thread.account)}</span>
         {thread.messageCount > 1 && <span className="tnum text-sm text-fg-mute">{thread.messageCount}</span>}
         <span className="ml-auto tnum text-sm text-fg-mute shrink-0">{ago(thread.ts)}</span>
       </div>
@@ -430,9 +491,15 @@ function ThreadView({
   return (
     <div className="pad-x pt-4 pb-16">
       <div className="flex items-start gap-2">
-        <button onClick={onBack} className="sm:hidden p-2 -ml-2 text-fg-mute" title="Back">
-          <ArrowLeft size={16} />
-        </button>
+        {/* The only way back to the list on a phone, and it was a bare 32×32
+            box with no collar. `Button` paints the same glyph and carries the
+            44 underneath it, which is the whole reason nothing here rolls its
+            own control. */}
+        <div className="sm:hidden -ml-3 shrink-0">
+          <Button variant="ghost" onClick={onBack} title="Back" ariaLabel="Back">
+            <ArrowLeft size={16} />
+          </Button>
+        </div>
         <div className="grow min-w-0">
           <h2 className="text-md leading-snug font-medium">{thread.subject}</h2>
           <p className="mt-1 text-sm text-fg-mute">
@@ -475,16 +542,54 @@ function ThreadView({
       )}
       
 
-      <div className="mt-5">
-        {messages.map((m, i) => (
-          <MessageView key={m.id} message={m} expanded={i === messages.length - 1} />
+      {/* The body is a second round trip, measured between 1.6 and 3 seconds,
+          and until this the pane rendered a subject, three buttons and ~570px
+          of nothing under them. A thread with no body in it and a thread whose
+          body has not arrived looked identical, and the first of those is
+          broken. Same answer the list column already gives: the shape arrives
+          before the content. */}
+      {loading && !messages.length ? <ArrivingBody /> : (
+        <div className="mt-5">
+          {messages.map((m, i) => (
+            <MessageView key={m.id} message={m} account={thread.account}
+              expanded={i === messages.length - 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The message that has been asked for and has not arrived.
+ *
+ * `ArrivingRows` for the thread pane, and deliberately the same three rules:
+ * the real geometry (one header line, then body lines on the body's own
+ * rhythm), `aria-hidden` because it is a shape and not content, and nothing
+ * that moves — the reader is looking at a document that may not be being
+ * painted, and there is no second animation worth waiting on.
+ */
+function ArrivingBody() {
+  const WIDTHS = ['w-11/12', 'w-full', 'w-10/12', 'w-full', 'w-7/12', 'w-9/12', 'w-5/12']
+  return (
+    <div aria-hidden className="mt-5">
+      <div className="flex items-center gap-3 py-3">
+        <span className="h-2 w-24 rounded-chip bg-rule opacity-60" />
+        <span className="h-2 w-32 rounded-chip bg-rule opacity-60 hidden sm:block" />
+        <span className="ml-auto h-2 w-10 rounded-chip bg-rule opacity-60" />
+      </div>
+      <div className="space-y-3">
+        {WIDTHS.map((w, i) => (
+          <span key={i} className={`block h-2 rounded-chip bg-rule opacity-60 ${w}`} />
         ))}
       </div>
     </div>
   )
 }
 
-function MessageView({ message, expanded }: { message: MailMessage; expanded: boolean }) {
+function MessageView({
+  message, account, expanded,
+}: { message: MailMessage; account: string; expanded: boolean }) {
   const [open, setOpen] = useState(expanded)
   const [showImages, setShowImages] = useState(false)
   const [showHtml, setShowHtml] = useState(!message.text && !!message.html)
@@ -499,9 +604,17 @@ function MessageView({ message, expanded }: { message: MailMessage; expanded: bo
   return (
     <article className="py-3 hairline last:border-0">
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-baseline gap-2 text-left">
-        <span className="text-sm text-fg truncate">{displayName(message.from)}</span>
+        {/* The same question the row asks, so it gets the same answer: an
+            open thread whose header said `eng` over a list row reading
+            `eng@truto.one` would be two names for one sender. */}
+        <span className="text-sm text-fg truncate">{senderLabel(message.from, account)}</span>
+        {/* Recipients are named, never summarised. `senderOrg` is a good answer
+            for "who is this organisation" and a bad one for "who did this go
+            to" — two people at one company would both come out `Acme`, in a
+            list, side by side. A name if the envelope carried one and the whole
+            address otherwise. */}
         <span className="text-sm text-fg-mute truncate hidden sm:inline">
-          to {message.to.map(displayName).join(', ') || 'you'}
+          to {message.to.map(a => a.name || a.addr).join(', ') || 'you'}
         </span>
         <span className="ml-auto tnum text-sm text-fg-mute shrink-0">
           {message.ts ? timeOfDay(message.ts) : ''}
@@ -661,29 +774,74 @@ function Composer({
             </div>
           </div>
         ) : (
+          /*
+           * The loudest control on the sheet is the one that does something.
+           *
+           * It used to be an amber `Sending unavailable` — a disabled primary,
+           * at the one size and colour this product reserves for a commitment,
+           * announcing a thing that cannot happen and can never become
+           * possible from here — while `Save draft`, the thing this sheet can
+           * actually do, sat beside it as a bare ghost. A control that is
+           * permanently disabled is not a control; it is a sentence, and the
+           * sentence is already in the body above.
+           *
+           * So where there is no send tool the send button is not rendered at
+           * all and the draft takes the fill. This does NOT give the sheet the
+           * power to send: `mailApi.draft` writes a draft into Gmail and stops,
+           * and the send path below is still the two-step token flow it was.
+           *
+           * And a connection that can do neither gets no strip at all, rather
+           * than an empty 40px bar with a border on it. What is true then is a
+           * sentence, and it is in the body.
+           */
+          !state.canSend && !state.canDraft ? null : (
           <div className="flex gap-2">
-            <Button variant="primary" className="flex-1" onClick={ask}
-              disabled={busy || !state.canSend || !to.trim() || !subject.trim() || !body.trim()}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              {state.canSend ? 'Review and send' : 'Sending unavailable'}
-            </Button>
+            {state.canSend && (
+              <Button variant="primary" className="flex-1" onClick={ask}
+                disabled={busy || !to.trim() || !subject.trim() || !body.trim()}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                Review and send
+              </Button>
+            )}
             {state.canDraft && (
-              <Button variant="ghost" onClick={async () => {
-                try { await mailApi.draft(current()); setSent('Saved as a draft.') }
-                catch (e) { setErr((e as Error).message) }
-              }}>
+              <Button
+                variant={state.canSend ? 'ghost' : 'primary'}
+                className={state.canSend ? '' : 'flex-1'}
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true)
+                  setErr(null)
+                  try { await mailApi.draft(current()); setSent('Saved as a draft.') }
+                  catch (e) { setErr((e as Error).message) }
+                  finally { setBusy(false) }
+                }}
+              >
+                {busy && !state.canSend ? <Loader2 size={14} className="animate-spin" /> : null}
                 Save draft
               </Button>
             )}
           </div>
+          )
         )
       }
     >
+      {/*
+        One sentence, and it is the one the reader can act on.
+
+        This line used to end `It advertised: create_draft, list_drafts,
+        get_draft, get_thread, …` — twenty-three Gmail tool names. Measured in
+        place at 375px: the paragraph was 232px tall and is now 42px, which is
+        190px of an 812px screen returned to the To field. That list is how the
+        limitation was *diagnosed*; it is not what the limitation *is*, and a
+        person about to write a mail cannot do anything with it. The server
+        still sends `discovered` and Settings is where a source is diagnosed.
+      */}
       {!state.canSend && (
         <p className="mb-3 flex items-start gap-2 text-sm text-fg-mute leading-relaxed">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-          This Gmail connection exposes no send tool, so Wake can draft but cannot send. It advertised:{' '}
-          {state.discovered.join(', ') || '(nothing)'}.
+          {state.canDraft
+            ? 'This Gmail connection exposes no send tool. Wake can save a draft; sending it is done in Gmail.'
+            : 'This Gmail connection exposes neither a send nor a draft tool, so nothing written here can leave Wake.'}
         </p>
       )}
 

@@ -32,10 +32,12 @@
  * 4d`, which is not a commitment, it is a distance.
  */
 
-import { Reorder, motion } from 'motion/react'
+import { AnimatePresence, Reorder, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bell, BellRing, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, Trash2, X } from 'lucide-react'
+import {
+  Bell, BellRing, ChevronDown, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, Trash2, X,
+} from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
 import type { Goal, Task } from '../lib/types'
 import { STATUS_LABEL } from '../lib/types'
@@ -44,10 +46,10 @@ import { SwipeDrawer, useSwipe } from '../components/swipe'
 import { PANE_MIN, useViewport } from '../components/CardTable'
 import { toast } from '../lib/toast'
 import {
-  Button, DateField, DateTimePicker, Field, PageTitle, Pager, Segmented, Select, Sheet,
+  Button, DateTimePicker, Field, PageTitle, Pager, Segmented, Select, Sheet,
   inputClass, pageCount, pageSlice, rowStateClass, spring,
 } from '../components/primitives'
-import { TaskSheet, NOTE_COLORS } from '../components/TaskSheet'
+import { TaskSheet, NOTE_COLORS, noteColorName } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
@@ -296,6 +298,8 @@ export function Work() {
   const paneTask = openTask ?? held?.task ?? null
   const paneGoal = openGoal ?? held?.goal ?? null
   const paneGone = !!ref && !openTask && !openGoal
+  /** Whether the rail is currently leading with a row's detail. See `railTail`. */
+  const paneShown = hasPane && !!(paneTask || paneGoal)
 
   const closePane = () => setParam('open', null)
   const openRow = (t: Task) => (hasPane ? setParam('open', paneKey('task', t.id)) : setEditingId(t.id))
@@ -406,7 +410,23 @@ export function Work() {
     onStatus: setTaskStatus, onDelete: removeTask,
   })
 
-  const open = todo.length + doing.length
+  /**
+   * The number beside the title counts what the tab beside it is showing.
+   *
+   * It was `todo.length + doing.length` unconditionally, which on `?tab=goals`
+   * with no goals at all printed `Work 1` over an empty list — a count of a
+   * list that was not on screen, sitting where a reader takes it for a count of
+   * the one that was. A header that carries a tab carries the tab's number.
+   *
+   * The noun is not painted, because a zero-width header on a 360px phone needs
+   * the two controls beside it more than it needs the word; it is on `title`
+   * and in the accessible name instead, so the number is never bare to anything
+   * that reads it out.
+   */
+  const open = tab === 'tasks'
+    ? todo.length + doing.length
+    : goals.filter(g => !g.completed_at).length
+  const openNoun = `${tab === 'tasks' ? 'task' : 'goal'}${open === 1 ? '' : 's'} not done`
 
   return (
     /* The shell's own grid: a padded list column, then a pane on the same width
@@ -428,7 +448,11 @@ export function Work() {
           <PageTitle>Work</PageTitle>
           {/* A zero here is not information, and it is 32px of the phone's
               header row that the two controls beside it actually need. */}
-          {loaded && open > 0 && <span className="tnum text-sm text-fg-mute">{open}</span>}
+          {loaded && open > 0 && (
+            <span className="tnum text-sm text-fg-mute" title={`${open} ${openNoun}`}>
+              {open}<span className="sr-only"> {openNoun}</span>
+            </span>
+          )}
           <span className="ml-auto flex items-center gap-4">
             {/*
               A pill pair, not two words.
@@ -563,8 +587,8 @@ export function Work() {
             onStatus={setGoalDone} onDelete={g => { closePane(); void removeGoal(g) }}
           />
         )}
-        <Fired rows={fired} />
-        <VoiceNotes notes={notes} onNotes={setNotes} />
+        <Fired rows={fired} lead={!paneShown} />
+        <VoiceNotes notes={notes} onNotes={setNotes} lead={!paneShown && !fired.length} />
       </aside>
 
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
@@ -574,6 +598,29 @@ export function Work() {
     </div>
   )
 }
+
+/**
+ * How a rail section separates itself from whatever is above it.
+ *
+ * The rail is a column of PEERS — the row you pressed, the reminders that went
+ * off, and the recorder — and none of them owns another. Voice notes carried
+ * `xl:mt-0`, which is right only while they are first in the column; open a
+ * task and the same block sat 24 pixels under the pane's `Delete` with nothing
+ * between them, where it read as "record a note about this task". Measured on
+ * the deployed page at 1440×900: `Delete` bottom 274, `VOICE NOTES` top 298.
+ *
+ * The recorder stays in the rail rather than moving under the list, and that is
+ * the decision, not a default. It holds a live `MediaRecorder` and a running
+ * clock, so it has to live in exactly one place unconditionally — and of the
+ * two places available, the rail is the one where a capture control is reachable
+ * without scrolling past two hundred rows, and the one that keeps the column
+ * from being empty when no row is open. What was wrong was never the address;
+ * it was that nothing said where the pane stopped.
+ *
+ * So a section that is not first says so with the product's own elevation: one
+ * pixel of edge, and equal air either side of it.
+ */
+const railTail = (lead: boolean) => (lead ? 'mt-8 xl:mt-0' : 'pt-6 border-t border-edge')
 
 /** An eyebrow and rows. It is never amber: a heading colour is not a state. */
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
@@ -601,6 +648,16 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
  * variant that exists exactly for a control that must be unmistakably pressable
  * without claiming to be the commit — and at `lg` it is the biggest thing on an
  * otherwise empty page, which is the whole job.
+ *
+ * An audit called this a duplicate of the header's `+ Task` — two controls for
+ * one action, "sixty to a hundred and thirty pixels apart". That number is the
+ * vertical gap and nothing else. Measured on the deployed page with an empty
+ * Goals list, the two centres are 258px apart at 375 and 738px apart at 1440,
+ * because the header control is right-aligned and this one is left-aligned:
+ * they sit at opposite corners of the screen, not beside each other. A toolbar
+ * action and the empty state's own answer to its own sentence are not the same
+ * control twice, and the redundancy that WAS real here — both of them amber —
+ * is the one that got fixed.
  */
 function Blank({ what, onAdd }: { what: Tab; onAdd: () => void }) {
   return (
@@ -680,8 +737,11 @@ function TaskDetail({
   onStatus: (t: Task, s: Task['status']) => void
   onDelete: (t: Task) => void
 }) {
+  const still = useStill()
   const [noteBody, setNoteBody] = useState('')
-  useEffect(() => setNoteBody(''), [task.id])
+  /** The deadline calendar's disclosure. Shut on every task — see the row. */
+  const [dueOpen, setDueOpen] = useState(false)
+  useEffect(() => { setNoteBody(''); setDueOpen(false) }, [task.id])
 
   const goal = goals.find(g => g.id === task.goal_id)
   const reminder = reminders.find(
@@ -720,17 +780,69 @@ function TaskDetail({
                 ariaLabel="Status"
               />
             </PaneRow>
+            {/*
+              The field is the disclosure, and the calendar is behind it.
+
+              This was a bare `<input type="datetime-local">`, which on a task
+              with no deadline renders as the literal string
+              `dd/mm/yyyy, --:-- --` — while the sheet three presses away
+              answered the same question with a month grid. Two answers to "how
+              do I set a date" is one too many, and the native box was the worse
+              of them. This is the shape the desk's Due row settled on: the
+              value states itself without being pressed, and pressing it unfolds
+              the real calendar full-width underneath. What the press reveals is
+              the *control*, not the choice, so it is not a menu.
+
+              `deadlineWords` is the words — the same ones the list row prints,
+              including its own `late —`, which is why the separate red `late`
+              span that used to sit beside the input is gone rather than moved.
+              The pane must not grow a second vocabulary for the same fact.
+            */}
             <PaneRow label="Deadline">
-              {/* One word, and it is the one `deadlineWords` already prints on
-                  the row — the pane must not grow a second vocabulary for the
-                  same fact. The control beside it stays the control. */}
-              {overdue && <span className="text-sm text-bad mr-2">late</span>}
-              <DateField
-                value={task.due_at}
-                onChange={async at => { await actions.updateTask(task.id, { due_at: at }); await reload() }}
-                ariaLabel="Deadline"
-              />
+              <button
+                type="button"
+                onClick={() => setDueOpen(v => !v)}
+                aria-expanded={dueOpen}
+                aria-label={`Deadline — ${task.due_at === null ? 'none set' : deadlineWords(task.due_at)}`}
+                title={task.due_at === null ? undefined : deadlineWords(task.due_at)}
+                className="hit relative w-full inline-flex items-center justify-between gap-2
+                           h-8 px-2 rounded-control border border-edge text-sm font-medium
+                           hover:bg-ink-800 transition-colors duration-100"
+              >
+                <span className={`truncate ${
+                  task.due_at === null ? 'text-fg-mute' : overdue ? 'text-bad' : 'text-fg-dim'}`}>
+                  {task.due_at === null ? 'No deadline' : deadlineWords(task.due_at)}
+                </span>
+                <ChevronDown size={13} aria-hidden
+                  className={`shrink-0 text-fg-mute transition-transform duration-100 ${dueOpen ? 'rotate-180' : ''}`} />
+              </button>
             </PaneRow>
+            {/* Outside the `PaneRow`, because a row is a 44px line and seven
+                calendar cells want the pane's whole width — 272px across is the
+                difference between a usable grid and a decorative one. */}
+            <AnimatePresence initial={false}>
+              {dueOpen && (
+                <motion.div
+                  key="due-picker"
+                  initial={still ? false : { height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={still ? undefined : { height: 0, opacity: 0 }}
+                  transition={{ duration: 0.16, ease: 'easeOut' }}
+                  className="overflow-hidden border-b border-rule"
+                >
+                  <div className="py-3">
+                    <DateTimePicker
+                      value={task.due_at}
+                      onChange={async at => {
+                        await actions.updateTask(task.id, { due_at: at })
+                        await reload()
+                      }}
+                      ariaLabel="Deadline"
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
             {goal && (
               <PaneRow label="Goal">
                 <span className="min-w-0 inline-flex items-center gap-2 text-sm text-fg-dim">
@@ -973,9 +1085,22 @@ function TaskRow({
 
   const body = (
     <div className="flex items-start gap-3 py-2 min-h-11">
+      {/*
+        The page's primary verb, at the page's smallest target — until this.
+
+        The glyph is 14px and the button's box was exactly the glyph: 14×16, no
+        `position`, so `.hit` had nothing to hang a collar on and the row's
+        `items-start` pinned all 224px² of it to the top-left corner. Probing
+        21px out from its centre in all four directions missed every time, on
+        the one control that takes a task off the list. `hit relative` is the
+        same 44px collar every other small control in the product gets — the
+        glyph does not move, and nothing else on the row is within reach of the
+        collar except the first three pixels of the title, which opens the row
+        the checkbox is already on.
+      */}
       <button
         onClick={e => { e.stopPropagation(); onCycle(task) }}
-        className="pt-0.5 shrink-0 transition-colors duration-100"
+        className="hit relative pt-0.5 shrink-0 transition-colors duration-100"
         aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}`}
       >
         <Icon size={14} className={
@@ -1261,15 +1386,26 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
           {target ? `By ${shortDate(target)}` : 'No target date'}
         </p>
       </div>
+      {/* Named and hittable, for the reasons the task sheet's palette gives:
+          seven 24px circles at a 32px pitch are seven unlabelled buttons with
+          576px² of target each, and `gap-5` is the pitch at which a 44px collar
+          owns its own circle instead of half its neighbour's. */}
       <Field label="Colour">
-        <div className="flex gap-2 items-center">
-          <button onClick={() => setColor(null)}
-            className={`w-6 h-6 rounded-full border ${!color ? 'border-fg-dim' : 'border-edge'}`} />
+        <div className="flex gap-5 items-center">
+          <button onClick={() => setColor(null)} title="No colour" aria-label="No colour"
+            aria-pressed={!color}
+            className={`hit relative w-6 h-6 rounded-full border ${!color ? 'border-fg-dim' : 'border-edge'}`} />
           {NOTE_COLORS.map(c => (
             <button key={c} onClick={() => setColor(c)} style={{ background: c }}
-              className={`w-6 h-6 rounded-full ${color === c ? 'ring-2 ring-offset-2 ring-offset-ink-850 ring-fg-dim' : ''}`} />
+              title={noteColorName(c)} aria-label={noteColorName(c)} aria-pressed={color === c}
+              className={`hit relative w-6 h-6 rounded-full ${color === c ? 'ring-2 ring-offset-2 ring-offset-ink-850 ring-fg-dim' : ''}`} />
           ))}
         </div>
+        <p className="mt-2 text-sm text-fg-mute">
+          {color === null
+            ? 'No colour'
+            : `${noteColorName(color)} — tints this goal's dot and its progress bar.`}
+        </p>
       </Field>
     </Sheet>
   )
@@ -1284,10 +1420,16 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
  * vanished. This is the somewhere it is visible: beside the tasks the reminders
  * were about.
  */
-function Fired({ rows }: { rows: Array<{ id: string; title: string; body?: string | null; created_at: number }> }) {
+function Fired({
+  rows, lead,
+}: {
+  rows: Array<{ id: string; title: string; body?: string | null; created_at: number }>
+  /** This is the first thing in the rail — see `railTail`. */
+  lead: boolean
+}) {
   if (!rows.length) return null
   return (
-    <section className="mb-8">
+    <section className={`mb-6 ${railTail(lead)}`}>
       <h2 className="text-eyebrow uppercase text-fg-mute mb-1">Went off</h2>
       {rows.map(n => (
         <div key={n.id} className="flex items-start gap-2 py-2 border-b border-rule last:border-0">
@@ -1314,11 +1456,16 @@ function Fired({ rows }: { rows: Array<{ id: string; title: string; body?: strin
  * this one was easier to make while walking.
  */
 function VoiceNotes({
-  notes, onNotes,
-}: { notes: VoiceNote[] | null; onNotes: (fn: (prev: VoiceNote[] | null) => VoiceNote[]) => void }) {
+  notes, onNotes, lead,
+}: {
+  notes: VoiceNote[] | null
+  onNotes: (fn: (prev: VoiceNote[] | null) => VoiceNote[]) => void
+  /** This is the first thing in the rail — see `railTail`. */
+  lead: boolean
+}) {
   const rows = notes ?? []
   return (
-    <section className="mt-8 xl:mt-0">
+    <section className={railTail(lead)}>
       {/* The lone `ml-auto` mic glyph is gone: it sat 250px from anything it
           related to and did nothing when pressed. `Recorder` below is the mic. */}
       <div className="flex items-baseline gap-2 mb-2">
