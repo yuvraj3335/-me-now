@@ -536,7 +536,24 @@ export function SessionPage({ id }: { id: string | null }) {
       <div className="shrink-0 pt-2 pb-3 border-t border-rule">
         {refused && <p className="pb-2 text-sm text-bad leading-snug">{refused}</p>}
 
-        {id && !active ? (
+        {id && !active && starting ? (
+          /*
+            Not running *yet*, which is the opposite of the case below it.
+
+            Both are `active: false` and they must not share a sentence. This
+            page shipped for one deploy saying `This session is not running any
+            more` under a notice explaining that it was starting — two
+            statements about the same session, one of them wrong, three lines
+            apart. A session waiting on its trust dialog has nothing to read and
+            nothing to retry; the notice above already says where the question
+            is, so this only has to not contradict it.
+          */
+          <p className="text-sm text-fg-mute leading-snug">
+            {starting.trusted
+              ? 'Starting — the composer opens when the session does.'
+              : 'The composer opens once you have answered the prompt in the terminal.'}
+          </p>
+        ) : id && !active ? (
           /*
             The one refusal that is a state rather than an event.
 
