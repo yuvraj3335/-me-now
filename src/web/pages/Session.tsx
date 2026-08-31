@@ -44,7 +44,9 @@ import { ChevronLeft, Loader2, Plus, SendHorizontal, Trash2 } from 'lucide-react
 import { Button, Menu, Sheet } from '../components/primitives'
 import { Mic } from '../components/voice'
 import { DeleteSheet, rememberedRepo, sessionRoute } from '../components/sessions'
-import { sessionApi, type OpenSession, type SessionTurn } from '../lib/api'
+import {
+  sessionApi, type OpenSession, type SessionStarting, type SessionTurn,
+} from '../lib/api'
 import {
   PERMISSION_MODES, launchApi, openLaunch,
   type LaunchState, type PermissionMode, type Session,
@@ -149,6 +151,15 @@ export function SessionPage({ id }: { id: string | null }) {
    */
   const [active, setActive] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+  /**
+   * Started, but holding a dialog open and therefore not on disk yet.
+   *
+   * Almost always the one-time "is this a project you trust?", which Claude Code
+   * asks the first time it is pointed at a directory. It is the operator's
+   * answer to give — Wake reads the flag and will not write it on his behalf —
+   * so the page's job is to say where the question is, not to route around it.
+   */
+  const [starting, setStarting] = useState<SessionStarting | null>(null)
 
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -198,6 +209,7 @@ export function SessionPage({ id }: { id: string | null }) {
         setLoaded({ session: d.session, paths: d.paths })
         setTurns(d.turns)
         setActive(d.session.active)
+        setStarting(d.starting ?? null)
       })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
@@ -223,6 +235,10 @@ export function SessionPage({ id }: { id: string | null }) {
         const d = await sessionApi.since(id, after.current)
         if (!alive) return
         setActive(d.active)
+        // A session waiting on its trust dialog answers every poll this way
+        // until he answers it, and then stops — so the notice clears itself
+        // without the page having to be reopened.
+        setStarting(d.starting ?? null)
         if (!d.turns.length) return
         /*
          * Merged against what is actually held, not against what was asked for.
@@ -431,7 +447,37 @@ export function SessionPage({ id }: { id: string | null }) {
       >
         {err && <p className="text-sm text-bad">{err}</p>}
 
-        {!err && !shown.length && (
+        {/*
+          The session exists and is waiting on him, and this is the sentence
+          that says so.
+
+          Without it this page read `no such session on this machine` under a
+          subtitle that said `live` — measured, on a repository Claude Code had
+          never been pointed at before. Both halves were wrong in different
+          directions, and the fix is not to hide the state but to name it and
+          say where the question is. Wake will not answer a trust prompt on his
+          behalf; that is the whole of #39's last paragraph.
+        */}
+        {!err && starting && (
+          <div>
+            <p className="text-sm text-fg-dim">
+              {starting.trusted
+                ? 'The session is starting. The first turn will appear here.'
+                : `Claude Code is asking whether it can trust ${loaded?.session.project ?? 'this repository'}. It is waiting in the terminal, and this conversation starts as soon as you answer.`}
+            </p>
+            {!starting.trusted && (
+              <Button
+                variant="secondary"
+                className="mt-3"
+                onClick={() => navigate(starting.route)}
+              >
+                Answer it in the terminal
+              </Button>
+            )}
+          </div>
+        )}
+
+        {!err && !starting && !shown.length && (
           id
             ? <p className="text-sm text-fg-mute">Nothing has been said in this session yet.</p>
             : (

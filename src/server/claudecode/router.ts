@@ -14,6 +14,7 @@
 
 import { Hono } from 'hono'
 import { unlinkSync } from 'node:fs'
+import { basename } from 'node:path'
 import { archivedSessionIds, audit, db, setSessionArchived } from '../db'
 import {
   deleteSession, getSession, listActiveSessions, liveSessions,
@@ -140,7 +141,34 @@ claudecode.get('/sessions', c => {
 claudecode.get('/sessions/:id', c => {
   const id = c.req.param('id')
   const s = getSession(id)
-  if (!s) return c.json(bad('no such session on this machine'), 404)
+
+  // Started, but with nothing written yet.
+  //
+  // A brand new session has no transcript until Claude Code has answered
+  // something, and it will not answer while it is holding a dialog open — the
+  // one-time "is this a project you trust?" is the common case, and it is the
+  // whole reason `openTerminal` reports `trusted` at all. Answering 404 here
+  // was measured: he pressed Send, Wake started a real tmux session, and then
+  // put him on a page that said *no such session on this machine* with `live`
+  // in the subtitle. That is the same lie this pass exists to remove, arriving
+  // from the other direction, so the pending state is a real answer now.
+  if (!s) {
+    const t = getTerminal(id)
+    if (!t) return c.json(bad('no such session on this machine'), 404)
+    return c.json({
+      session: {
+        id, title: t.repo ?? basename(t.cwd), cwd: t.cwd, project: t.repo ?? basename(t.cwd),
+        lastPrompt: null, turns: 0, lastTs: t.createdAt, path: '', pr: null,
+        branch: null, version: null, entrypoint: null, permissionMode: t.permissionMode,
+        live: false, active: false, startedAt: t.createdAt,
+      },
+      turns: [],
+      excerpt: '',
+      paths: [],
+      starting: { trusted: t.trusted, started: t.started, route: t.route },
+    })
+  }
+
   const live = liveSessions().get(id)
   const excerpt = sessionExcerpt(id, 4_000)
   return c.json({
@@ -163,7 +191,17 @@ claudecode.get('/sessions/:id/turns', c => {
   const id = c.req.param('id')
   const after = Number(c.req.query('after')) || 0
   const r = parseSessionTurns(id, { after, limit: 200 })
-  if (!r.found) return c.json(bad('no such session on this machine'), 404)
+  if (!r.found) {
+    // Same reasoning as the route above: a session that has started but not yet
+    // written is not a missing one, and the poll has to be able to sit on it
+    // without the page filling the console with 404s while it waits.
+    const t = getTerminal(id)
+    if (!t) return c.json(bad('no such session on this machine'), 404)
+    return c.json({
+      turns: [], active: false,
+      starting: { trusted: t.trusted, started: t.started, route: t.route },
+    })
+  }
   return c.json({ turns: r.turns, active: liveSessions().has(id) })
 })
 
@@ -196,9 +234,16 @@ claudecode.post('/sessions/new', async c => {
   }
   audit('claude.session.new', {
     target: `${r.repo ?? r.cwd} → ${r.sessionId}`,
-    detail: { sessionId: r.sessionId, cwd: r.cwd, briefSent: r.briefSent },
+    detail: { sessionId: r.sessionId, cwd: r.cwd, briefSent: r.briefSent, trusted: r.trusted },
   })
-  return c.json({ ok: true, id: r.sessionId, session: r })
+  // `trusted` and `started` ride out with the id rather than being dropped.
+  // A tmux session exists either way, but a Claude Code holding its trust
+  // dialog open has not registered anywhere yet, and the page that opens next
+  // has to be able to say that instead of polling a 404 in silence.
+  return c.json({
+    ok: true, id: r.sessionId, session: r,
+    trusted: r.trusted, started: r.started, route: r.route,
+  })
 })
 
 /**

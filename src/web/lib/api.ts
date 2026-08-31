@@ -321,6 +321,26 @@ export type OpenSession = import('./launch').Session & {
 }
 
 /**
+ * A session that exists but has not said anything yet.
+ *
+ * Claude Code writes no transcript until it has answered something, and it will
+ * not answer while a dialog is up — the one-time "is this a project you trust?"
+ * being the one that actually happens. Measured: pressing Send started a real
+ * tmux session in an unseen repository and left the page saying *no such
+ * session on this machine* under a subtitle that said `live`.
+ *
+ * So "started, waiting" is a state the page is told about rather than one it
+ * has to infer from a 404. `trusted: false` is the answerable case and names
+ * the terminal where the prompt is sitting.
+ */
+export type SessionStarting = {
+  trusted: boolean
+  started: boolean
+  /** The terminal route where the dialog is waiting, e.g. `/terminal/<id>`. */
+  route: string
+}
+
+/**
  * The conversation half of the Claude Code API.
  *
  * It lives here rather than beside `launchApi` because these four calls are the
@@ -331,7 +351,10 @@ export type OpenSession = import('./launch').Session & {
 export const sessionApi = {
   /** Everything the page opens with: the row, the turns, the paths, the excerpt. */
   get: (id: string) =>
-    req<{ session: OpenSession; turns: SessionTurn[]; excerpt: string; paths: string[] }>(
+    req<{
+      session: OpenSession; turns: SessionTurn[]; excerpt: string; paths: string[]
+      starting?: SessionStarting
+    }>(
       `/claude/sessions/${encodeURIComponent(id)}`,
     ),
   /**
@@ -344,7 +367,7 @@ export const sessionApi = {
    * was open, which is why this is asked rather than pushed.
    */
   since: (id: string, after: number) =>
-    req<{ turns: SessionTurn[]; active: boolean }>(
+    req<{ turns: SessionTurn[]; active: boolean; starting?: SessionStarting }>(
       `/claude/sessions/${encodeURIComponent(id)}/turns?after=${after}`,
     ),
   /**
