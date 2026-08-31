@@ -49,6 +49,7 @@
 
 import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { resolve } from 'node:path'
 import {
   CLAUDE_BIN, CLAUDE_CONFIG_PATH, PYTHON_BIN, TERMINAL_COLS, TERMINAL_NAME_PREFIX,
@@ -201,6 +202,43 @@ function tmuxArgs(args: string[]): string[] {
 
 type Ran = { ok: boolean; out: string; err: string }
 
+/**
+ * A PATH the session can actually work in.
+ *
+ * Wake runs as a systemd *user* unit, and a user unit does not get a login
+ * shell's PATH — it gets systemd's default, which is `/usr/local/bin:/usr/bin`
+ * and little else. Everything Wake itself needs is named by absolute path
+ * (`CLAUDE_BIN`, `TMUX_BIN`, `bun`), so nothing here ever noticed; but the tmux
+ * server inherits this environment and so does every process Claude Code starts
+ * underneath it.
+ *
+ * What that cost, measured on the deployed site: `node` lives in `~/.volta/bin`,
+ * so Claude Code's own `UserPromptSubmit` hook failed with
+ * `/bin/sh: 1: node: not found` — twice, in red, above the first answer of every
+ * session started from Wake. The hooks are non-blocking, so the session worked
+ * and simply looked broken, which is the worse failure of the two.
+ *
+ * The tmux *server* takes its environment once, from whichever call happens to
+ * start it, so this is applied on every tmux invocation rather than only on
+ * `new-session`. Order matters: the operator's own directories go in front, so a
+ * volta shim wins over a system node, exactly as it does in his shell.
+ */
+const TOOL_DIRS = [
+  `${homedir()}/.truto/bin`,
+  `${homedir()}/.bun/bin`,
+  `${homedir()}/.volta/bin`,
+  `${homedir()}/.local/bin`,
+]
+
+function sessionEnv(): Record<string, string> {
+  const env = { ...process.env } as Record<string, string>
+  const seen = new Set<string>()
+  const path = [...TOOL_DIRS, ...(env.PATH ?? '').split(':')]
+    .filter(p => p && !seen.has(p) && (seen.add(p), true))
+    .join(':')
+  return { ...env, PATH: path }
+}
+
 function tmux(args: string[], stdin?: string): Ran {
   ensureDir()
   const [bin, ...rest] = tmuxArgs(args)
@@ -208,6 +246,7 @@ function tmux(args: string[], stdin?: string): Ran {
     stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: sessionEnv(),
   })
   return {
     ok: r.exitCode === 0,

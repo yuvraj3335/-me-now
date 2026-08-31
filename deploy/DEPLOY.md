@@ -133,6 +133,26 @@ inside a transaction each. There is nothing to run by hand — start the new
 version and check the log. A failed migration leaves the row unwritten, so the
 next boot retries it rather than skipping a half-applied change.
 
+## Skills a brief names
+
+Wake indexes skill catalogs to *offer* them (`SKILL_PATHS` in `src/server/env.ts`),
+but the session that receives the brief resolves them against **Claude Code's own**
+registry, `~/.claude/skills/`. Those are two different lists, and a name in the
+first but not the second produces `Error: Unknown skill: <name>` in red, in the
+first seconds of the session — which is how `humanizer-voice` was found.
+
+The convention on this box is a symlink per skill into a source of truth:
+
+```bash
+ls -l ~/.claude/skills/          # truto-cli -> ../../.agents/skills/truto-cli
+ln -sfn ~/work/Cursor-skills/.cursor/skills/humanizer-voice \
+        ~/.claude/skills/humanizer-voice
+```
+
+This lives outside the repository, so a fresh box needs it doing again. Nothing
+breaks without it — the Humanizer template carries its whole voice inline and
+does not depend on the skill loading — but the session says so loudly.
+
 ## Notes
 
 - The port (8585) is loopback-only. Nothing reaches Wake except through Caddy →
