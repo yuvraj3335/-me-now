@@ -107,7 +107,32 @@ export function useSwipe(
    * the narrow laptop that renders the same table — and a trackpad never came
    * through here at all, it comes through `wheel` below.
    */
-  const takesTouch = touch !== 'manipulation'
+  /**
+   * Whether this finger is the drawer's, on a row inside a sideways table.
+   *
+   * `manipulation` rows used to refuse touch outright. That made the table
+   * scroll and took `Done · Status · Delete` off the phone with it — a row could
+   * not be acted on at all without opening it first, which is the opposite of
+   * what a swipe drawer is for.
+   *
+   * The two are not simultaneous, though, and that is the way out. While there
+   * is table left to the right, a horizontal drag means "show me the rest"; at
+   * the end of the scroll it cannot mean that any more, because there is nothing
+   * further to show. So the table gets the axis until it is scrolled out and the
+   * drawer gets it afterwards — the same finger, without lifting.
+   *
+   * Read at `pointerdown` from the DOM rather than passed in as a prop: the
+   * scroller is an ancestor, its position changes on a listener this row does
+   * not own, and a prop would re-render every row in the table on every frame of
+   * a scroll. The stylesheet keys `touch-action` off the same attribute, so the
+   * browser has already been told whose axis it is before the gesture starts.
+   */
+  const touchIsOurs = (target: EventTarget | null): boolean => {
+    if (touch !== 'manipulation') return true
+    const scroller = (target as HTMLElement | null)?.closest?.('[data-hscroll]')
+    // No scroller found means nothing is competing for the axis.
+    return !scroller || scroller.hasAttribute('data-atend')
+  }
 
   const [dx, setDx] = useState(0)
   /** The offset as of this instant, for handlers that fire between renders. */
@@ -281,9 +306,9 @@ export function useSwipe(
     onPointerDown: e => {
       // Secondary buttons are a context menu's business, not a drawer's.
       if (e.button > 0) return
-      // And a finger on a row whose table scrolls sideways belongs to the
-      // table, not to this. See `takesTouch`.
-      if (!takesTouch && e.pointerType === 'touch') return
+      // A finger on a row whose table still has somewhere to scroll belongs to
+      // the table. Once it does not, it belongs here. See `touchIsOurs`.
+      if (e.pointerType === 'touch' && !touchIsOurs(e.target)) return
       from.current = { x: e.clientX, y: e.clientY, base: dxRef.current }
       axis.current = 'undecided'
       engaged.current = false

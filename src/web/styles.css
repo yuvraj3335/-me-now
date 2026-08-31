@@ -490,13 +490,24 @@
     because the drawer's own `wheel` handler scrolls the table on the way past;
     that is why it survived a laptop and a resized desktop window.
 
-    Where the two genuinely want the same axis under a finger, the table wins.
-    What that costs is the drawer under a *touch* on those rows and nothing
-    else: the same row still opens on a tap, still peeks on a long press, still
-    carries its own `Status` control two columns along, and still opens its
-    drawer to a mouse or a trackpad on the narrow laptop that renders the same
-    table. A phone that cannot see its own columns is the worse failure by a
-    long way.
+    The first answer was "the table wins", full stop, and it was half a fix. It
+    scrolled, and it took `Done · Status · Delete` off the phone with it: a row
+    could not be acted on at all without opening it, on the one device where
+    opening a row is the most expensive thing you can do.
+
+    They are not simultaneous, and that is the way out. While there is table to
+    the right, a horizontal drag means "show me the rest". At the end of the
+    scroll it cannot mean that — there is nothing further to show — so the same
+    drag is free to mean the drawer. The browser keeps the axis until the table
+    is scrolled out; `data-atend` appears on the scroller at that moment and the
+    axis comes back to the app. One finger, one motion: swipe to the end, keep
+    going, the drawer opens.
+
+    It is switched here rather than in the handler because `touch-action` is read
+    by the compositor when the gesture *starts*. A decision made in JavaScript
+    mid-drag arrives too late — the browser has already claimed the pan and the
+    first frames are gone. `useSwipe` reads the same attribute at `pointerdown`
+    so both halves change their mind at the same instant.
 
     `manipulation` rather than `auto` for the same reason the cells used to say
     it one at a time: both axes and pinch, without the double-tap zoom delay
@@ -504,6 +515,9 @@
   */
   [data-swipe='manipulation'],
   [data-swipe='manipulation'] > td { touch-action: manipulation; }
+
+  [data-atend] [data-swipe='manipulation'],
+  [data-atend] [data-swipe='manipulation'] > td { touch-action: pan-y; }
 
   /*
     The page pad, once, as one value.
@@ -582,26 +596,21 @@
   }
 
   /*
-    The edge on a pinned column, painted only while there is something behind it.
+    There is no pinned column any more, and so no edge to mark one.
 
-    The phone desk pins Title so the name of a row survives a sideways scroll,
-    and a 1px rule down its right edge is what says that column is pinned rather
-    than merely first. Written as a permanent `shadow-[1px_0_0_0_…]` on the
-    heading and on every row's Title cell it said no such thing: at `scrollLeft:
-    0` there is nothing behind the column, so what a phone drew was a full-height
-    vertical line through the middle of the table, on every row, before anything
-    had been scrolled. Measured on the deployed site at 390px — `box-shadow: rgb(200,
-    200, 211) 1px 0px 0px 0px` on the `<th>` and on every Title `<td>` — and
-    plainly visible in a screenshot as a rule nobody designed. An edge that is
-    always there is not marking anything.
+    The phone desk used to pin Title, and this rule painted the 1px rule that
+    said so — but only once the table had actually moved, because a permanent
+    one was the mystery vertical line through the middle of every row. Both are
+    gone with the pinning: Title scrolls with the other four columns, because a
+    column that will not move under a thumb is not a column a phone can read,
+    and because `Select` is `relative` and slid the Status picker underneath the
+    pinned cell, leaving a status column that was nothing but a chevron.
 
-    `data-moved` is `useRail`'s other half and it hangs on the scroller exactly
-    as `data-spill` does, for the same reason: the answer is a fact about a
-    scroll position, so it is written where the scroll position is measured and
-    read from there by everything that is pinned to that scroller. The edge
-    arrives on the first pixel of travel and leaves when the table is put back.
+    Kept as a note rather than deleted silently: the reason Title was pinned —
+    scroll to the far right and the row has no name on screen — is still true.
+    It is simply the smaller of the two problems, and it is undone by the same
+    finger that caused it.
   */
-  [data-moved] .pin-edge { box-shadow: 1px 0 0 0 var(--color-rule); }
 
   /*
     Small ink, generous target — where there are fingers.

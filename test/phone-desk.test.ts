@@ -69,15 +69,32 @@ describe('a phone can reach every column of its own table', () => {
       .not.toContain('touchAction')
   })
 
-  test('and a finger on that row is never the drawer', () => {
-    // The stylesheet is a race, not a rule: the row still gets `pointerdown`
-    // and the first `pointermove`, and a fast flick delivers twenty pixels in
-    // that one move — so the drawer engages for the frame before the browser
-    // says it is scrolling and sends `pointercancel`.
-    expect(swipe, 'the swipe layer stopped declining a touch on a scrolling table')
-      .toMatch(/const takesTouch = touch !== 'manipulation'/)
-    expect(swipe, 'the pointer path stopped honouring it')
-      .toMatch(/if \(!takesTouch && e\.pointerType === 'touch'\) return/)
+  test('a finger is the table\'s until the table runs out, and the drawer\'s after', () => {
+    /*
+     * Reported from a real phone: with the axis given to the table outright,
+     * `Done · Status · Delete` could not be reached at all — a row could only be
+     * acted on by opening it first, which on a phone is the most expensive thing
+     * on the screen.
+     *
+     * The two are not simultaneous. While there is table to the right a drag
+     * means "show me the rest"; at the end of the scroll it cannot mean that, so
+     * it is free to mean the drawer. `data-atend` is the handover, and it is
+     * declared in both places at once — the stylesheet, because `touch-action`
+     * is read by the compositor when the gesture starts, and the pointer path,
+     * because a decision made only in CSS leaves the handler still running.
+     */
+    expect(css, 'the axis stopped coming back at the end of the scroll')
+      .toMatch(/\[data-atend\] \[data-swipe='manipulation'\],\s*\n\s*\[data-atend\] \[data-swipe='manipulation'\] > td \{ touch-action: pan-y; \}/)
+    expect(swipe, 'the swipe layer went back to refusing every touch')
+      .not.toMatch(/const takesTouch = touch !== 'manipulation'/)
+    expect(swipe, 'the pointer path stopped asking where the scroller stands')
+      .toContain("scroller.hasAttribute('data-atend')")
+    expect(swipe, 'the decline stopped being conditional')
+      .toContain("if (e.pointerType === 'touch' && !touchIsOurs(e.target)) return")
+    expect(table, 'the phone scroller stopped saying when it is out of travel')
+      .toContain("data-atend={scroller.spill ? undefined : ''}")
+    expect(table, 'the scroller is no longer findable from the row')
+      .toContain('data-hscroll=""')
   })
 
   test('nothing else gives its axis away', () => {
@@ -93,9 +110,10 @@ describe('a phone can reach every column of its own table', () => {
   })
 
   test('the row keeps every other way in', () => {
-    // The drawer is what a touch gives up, and only on this row. Nothing here
-    // becomes unreachable: a tap opens the card, a long press peeks it, and
-    // `Done` is still one control away in the row's own Status column.
+    // Every way in survives the axis being lent to the table for the first part
+    // of the gesture: a tap opens the card, a long press peeks it, `Done` is one
+    // control away in the row's own Status column, and the drawer itself is
+    // reached by swiping on past the end of the scroll.
     const line = bodyOf(table, 'CardLine')
     expect(line, 'tap-to-open is gone from the phone row').toContain('actions.onOpen(card)')
     expect(line, 'long-press-to-peek is gone from the phone row').toContain('useLongPress')
@@ -106,33 +124,42 @@ describe('a phone can reach every column of its own table', () => {
   })
 })
 
-describe('a pinned column is only edged while it is pinning something', () => {
-  test('the edge is not painted at rest', () => {
-    // Measured on the live site at 390px: the Title `<th>` and every Title
-    // `<td>` computed `box-shadow: rgb(200, 200, 211) 1px 0px 0px 0px`, at
-    // `scrollLeft: 0`, on a table nobody had scrolled. That is not an edge on a
-    // pinned column, it is a vertical line through the middle of the table.
+describe('nothing is pinned, so every column moves under a thumb', () => {
+  test('the Title column scrolls with the rest of the table', () => {
+    /*
+     * Reported from a real phone, and visible in the screenshot: only the other
+     * columns moved. Title was `sticky left-0`, so the one column a thumb
+     * actually lands on was the one that would not travel — and `Select` is
+     * `relative`, so the Status picker slid *underneath* the pinned cell and
+     * left a status column that was nothing but a chevron.
+     *
+     * What the pinning protected against is real — scroll to the far right and
+     * the row has no name on screen — and it is the smaller problem, undone by
+     * the same finger that caused it.
+     */
+    // Stripped of comments first: this file explains at length why the pinning
+    // went, and a grep over the prose finds the very string it is arguing about.
+    expect(code(bodyOf(table, 'PhoneHead')), 'the phone heading pinned a column again')
+      .not.toContain('sticky left-0')
+    expect(code(bodyOf(table, 'CardLine')), 'the Title cell pinned itself again')
+      .not.toContain('sticky left-0')
+    // The drawer's anchor is the exception and stays: it is a 0px hook, not a
+    // column, and covering the row is the whole of its job.
+    expect(code(bodyOf(table, 'CardLine')), 'the drawer lost the cell it hangs off')
+      .toContain('sticky right-0')
+  })
+
+  test('the edge that marked the pinning went with it', () => {
     expect(table, 'the unconditional 1px rule came back')
       .not.toContain('shadow-[1px_0_0_0_var(--color-rule)]')
-    expect(css, 'the pinned edge stopped depending on the scroll position')
-      .toMatch(/\[data-moved\] \.pin-edge \{ box-shadow: 1px 0 0 0 var\(--color-rule\); \}/)
-  })
-
-  test('the heading and the rows are edged by the same rule', () => {
-    // They part company otherwise, which is the failure the pinning exists to
-    // prevent showing up in the mark that describes it.
-    expect(bodyOf(table, 'PhoneHead'), 'the pinned heading lost its edge').toContain('pin-edge')
-    expect(bodyOf(table, 'CardLine'), 'the pinned Title cell lost its edge').toContain('pin-edge')
-  })
-
-  test('the scroller is what says where it stands', () => {
-    // One listener for a heading and twenty rows, because it is one fact about
-    // one scroll position — the same shape `data-spill` already has.
-    expect(primitives, '`useRail` stopped answering the other edge')
-      .toContain('setMoved(el.scrollLeft > 0)')
-    expect(primitives, '`moved` is no longer returned').toMatch(/return \{ ref, spill, moved \}/)
-    expect(table, 'the phone scroller stopped publishing its position')
-      .toContain('data-moved={scroller.moved || undefined}')
+    expect(css, 'the pinned-column edge outlived the pinned column')
+      .not.toContain('.pin-edge {')
+    expect(code(table), 'a cell still asks to be edged as a pinned column')
+      .not.toContain('pin-edge')
+    // And the opaque ground the pinning needed, so the columns could pass
+    // beneath it, has nothing left to hide from.
+    expect(code(table), 'the Title cell is still painted opaque for a scroll that no longer passes under it')
+      .not.toContain('groundOf')
   })
 })
 

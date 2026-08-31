@@ -1254,31 +1254,29 @@ export function rowStateClass({ selected, active, focused, unseen }: RowState = 
  * frame, and a hidden tab produces none, so the rail would come back from the
  * background still describing the width it had when it left.
  *
- * `moved` is the same question asked of the other edge — is there anything
- * *behind* this scroller — and it exists because the phone desk pins its Title
- * column and marks it with a 1px edge. That edge is honest only once the table
- * has actually been scrolled away from its start; drawn unconditionally it is a
- * vertical line through the middle of a table nobody has touched, which is what
- * shipped and what a phone screenshot shows. Both answers come off one listener
- * and one read, because they are two facts about one scroll position and a
- * second hook would be a second chance for them to disagree.
+ * There used to be a second answer here, `moved` — is there anything *behind*
+ * this scroller — for the 1px edge on the phone desk's pinned Title column.
+ * Nothing is pinned any more, so it went with the pinning rather than staying on
+ * as a fact with no reader.
+ *
+ * `spill` gained a second reader in its place, and it is worth knowing about
+ * because it is not what the name suggests: on the phone desk its *absence* is
+ * the signal. No spill means the table is scrolled to its end, which is the
+ * moment the horizontal axis stops belonging to the scroller and starts
+ * belonging to the row's swipe drawer. See `[data-atend]` in `styles.css`.
  */
 export function useRail<T extends HTMLElement>(): {
   ref: RefObject<T | null>
-  /** Something past the right edge. */
+  /** Something past the right edge. Its absence is "scrolled to the end". */
   spill: boolean
-  /** Something behind the left edge — this has been scrolled off its start. */
-  moved: boolean
 } {
   const ref = useRef<T>(null)
   const [spill, setSpill] = useState(false)
-  const [moved, setMoved] = useState(false)
 
   const read = () => {
     const el = ref.current
     if (!el) return
     setSpill(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
-    setMoved(el.scrollLeft > 0)
   }
 
   useEffect(() => {
@@ -1297,5 +1295,5 @@ export function useRail<T extends HTMLElement>(): {
 
   useEffect(read)
 
-  return { ref, spill, moved }
+  return { ref, spill }
 }

@@ -38,9 +38,9 @@
  * And every row swipes left. `Done`, `Status` and `Delete` under a finger, a
  * trackpad or a mouse drag, without opening anything — see `components/swipe.tsx`
  * for why the drawer is a clip window pinned to the last cell rather than a
- * translated row. One row declines the finger and only the finger: the phone
- * row, whose table needs that axis to show its own columns. `CardLine` argues
- * it where it is decided.
+ * translated row. The phone row lends the finger to its own table first — the
+ * horizontal axis shows the columns until there are no more to show, and is the
+ * drawer's after that. `CardLine` and `useSwipe` argue it where it is decided.
  *
  * Below 1024px it is still a table, and that is the reversal this file's last
  * comment argued against. "Four columns in 390px is a diagram of a table" was
@@ -574,18 +574,16 @@ function PhoneCols() {
  * vertically and a page of rows is `PAGE_SIZE` long, so the heading is a few
  * flicks away rather than gone.
  *
- * Horizontally, Title is pinned exactly as the cells beneath it are, or the
- * heading and its column would part company on the first flick. It takes the
- * page's own ground rather than `groundOf` — a heading has no row state to
- * carry — and the same `pin-edge`, so the pinned column reads as one column
- * from its heading down and grows its edge at the same moment the rows do.
+ * Horizontally they travel with their columns, Title included. Title used to be
+ * pinned and the heading had to be pinned with it, or the two would part company
+ * on the first flick; neither is now, which is one mechanism fewer holding up a
+ * column that a thumb could not move anyway.
  */
 function PhoneHead() {
   return (
     <thead>
       <tr className="border-b border-edge">
-        <th className={`${HEAD} sticky left-0 z-10 bg-ink-900 pin-edge`}
-          scope="col">Title</th>
+        <th className={HEAD} scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
         <th className={HEAD} scope="col">Where</th>
         <th className={HEAD} scope="col">Due</th>
@@ -595,31 +593,6 @@ function PhoneHead() {
   )
 }
 
-/**
- * The ground a row is painted in, as a colour rather than as a class.
- *
- * The pinned Title cell has to be opaque. Every other column slides underneath
- * it, and `background: inherit` answers `transparent` on a row with no wash — so
- * a `Not started` picker would scroll straight through the row's own name,
- * which is the one thing the pinning exists to keep. It cannot simply paint the
- * page ground either: a selected row and a row with news are painted, and a
- * title cell left at `ink-900` would break the wash at exactly the point the
- * row is identified.
- *
- * `rowStateClass` in `primitives.tsx` is still the authority on which ground a
- * row is in — this is the same four states read out as a token, because a cell
- * needs a `background-color` where a `<tr>` takes a class. They are one thought
- * in two forms and they move together: a fifth row state is added in both, or
- * the pinned column starts disagreeing with the row it belongs to.
- *
- * The cursor is the exception and it is handled at the cell instead. It is a
- * `background-image` on the row — see `.row-cursor`, and the note above
- * `rowStateClass` for why a `<tr>` under `border-collapse` cannot use a border —
- * and an opaque cell paints over its parent's image as well as its colour, so
- * the focused cell draws the same 2px rule itself.
- */
-const groundOf = (selected: boolean, focused: boolean, unseen: boolean) =>
-  selected ? 'row-sel' : focused ? 'ink-700' : unseen ? 'row-new' : 'ink-900'
 
 /**
  * How long a press has to be held before it is a peek, and how far it may drift.
@@ -747,11 +720,17 @@ export function CardLine({
    * `wheel` handler and made the whole thing look fixed.
    *
    * One policy for the whole row now, and no cell overrides it: `manipulation`
-   * through `[data-swipe='manipulation'] > td`, plus `useSwipe` declining a
-   * touch outright so there is never a frame where both are moving. Nothing
-   * here becomes unreachable — a tap opens the row, a long press peeks it,
-   * `Status` is a control in its own column, and the drawer is still there for
-   * the mouse and the trackpad on the narrow laptop that renders this table.
+   * through `[data-swipe='manipulation'] > td`, so the browser pans the table.
+   *
+   * That was the whole answer for one deploy, and it was half of one — it took
+   * `Done · Status · Delete` off the phone completely, so a row could only be
+   * acted on by opening it. The missing half is that the two claims are not
+   * simultaneous: while there is table to the right a drag means "show me the
+   * rest", and once there is not, it cannot mean that any more. `data-atend` on
+   * the scroller hands the axis back at exactly that point, in the stylesheet
+   * and in `useSwipe` together, so the browser and the handler change their mind
+   * on the same frame. Swipe to the end of the columns and keep going: the
+   * drawer opens, on the same finger, without lifting it.
    */
   const swipe = useSwipe(card.group_key, 3, 'manipulation')
   const press = useLongPress(() => onPeek(card))
@@ -778,39 +757,32 @@ export function CardLine({
         ${rowStateClass({ selected, focused, unseen })}`}
     >
       {/*
-        The identity column, and the one the gesture belongs to. It keeps the
-        stylesheet's `pan-y`, so a horizontal drag here is the drawer.
+        The identity column, and it scrolls with everything else.
 
-        **It is pinned to the left edge, and that is the whole of the second
-        fix.** The table is 540px wide inside the 343 a 375px phone leaves, so
-        it scrolls 197 — and at the end of that scroll the Title column sat at
-        x −181 with 3 pixels of itself showing. You could read `Sep 4` against a
-        row you could no longer name, which is the one state a desk must never
-        be in. Pinned, the name is on the screen at every scroll position and
-        the four columns are still drawn at a width they can be read at, which
-        is the trade this table was built around.
+        It used to be `sticky left-0`, to keep the name on screen at every
+        scroll position. The argument was sound and the result was not, and it
+        failed in three ways at once on a real phone. The column would not move
+        under a finger, so "scroll the table sideways" was true of four columns
+        and false of the one a thumb actually lands on. `Select` is `relative`,
+        so the Status picker — a positioned sibling later in the row — slid
+        *underneath* the pinned cell and left nothing on screen but its chevron:
+        a status column reduced to a `⌄`. And the pinning needed an opaque
+        ground and a `z-10` of its own to survive that, which is three
+        mechanisms held together to defend one.
 
-        Painted opaquely — see `groundOf` — because the columns pass beneath it,
-        and lifted to `z-10` because `Select` is `relative`: a positioned
-        sibling later in the row paints over a pinned cell that is merely
-        sticky, so the status picker slid across the title and the pinning
-        looked broken in exactly the way it was meant to fix. The drawer's
-        anchor cell answers with `z-20`, which keeps `Done · Status · Delete`
-        above this — it is the one thing that is *supposed* to cover the row.
+        What it was protecting against is real but smaller than the cure: scroll
+        to the far right and the name is off screen. That is what every
+        horizontally scrolled table does, it is reversible with the same finger
+        that caused it, and the row is still identified by its kind glyph — which
+        travels with it — and by tapping it.
 
-        The right edge is a `box-shadow` rather than a border: under
-        `border-collapse` the table paints the collapsed borders, not the cell,
-        so a border on a pinned cell stays behind at the x it was collapsed at
-        while the cell travels. It is `pin-edge` rather than the shadow written
-        out here, because an edge on a pinned column is only true while the
-        table is scrolled away from its start — see `styles.css`, and the
-        vertical line down the middle of a phone that this replaces.
+        The drawer's anchor cell keeps its `sticky right-0` and its `z-20`: that
+        one is not a column of data, it is a 0px hook the actions hang off, and
+        it is the one thing that is *supposed* to cover the row.
       */}
       <td
-        className={`${CELL} ${ROW_TITLE} sticky left-0 z-10
-                    pin-edge ${focused ? 'row-cursor' : ''}
+        className={`${CELL} ${ROW_TITLE}
                     ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}
-        style={{ backgroundColor: `var(--color-${groundOf(selected, focused, unseen)})` }}
         title={name}>
         <span className="flex items-center gap-2 min-w-0">
           {/* Named for the source rather than the kind: the shape is what a
@@ -887,16 +859,14 @@ export function CardLine({
  * exactly the end where `Delete` sits. The cut-off column and the scrollbar say
  * the same thing without painting over a control.
  *
- * It does take `useRail`'s other answer. `data-moved` says the table has been
- * scrolled off its start, and it is the one thing that makes the pinned Title
- * column's right edge honest: without it the edge is painted at `scrollLeft: 0`
- * as well, where there is nothing behind the column for it to mark, and what a
- * phone showed was a full-height vertical line through a table nobody had
- * touched. One listener on the scroller answers it for the heading and all
- * twenty rows, because it is one fact about one scroll position — see
- * `.pin-edge` in `styles.css`.
+ * It does take `useRail`'s other answer, as `data-atend`: `spill` says there is
+ * still table past the right edge, and its absence is the moment the horizontal
+ * axis stops belonging to the scroller and starts belonging to the row drawer.
+ * One listener on the scroller answers it for all twenty rows, because it is one
+ * fact about one scroll position — see `useSwipe` and `[data-atend]` in
+ * `styles.css`.
  *
- * The rows inside it hand the browser both axes; `CardLine` says why.
+ * The rows inside it hand the browser both axes until then; `CardLine` says why.
  */
 export function PhoneTable({
   rows, selectedKey, cursorKey, actions,
@@ -914,7 +884,25 @@ export function PhoneTable({
     <>
       <div
         ref={scroller.ref}
-        data-moved={scroller.moved || undefined}
+        /*
+         * `data-atend` is how the row drawer and the table stop fighting.
+         *
+         * They want the same axis under the same finger. The last pass resolved
+         * that by giving the axis to the table outright, which scrolled but cost
+         * `Done · Status · Delete` on the phone entirely — a row could no longer
+         * be acted on without opening it.
+         *
+         * They are not actually simultaneous. While there is more table to the
+         * right, a horizontal drag means "show me the rest"; once there is not,
+         * the same drag has nothing left to ask for. So the browser keeps the
+         * axis until the table is scrolled out, and the drawer takes it after —
+         * one finger, one continuous motion, swipe to the end and keep going.
+         * `useSwipe` reads this attribute at `pointerdown`; the stylesheet flips
+         * `touch-action` off the same flag so the handoff happens before the
+         * gesture starts rather than mid-drag.
+         */
+        data-hscroll=""
+        data-atend={scroller.spill ? undefined : ''}
         className="overflow-x-auto overscroll-x-contain"
       >
         <table className="w-full table-fixed border-collapse" style={{ minWidth: PHONE_MIN }}>
