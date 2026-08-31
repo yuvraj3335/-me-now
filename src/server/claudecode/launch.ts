@@ -13,8 +13,15 @@
  *   2. Quoted material is fenced and labelled as data. A session reading a Slack
  *      thread out of this file is reading a stranger's words.
  *
- * Wake starts nothing. It used to spawn `claude -p` here — see handoff.ts for
- * why that was the wrong shape.
+ * This file's header used to end "Wake starts nothing", and that was true twice
+ * over: it had stopped spawning `claude -p` (a headless process whose prompts
+ * nobody could answer), and what replaced it was a link to the Claude chat
+ * product. Wake starts something now — a real Claude Code session in a real
+ * terminal, in `terminal.ts` — and the difference from `claude -p` is the whole
+ * point: the operator can see it, type into it and answer it, from a phone.
+ *
+ * This file still only *packs*. Nothing here spawns anything; `router.ts`
+ * composes the two, so the rules about what may be started stay in one place.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -73,25 +80,25 @@ export type BuildPack = {
   /**
    * A Claude Code session on this box that this brief is about.
    *
-   * Context, not continuity. `claude.ai/new?q=` opens a *new* conversation and
-   * no URL targets an existing one, so what the id buys is a `## How to run
-   * this` section naming the session, its directory and its branch, plus the
-   * `claude --resume` line to paste into a terminal. See DECISIONS #35.
+   * Continuity, now that there is a terminal to have it in: the id names the
+   * session `router.ts` will resume, and the brief becomes that conversation's
+   * next turn rather than the opening line of a new one. See DECISIONS #39 for
+   * why this reverses #35.
    */
   sessionId?: string | null
-  /** How the brief tells you to run it. `bypassPermissions` is the default. */
+  /** The mode the session is started under. `bypassPermissions` is the default. */
   permissionMode?: PermissionMode
 }
 
 /**
  * The two modes a brief may name.
  *
- * Both are real `--permission-mode` values. The list is closed because this
- * string is rendered into a command line a person will paste: a free string
- * would put whatever arrived in the request body straight into it.
- * `bypassPermissions` is the default because every other position asks a
- * question at the terminal that the person who wrote the brief has already
- * answered by writing it.
+ * Both are real `--permission-mode` values. The list is closed, and the reason
+ * got sharper rather than weaker when the hand-off became a process: this string
+ * is now `argv[2]` of a command Wake runs on the box. A free string here would
+ * be a request body reaching a command line. `bypassPermissions` is the default
+ * because every other position asks a question at the terminal that the person
+ * who wrote the brief already answered by writing it.
  */
 export type PermissionMode = 'bypassPermissions' | 'acceptEdits'
 export const PERMISSION_MODES = ['bypassPermissions', 'acceptEdits'] as const satisfies readonly PermissionMode[]
@@ -311,28 +318,32 @@ export function renderPack(p: {
   ]
 
   /*
-   * The one place the picker's real semantics are stated in words.
+   * The one place the picker's real semantics are stated in words — and the
+   * sentence that changed when the hand-off stopped being a link.
    *
-   * A link can only ever open a *new* conversation, so naming a session here is
-   * naming context: this is where the work was, this is the directory and the
-   * branch it was on, and here is the line that rejoins it on the machine it is
-   * actually on. Writing "resuming session …" would be the third time this
-   * product implied a process it does not start. See DECISIONS #35.
+   * It used to say the opposite: "you are not resuming it", followed by a
+   * `claude --resume …` line to copy, because `claude.ai/new?q=` can only open a
+   * new conversation and Wake started nothing. Both halves of that are gone.
+   * Wake now resumes the session itself, in a terminal the operator is reading
+   * this in — so the brief describes what actually happened rather than
+   * apologising for what could not. See DECISIONS #39.
+   *
+   * A session Wake could not find on this box still gets named here. Its id is
+   * a true fact about where the work was, and the terminal route refuses it
+   * separately and by name; a brief that omitted it would be less honest, not
+   * more.
    */
   if (p.session?.id) {
     lines.push(
-      `This brief carries a Claude Code session from my machine as **context**. You are not resuming it — ` +
-      'this is a new conversation, and that transcript is not in it beyond what is quoted below.',
+      p.session.cwd
+        ? 'This is a Claude Code session already underway on my machine, and this message is its next ' +
+          'turn. Everything before it is still in your context — the brief below is what I need next, not a restart.'
+        : 'This brief names a Claude Code session that is not on this machine, so its transcript is not ' +
+          'in your context beyond what is quoted below.',
       '',
       `- session: \`${p.session.id}\``,
-      ...(p.session.cwd ? [`- it ran in: \`${p.session.cwd}\``] : []),
+      ...(p.session.cwd ? [`- it runs in: \`${p.session.cwd}\``] : []),
       ...(p.session.branch ? [`- on branch: \`${p.session.branch}\``] : []),
-      '',
-      'To pick it up on that machine instead, in a terminal:',
-      '',
-      '```',
-      `claude --resume ${p.session.id} --permission-mode ${mode}`,
-      '```',
       '',
     )
   }

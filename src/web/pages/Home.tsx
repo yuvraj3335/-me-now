@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Download, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Loader2 } from 'lucide-react'
 import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
 import type { Card as CardT, CardPriority, CardStatus, SourceName } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
@@ -42,11 +42,10 @@ import {
   Button, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
 } from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
-import { cardKind, cleanChannel, SourceMark, whereOf } from '../components/kinds'
+import { cardKind, cleanChannel, contextLine, SourceMark, whereOf } from '../components/kinds'
 import { bucketsOf, inBucket, pipesFor } from '../lib/bucket'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
-import { useStill } from '../lib/motion'
 import { overlayOpen, useOverlay } from '../lib/overlay'
 import { openSwipeKey } from '../lib/swipe'
 import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
@@ -96,7 +95,6 @@ const endOfToday = (now: number) => {
 
 /** The pane's remembered width. Never allowed to be the reason nothing renders. */
 const PANE_KEY = 'wake:pane'
-const SHEET_KEY = 'wake:sheet'
 
 function readNumber(key: string, fallback: number): number {
   try {
@@ -593,25 +591,18 @@ export function Home() {
   )
 
   /*
-   * Below the pane width the detail is a bottom sheet with a drag handle, not a
-   * full-screen takeover.
-   *
-   * The takeover it replaces returned *instead of* the list, so reading four
-   * rows in sequence was four closes and four finds; and the sheet before that
-   * was 963px of content in a 725px scroller that drag-dismissed on the same
-   * axis as its own scroll. The list stays mounted underneath this one, which
-   * is the whole difference — and it is only offered once a row has actually
-   * been chosen, because a sheet over the list on arrival is a takeover with a
-   * handle on it.
+   * Below the pane width the detail is a page of its own, and it is still only
+   * offered once a row has actually been chosen — a detail over the list on
+   * arrival is a takeover whatever it is shaped like.
    */
-  const sheet = !hasPane && selectedKey && shown
-    ? <PushDetail card={shown} resting={!selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
+  const detail = !hasPane && selectedKey && shown
+    ? <DetailPage card={shown} resting={!selected} onMakeTask={setTaskFrom} taskFrom={taskFrom} />
     : null
 
   return (
     <div className="lg:flex lg:items-stretch lg:min-h-dvh">
       {list}
-      {sheet}
+      {detail}
       {/*
         The pane column always exists at the pane width, so opening a row never
         re-lays out the list. No fill: `bg-ink-850` is pure white in light mode,
@@ -658,20 +649,38 @@ export function Home() {
 }
 
 /**
- * The phone and narrow-laptop detail.
+ * The phone detail is a page, not a squeezed sheet.
  *
- * A bottom sheet with two snap heights rather than a full-screen view: the list
- * stays visible above it, which is what makes reading four rows in a row one
- * gesture instead of twelve. It snaps rather than resting anywhere, because a
- * freely-dragged sheet is a control that has to be re-aimed every time.
+ * What this replaces was a bottom sheet with a drag handle and two snap
+ * heights, on the argument that keeping the list visible above it is what makes
+ * reading four rows in sequence one gesture instead of twelve. The argument was
+ * about the wrong cost. At 390px the sheet was 55dvh of a 844px screen — a
+ * ~460px window holding a title, three controls, a fact grid, a conversation
+ * and four buttons — so every card was read through a slot, and the way out of
+ * it was a 40px handle and a 14px cross. A card is a place you go on a phone.
+ * It gets the screen.
+ *
+ * Three things make it a page rather than the takeover the sheet was written to
+ * escape, and all three are the address bar's doing. It is `#card/<key>`, so it
+ * is a place with a URL; `openDetail` pushed to get here, so the OS Back button
+ * leaves; and `DetailPath` puts the way back on the screen for the reader who
+ * does not think in browser buttons. Coming back is one control, and it lands
+ * on the list exactly where it was left — the page underneath never unmounted.
+ *
+ * It stops at `--nav-h` rather than at the bottom edge, and that is not a
+ * leftover from the sheet. `styles.css` states it as a rule: nothing may cover
+ * the phone tab bar. A sheet at `bottom: 0` measured all six destinations
+ * unreachable, with no bar drawn to explain why. A detail that fills everything
+ * above the bar is a page in the sense that matters — the whole surface a page
+ * ever gets on this product — and the six destinations stay one tap away.
  *
  * `useOverlay(true)` is load-bearing and not decoration. `overlay.ts` exists
- * precisely because `e` — destructive and unconfirmed — leaked through open
- * modals; this view was added afterwards and never counted itself, so on a
- * laptop at half screen `e` finished the *cursor* card rather than the one being
- * read, and the undo toast rendered under the `z-50` overlay.
+ * because `e` — destructive and unconfirmed — leaked through open modals; this
+ * view was added afterwards and never counted itself, so on a laptop at half
+ * screen `e` finished the *cursor* card rather than the one being read, and the
+ * undo toast rendered under the `z-50` overlay.
  */
-function PushDetail({
+function DetailPage({
   card, resting, taskFrom, onMakeTask,
 }: {
   card: CardT
@@ -680,11 +689,11 @@ function PushDetail({
    *
    * `shown` falls back to the top row whenever the key in the URL names a row
    * that is not on the desk — a card he finished, one a poll swept, one a source
-   * tab filtered away — and this sheet is gated on `selectedKey`, which is still
+   * tab filtered away — and this page is gated on `selectedKey`, which is still
    * set in every one of those. Without carrying `resting` through, the phone
    * silently swapped to `rows[0]` and `CardDetail` acknowledged it: the `+N` and
    * the amber edge on the newest unread thread destroyed by a card nobody
-   * opened. The desktop pane spends fifteen lines on this; the sheet is the same
+   * opened. The desktop pane spends fifteen lines on this; this is the same
    * failure at the width he actually reads on.
    */
   resting: boolean
@@ -692,119 +701,67 @@ function PushDetail({
   onMakeTask: (c: CardT | null) => void
 }) {
   useOverlay(true)
-  const still = useStill()
-  const [tall, setTall] = useState(() => readNumber(SHEET_KEY, 0) === 1)
-
-  const snap = (next: boolean) => { setTall(next); writeNumber(SHEET_KEY, next ? 1 : 0) }
-
-  /**
-   * Two heights, and both ways of asking for them.
-   *
-   * A drag past 24px snaps to whichever height it was heading for; anything
-   * shorter is a tap, which toggles. `dragged` is what keeps the two apart —
-   * `onClick` fires after every `onPointerUp`, so without it a drag would snap
-   * and then immediately toggle back.
-   *
-   * It snaps rather than resting wherever it is let go, because a sheet that
-   * can be any height is a control that has to be re-aimed every time it opens.
-   *
-   * **The sheet follows the finger while the finger is down.** It held `92dvh`
-   * through every `pointermove` and changed only on release, so the one direct
-   * manipulation in the product gave no sign it had been noticed until it was
-   * over: you drag a dead handle, let go, and the panel teleports. `held` is
-   * the live pixel height and it is dropped on release, so the resting height
-   * goes back to being a `dvh` that follows the viewport rather than a pixel
-   * count that was true once.
-   *
-   * Its ceiling is read off the element rather than recomputed here. The sheet
-   * is capped by a `max-height` that keeps the tab bar and a row of the list
-   * showing, and that cap is lower than the tall snap on a phone — a drag
-   * clamped to `92dvh` would have spent its last 50px moving nothing, which is
-   * the same dead handle in a smaller place.
-   */
-  const from = useRef<number | null>(null)
-  const dragged = useRef(false)
-  const grip = useRef({ height: 0, min: 0, max: 0 })
-  const [held, setHeld] = useState<number | null>(null)
-
-  const height = held !== null ? `${held}px` : tall ? '92dvh' : '55dvh'
 
   return createPortal(
     <div
-      /*
-       * It stops above the phone's tab bar rather than on the bottom edge.
-       *
-       * At `bottom: 0` a 55dvh sheet covered all six destinations — every one of
-       * them measured unreachable with `elementFromPoint`, and no bar was even
-       * visible to explain why. This is a push sheet and not a modal: the list
-       * stays live underneath it, so the shell has to stay live under that. The
-       * cap keeps a row of the list showing at the tall snap too, which is the
-       * whole reason the sheet is not a takeover.
-       *
-       * From `sm` up `--nav-h` is only the home indicator, which is what the
-       * sheet's own `pad-bottom` used to supply — so that class goes with it,
-       * or the indicator's height is reserved twice.
-       */
-      style={{
-        height,
-        bottom: 'var(--nav-h)',
-        maxHeight: 'calc(100dvh - var(--nav-h) - 44px)',
-      }}
-      /* No transition while the finger is down — the drag is the animation, and
-         easing it would leave the sheet a frame or two behind the thumb. On
-         release it travels to the snap instead of jumping to it.
-         Gated on `useStill` like every other motion here: a height transition
-         needs frames, and a headless pane produces none, so an ungated one
-         leaves the sheet frozen at the height it was let go from. */
-      className={`fixed inset-x-0 z-50 bg-ink-900 edge-t flex flex-col
-                  ${held === null && !still ? 'transition-[height] duration-200 ease-out-quint' : ''}`}
+      /* `pad-top` because a fixed element at `top: 0` starts under the notch,
+         and `--nav-h` at the foot because the tab bar is not this page's to
+         cover. Between them the detail has the whole screen the shell allows
+         anything, which is what a page means here. */
+      style={{ bottom: 'var(--nav-h)' }}
+      className="fixed inset-x-0 top-0 z-50 pad-top flex flex-col bg-ink-900"
     >
-      <button
-        onPointerDown={e => {
-          from.current = e.clientY
-          dragged.current = false
-          const sheet = e.currentTarget.parentElement
-          const vh = window.innerHeight
-          const min = vh * 0.55
-          // `max-height` computes to a pixel length, so the cap the sheet is
-          // actually under can be read rather than re-derived from `--nav-h`.
-          const cap = sheet ? parseFloat(getComputedStyle(sheet).maxHeight) : NaN
-          grip.current = {
-            height: sheet?.getBoundingClientRect().height ?? min,
-            min,
-            max: Math.max(min, Math.min(vh * 0.92, Number.isFinite(cap) ? cap : Infinity)),
-          }
-          e.currentTarget.setPointerCapture(e.pointerId)
-        }}
-        onPointerMove={e => {
-          if (from.current === null) return
-          const dy = e.clientY - from.current
-          if (Math.abs(dy) > 8) dragged.current = true
-          const { height: h0, min, max } = grip.current
-          setHeld(Math.min(max, Math.max(min, h0 - dy)))
-        }}
-        onPointerUp={e => {
-          const start = from.current
-          from.current = null
-          setHeld(null)
-          if (start === null) return
-          const dy = e.clientY - start
-          if (Math.abs(dy) > 24) snap(dy < 0)
-        }}
-        // A pointer the system takes away mid-drag still has to put the height
-        // back on a snap, or it rests at whatever pixel the last move wrote.
-        onPointerCancel={() => { from.current = null; setHeld(null) }}
-        onClick={() => { if (!dragged.current) snap(!tall) }}
-        aria-label={tall ? 'Shrink the panel' : 'Grow the panel'}
-        className="hit relative shrink-0 h-6 flex items-center justify-center touch-none cursor-row-resize"
-      >
-        <span className="block w-10 h-1 rounded-full bg-ink-600" />
-      </button>
-      <CardDetail card={card} onClose={closeDetail} resting={resting}
+      <DetailPath card={card} onBack={closeDetail} />
+      {/* `CardDetail` is `h-full min-h-0`, so as a flex item it shrinks to
+          whatever the path bar leaves and scrolls its own body inside that.
+          Nothing here sets a height: a `dvh` number would be the sheet's
+          mistake in new clothes. */}
+      <CardDetail card={card} onClose={closeDetail} resting={resting} backProvided
         onMakeTask={c => { closeDetail(); onMakeTask(c) }} />
       <TaskSheet open={!!taskFrom} onClose={() => onMakeTask(null)} fromCard={taskFrom} />
     </div>,
     document.body,
+  )
+}
+
+/**
+ * Where you are, and the way back, in one line.
+ *
+ * `‹ Desk › Slack › 15five — Roopi`. The first segment is the control and the
+ * rest is the sentence it completes: one thing to press, and a path that says
+ * what was left behind rather than making the reader remember it. A bare chevron
+ * with no word beside it is a guess about what it will close, and the sheet
+ * before this had exactly that plus a cross, two dismissals eight pixels apart
+ * that did the same thing.
+ *
+ * The middle segment is the source and the last is the card's own context —
+ * `contextLine`, the same `customer — who` the row shows in its Where column, so
+ * the crumb and the row a reader tapped are recognisably the same thing. It
+ * falls back to the kind word for a card with no context to give.
+ *
+ * Neither of the last two is a control, deliberately. Filtering the desk to
+ * Slack from here means a `replaceState` for the filter and a `history.back()`
+ * for the close, in that order, on the same tick — the back would land on the
+ * entry the filter was just written into and undo it. A crumb that quietly does
+ * not work is worse than a crumb that never claimed to.
+ */
+function DetailPath({ card, onBack }: { card: CardT; onBack: () => void }) {
+  const kind = cardKind(card)
+  const here = contextLine(card) ?? kind.word
+
+  return (
+    <nav aria-label="Breadcrumb"
+      className="shrink-0 flex items-center gap-1 pad-x py-1 border-b border-rule">
+      <Button variant="default" size="sm" onClick={onBack}
+        ariaLabel="Back to the desk" title="Back to the desk"
+        className="shrink-0">
+        <ChevronLeft size={14} aria-hidden /> Desk
+      </Button>
+      <ChevronRight size={12} aria-hidden className="shrink-0 text-fg-mute" />
+      <span className="shrink-0 text-sm text-fg-dim">{SOURCE_LABEL[kind.source]}</span>
+      <ChevronRight size={12} aria-hidden className="shrink-0 text-fg-mute" />
+      <span className="truncate text-sm text-fg-mute">{here}</span>
+    </nav>
   )
 }
 

@@ -26,21 +26,17 @@
 /* ------------------------------- timestamps ------------------------------- */
 
 /**
- * A Slack ts is "<epoch seconds>.<6 digits>", where the fraction is a sequence
- * number rather than real sub-second time. Parsing it as a float introduces a
- * rounding error, so take the first three digits as milliseconds directly.
+ * A Slack ts, in milliseconds.
  *
- * It lives here rather than in `slack.ts` — which re-exports it, and is where
- * everything else in the product still imports it from — for one mechanical
- * reason: `slack.ts` imports this module, so a copy in each would be two
- * implementations of one rule and an import the other way would be a cycle.
+ * It used to be written out here and re-exported by `slack.ts`, which is where
+ * everything else in the product still imports it from. It now lives one level
+ * further out, in `src/shared/slackThread.ts`, for the same mechanical reason it
+ * lived here rather than in `slack.ts`: the pasted-link parser needs it, that
+ * parser is shared with the browser, and `src/shared/` may not import from
+ * `src/server/`. Re-exported unchanged, so no caller has to know it moved.
  */
-export function slackTsToMs(ts: string): number {
-  if (!ts) return Date.now()
-  const [secs, frac = ''] = ts.split('.')
-  const ms = Number(frac.slice(0, 3).padEnd(3, '0'))
-  return Number(secs) * 1000 + (Number.isFinite(ms) ? ms : 0)
-}
+export { slackTsToMs } from '../../shared/slackThread'
+import { slackTsToMs } from '../../shared/slackThread'
 
 /* --------------------------------- messages ------------------------------- */
 

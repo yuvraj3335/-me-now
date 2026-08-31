@@ -1,5 +1,5 @@
 import { MotionConfig, motion } from 'motion/react'
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
   BarChart3, Inbox, Mail as MailIcon, PenLine, RefreshCw, RotateCcw, Settings2,
   SquareCheck, SquareTerminal,
@@ -12,6 +12,18 @@ import Sessions from './pages/Sessions'
 import { Pulse } from './pages/Pulse'
 import { Settings } from './pages/Settings'
 import { Mail } from './pages/Mail'
+
+/**
+ * The terminal is loaded on arrival, not on boot.
+ *
+ * xterm.js is a real VT emulator and it costs 346KB of the bundle — more than
+ * half of everything else in this product put together. Every other destination
+ * here is read on a phone over a tunnel, often on the first load of the morning,
+ * and none of them needs a terminal emulator to render a table. Splitting it out
+ * is the difference between the desk paying for the terminal and the terminal
+ * paying for itself, and `/terminal/<id>` is the only route that pulls it in.
+ */
+const TerminalPage = lazy(() => import('./pages/Terminal'))
 import { STATIC_MODE, useStill } from './lib/motion'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
@@ -19,7 +31,7 @@ import { ToastBar } from './components/toast'
 import { WakeMark } from './components/WakeMark'
 import { openLaunch } from './lib/launch'
 import { useMailBadge } from './lib/mailBadge'
-import { navigate, setParam, useRoute } from './lib/route'
+import { navigate, setParam, terminalIdOf, useRoute } from './lib/route'
 
 /**
  * Six destinations, on the laptop and on the phone alike.
@@ -76,6 +88,13 @@ export default function App() {
 
   const active = TABS.find(t => t.path === path) ?? TABS[0]
   /**
+   * A live Claude Code session, which is a place rather than a tab.
+   *
+   * Read here and rendered below every hook, because hooks may not be skipped —
+   * the early return has to come after the last one, not before the first.
+   */
+  const terminalId = terminalIdOf(path)
+  /**
    * What is actually waiting, not what is on the desk.
    *
    * The desk holds every open card — around a hundred — and a badge that reads
@@ -95,6 +114,34 @@ export default function App() {
   // freeze every animated mark at its initial value.
   const staticMode = STATIC_MODE
   const still = useStill()
+
+  /**
+   * The terminal takes the whole viewport, and takes it *outside* the shell.
+   *
+   * Not a seventh tab and not a page inside `<main>`. A terminal has to own the
+   * full height to be worth reading on a phone, it sizes its own columns against
+   * whatever box it is given, and the phone tab bar would sit on top of the
+   * composer — the one line the operator has to be able to see and type in. The
+   * chevron path in its own header is what replaces the rail: see
+   * `pages/Terminal.tsx`.
+   *
+   * `ToastBar` comes along because refusals from the terminal API — an unknown
+   * repository, a session that is not on this box — are reported the same way
+   * they are everywhere else in the product.
+   */
+  if (terminalId) {
+    return (
+      <MotionConfig reducedMotion={staticMode ? 'always' : 'user'}>
+        {/* A word rather than a spinner. The chunk arrives in well under a
+            second on this tunnel, and a spinner that flashes for 200ms is
+            noise where a line of text is an answer. */}
+        <Suspense fallback={<p className="p-6 text-sm text-fg-mute">Opening the session…</p>}>
+          <TerminalPage id={terminalId} />
+        </Suspense>
+        <ToastBar />
+      </MotionConfig>
+    )
+  }
 
   return (
     <MotionConfig

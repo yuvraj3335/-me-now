@@ -2,10 +2,14 @@
  * "Open in Claude" over HTTP.
  *
  * Two steps on purpose. `POST /packs` writes the brief and returns what it
- * contains; `POST /packs/:id/open` marks it handed over and returns the link.
- * Splitting them means you can read exactly what is about to be sent — which
- * objects, which instruction, how much of it fits — before anything leaves, and
- * the file on disk is the same text the link carries.
+ * contains; `POST /packs/:id/open` marks it handed over — and now actually opens
+ * it, in a Claude Code session running on this box. Splitting them means you can
+ * read exactly what is about to be sent — which objects, which instruction —
+ * before anything leaves, and the file on disk is the same text the session gets.
+ *
+ * The `/terminals` half of this file is the same feature reached from the other
+ * end: a session already on this machine, opened without a brief. `terminal.ts`
+ * holds every rule about what may be started; this file is the HTTP shape of it.
  */
 
 import { Hono } from 'hono'
@@ -18,6 +22,10 @@ import { listRepos } from '../registry/scan'
 import {
   DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode, resolveCwd,
 } from './launch'
+import {
+  available, closeTerminal, getTerminal, listTerminals, openTerminal,
+  type OpenInput, type TerminalInfo,
+} from './terminal'
 import { handoffConfig } from './handoff'
 import { issueConfirmation, useConfirmation } from '../security'
 import { listSkills } from '../skills/catalog'
@@ -41,6 +49,14 @@ claudecode.get('/state', c =>
       skills: t.skills,
       defaultRepo: t.defaultRepo,
       instruction: t.instruction,
+      // A voice template is worn *over* an investigation rather than picked
+      // instead of one, and the picker is the only place that distinction can
+      // be shown. Without this field the Humanizer arrives at the browser
+      // looking exactly like an eleventh thing to investigate, which is the one
+      // thing it is not. Defaulted here rather than in `templates.ts` so the ten
+      // rows that predate the field stay untouched and the browser still gets a
+      // value it can switch on.
+      kind: t.kind ?? 'investigation',
     })),
     // Only repositories the registry scanned can be named in a brief, so the
     // picker shows exactly the set the server will accept.
@@ -62,6 +78,10 @@ claudecode.get('/state', c =>
     sessions: sessionRows({ windowDays: 30, limit: 30 }),
     defaultPermissionMode: DEFAULT_PERMISSION_MODE,
     packs: listPacks(20),
+    // Whether this machine can start a session at all, and which ones it has
+    // running. On `/state` so the sheet's Open control can be *off with a
+    // reason* rather than a button that answers 503 after the brief is written.
+    terminal: { available: available(), running: listTerminals() },
   }),
 )
 
@@ -240,13 +260,155 @@ claudecode.get('/packs/:id/file', async c => {
 })
 
 /**
- * Hand it over. The body may carry the edited brief, which becomes the record:
- * the row, the file and the link all move to what was actually approved.
+ * Hand it over — for real this time.
+ *
+ * The body may carry the edited brief, which becomes the record: the row, the
+ * file and the session all move to what was actually approved.
+ *
+ * This route used to end at `openPack`, which wrote an audit line saying
+ * `opened` about a link the browser then followed to claude.ai. It now starts
+ * the session too, so the word in the log and the thing that happened are the
+ * same thing. The `url`, `sent`, `total` and `trimmed` fields are still here and
+ * still mean what they meant, because the sheet reads them and that file belongs
+ * to someone else this week — `terminal` is the field that matters now, and
+ * HANDOFF_LAUNCH_API.md is the note asking for the anchor to follow it.
+ *
+ * A pack that records fine but cannot be started answers 200 with
+ * `terminalError` rather than an error status. The hand-off *was* recorded — the
+ * brief is on disk and the row says so — and throwing that away because tmux is
+ * missing would lose the one artifact this product promises to keep.
  */
 claudecode.post('/packs/:id/open', async c => {
   const b = await c.req.json<{ brief?: string }>().catch(() => ({}) as { brief?: string })
-  const r = openPack(c.req.param('id'), typeof b.brief === 'string' ? b.brief : undefined)
-  return 'error' in r ? c.json(bad(r.error), 404) : c.json(r)
+  const id = c.req.param('id')
+  const r = openPack(id, typeof b.brief === 'string' ? b.brief : undefined)
+  if ('error' in r) return c.json(bad(r.error), 404)
+
+  const started = terminalForPack(id)
+  return c.json({
+    ...r,
+    ...('error' in started ? { terminalError: started.error } : { terminal: started }),
+  })
+})
+
+/* ------------------------------- terminals -------------------------------- */
+
+/**
+ * Start the session a pack is about.
+ *
+ * The brief is read back off the row rather than taken from the request, because
+ * `openPack` has just written the approved text to both the row and the file —
+ * so this is the one read that guarantees the session receives the artifact the
+ * operator can go and open, and not a fourth copy that travelled separately.
+ */
+function terminalForPack(packId: string): TerminalInfo | { error: string } {
+  const pack = getPack(packId)
+  if (!pack) return { error: 'no such pack' }
+
+  const mode = parsePermissionMode(pack.permission_mode)
+  const r = openTerminal({
+    sessionId: pack.session_id ?? null,
+    cwd: pack.cwd,
+    brief: String(pack.first_message ?? ''),
+    briefPath: pack.pack_path,
+    permissionMode: 'error' in mode ? DEFAULT_PERMISSION_MODE : mode.mode,
+  })
+  if ('error' in r) {
+    audit('claude.terminal', { target: packId, ok: false, error: r.error })
+    return { error: r.error }
+  }
+  audit('claude.terminal', {
+    target: `${r.repo ?? r.cwd} → ${r.sessionId}`,
+    detail: {
+      packId, sessionId: r.sessionId, cwd: r.cwd, resumed: r.resumed,
+      started: r.started, briefSent: r.briefSent, permissionMode: r.permissionMode,
+    },
+  })
+  return r
+}
+
+/**
+ * Start a session, resume one, or reattach to one that is already up.
+ *
+ * `packId` is the launch sheet's route in. Everything else is the Sessions
+ * page's: an id to resume, or a repository to start a fresh conversation in.
+ * Neither can name a command, a directory outside the registry, or an extra
+ * argument — see `terminal.ts` for the three-part allowlist that enforces it.
+ */
+claudecode.post('/terminals', async c => {
+  const b = await c.req.json<any>().catch(() => ({}))
+
+  if (typeof b.packId === 'string' && b.packId) {
+    if (!getPack(b.packId)) return c.json(bad('no such pack'), 404)
+    // The same two steps the Open button takes, in the same order: record what
+    // was approved, then start it from what was recorded.
+    const rec = openPack(b.packId, typeof b.brief === 'string' ? b.brief : undefined)
+    if ('error' in rec) return c.json(bad(rec.error), 404)
+    const started = terminalForPack(b.packId)
+    return 'error' in started ? c.json(bad(started.error), 409) : c.json(started)
+  }
+
+  const mode = parsePermissionMode(b.permissionMode)
+  if ('error' in mode) return c.json(bad(mode.error), 400)
+
+  const input: OpenInput = {
+    sessionId: typeof b.sessionId === 'string' ? b.sessionId : null,
+    cwd: typeof b.cwd === 'string' ? b.cwd : null,
+    brief: typeof b.brief === 'string' ? b.brief : null,
+    permissionMode: mode.mode,
+    cols: b.cols,
+    rows: b.rows,
+  }
+  // Neither an id nor a directory is not a request Wake can guess at. Refusing
+  // by name beats defaulting to the workspace root, which would silently open a
+  // session somewhere nobody asked for.
+  if (!input.sessionId && !input.cwd) {
+    return c.json(bad('name a session to resume or a repository to start in'), 400)
+  }
+
+  const r = openTerminal(input)
+  if ('error' in r) {
+    audit('claude.terminal', { target: input.sessionId ?? input.cwd ?? '—', ok: false, error: r.error })
+    return c.json(bad(r.error), r.status)
+  }
+  audit('claude.terminal', {
+    target: `${r.repo ?? r.cwd} → ${r.sessionId}`,
+    detail: {
+      sessionId: r.sessionId, cwd: r.cwd, resumed: r.resumed,
+      started: r.started, briefSent: r.briefSent, permissionMode: r.permissionMode,
+    },
+  })
+  return c.json(r)
+})
+
+claudecode.get('/terminals', c => c.json({ terminals: listTerminals(), available: available() }))
+
+/**
+ * One terminal, and the session it is.
+ *
+ * 200 with nulls rather than 404, because the page that asks this question has
+ * already been opened: "that session finished while your phone was locked" is
+ * something to render, not an error to throw at somebody who followed a link
+ * Wake gave them.
+ */
+claudecode.get('/terminals/:id', c => {
+  const id = c.req.param('id')
+  return c.json({ terminal: getTerminal(id), session: getSession(id) })
+})
+
+/**
+ * End the process, keep the conversation.
+ *
+ * Unguarded, unlike `DELETE /sessions/:id` two screens up, and the difference is
+ * the point: that one unlinks four directories under `~/.claude` and cannot be
+ * undone, while this one closes a program. The transcript survives, the session
+ * stays in the Sessions list, and the way back is to open it again.
+ */
+claudecode.delete('/terminals/:id', c => {
+  const id = c.req.param('id')
+  const r = closeTerminal(id)
+  if (r.closed) audit('claude.terminal.close', { target: id })
+  return c.json(r)
 })
 
 /**

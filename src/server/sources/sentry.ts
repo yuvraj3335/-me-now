@@ -90,6 +90,11 @@ export function parseSentryIssues(md: string): SentryIssue[] {
       userCount: Number(field('Users')) || 0,
       status: field('Status'),
       lastSeen: relativeToIso(field('Last seen')),
+      // Read when the response happens to state it. A comment is the other way
+      // an issue moves without a new event, and this is the only trace of one
+      // anywhere in what the MCP server answers with — a *count*, with no
+      // instant attached. See the `meta.comments` note in `fetch`.
+      numComments: Number(field('Comments')) || 0,
       // The short id's prefix is the project's own code. It is the only project
       // identity in this response, and it is the one Sentry's own UI shows.
       project: shortId.split('-')[0]?.toLowerCase(),
@@ -98,17 +103,59 @@ export function parseSentryIssues(md: string): SentryIssue[] {
   return out
 }
 
-/** `4 minutes ago` → an ISO instant. Sentry states ages, not timestamps. */
+/**
+ * `4 minutes ago` → an ISO instant. Sentry states ages, not timestamps.
+ *
+ * Every spelling below came off a real response, and the breadth is the point
+ * rather than thoroughness for its own sake. What this function fails to read
+ * does not degrade politely: `fetch` falls back to `Date.now()`, which stamps a
+ * three-week-old issue as having happened this second — so it sorts to the top
+ * of the desk, and does so again on the next poll, and the one after that. An
+ * age Sentry stated in a spelling nobody anticipated is the difference between
+ * a quiet row and a row that will not stay put.
+ */
 const UNIT_MS: Record<string, number> = {
   second: 1000, minute: 60_000, hour: 3.6e6, day: 864e5, week: 6.048e8, month: 2.592e9, year: 3.156e10,
 }
+/** The compact form: `4m`, `3h`, `2d`, `1w`, `6mo`, `1y`. `m` is minutes, `mo` months. */
+const SHORT_UNIT_MS: Record<string, number> = {
+  s: 1000, m: 60_000, h: 3.6e6, d: 864e5, w: 6.048e8, mo: 2.592e9, y: 3.156e10,
+}
+
 export function relativeToIso(v: string | undefined): string | undefined {
   if (!v) return undefined
-  const m = /^(?:about\s+)?(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.exec(v.trim())
-  if (!m) return undefined
-  const ms = UNIT_MS[m[2]!.toLowerCase()]
-  if (!ms) return undefined
-  return new Date(Date.now() - Number(m[1]) * ms).toISOString()
+  const t = v.trim()
+  if (!t) return undefined
+
+  // "just now", and the two ways Sentry says the same thing.
+  if (/^(just\s+now|moments?\s+ago|less\s+than\s+a\s+minute\s+ago|now)$/i.test(t)) {
+    return new Date().toISOString()
+  }
+
+  // "4 minutes ago", "about 2 hours ago", and "a minute ago" / "an hour ago",
+  // which are the same sentence with the 1 written out as a word.
+  const long = /^(?:about\s+)?(\d+|an?)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i.exec(t)
+  if (long) {
+    const ms = UNIT_MS[long[2]!.toLowerCase()]
+    if (ms) {
+      const n = /^an?$/i.test(long[1]!) ? 1 : Number(long[1])
+      return new Date(Date.now() - n * ms).toISOString()
+    }
+  }
+
+  // "3d", "45m ago", "6mo". `mo` is tried before `m` or every month reads as a
+  // minute — an issue last seen in June arriving stamped an hour ago.
+  const short = /^(\d+)\s*(mo|[smhdwy])(?:\s+ago)?$/i.exec(t)
+  if (short) {
+    const ms = SHORT_UNIT_MS[short[2]!.toLowerCase()]
+    if (ms) return new Date(Date.now() - Number(short[1]) * ms).toISOString()
+  }
+
+  // And an instant stated as an instant. Sentry's JSON says `lastSeen` this way
+  // and its Markdown occasionally does too; refusing it here sent a perfectly
+  // good timestamp down the `Date.now()` path in `fetch`.
+  const abs = Date.parse(t)
+  return Number.isFinite(abs) ? new Date(abs).toISOString() : undefined
 }
 
 type SentryIssue = {
@@ -123,6 +170,7 @@ type SentryIssue = {
   level?: string
   lastSeen?: string
   last_seen?: string
+  numComments?: number
   project?: string | { slug?: string }
   assignedTo?: unknown
   status?: string
@@ -240,6 +288,24 @@ export const sentry: SourceAdapter = {
             events: Number(it.count ?? 0) || 0,
             users: it.userCount ?? 0,
             project: projectSlug(it.project),
+            /*
+             * How many comments this issue has, and nothing about when.
+             *
+             * A new comment is one of the things that ought to move a row to the
+             * top, and it is the one trigger on this source with no timestamp
+             * behind it: the search response states a count and Sentry's MCP
+             * exposes no comment feed at all. So this is carried as the raw
+             * fact rather than dressed up as an instant — turning "the count
+             * went from 2 to 3" into "something happened just now" needs the
+             * previous row, which lives in the ingest upsert and not here.
+             *
+             * In practice the comment that matters on this deployment arrives in
+             * `#sentry-alerts` — the Cursor triage bot posts it — and that
+             * message merges into this group on the shared `sentry:` reference,
+             * which moves `activity_at` through the Slack member. See the table
+             * over `activityAt` in `api.ts`.
+             */
+            comments: Number(it.numComments ?? 0) || 0,
           },
         })
       }

@@ -28,6 +28,20 @@ export type PackItem = {
   why?: string | null
   /** Facts worth stating as facts: a channel, a PR number, a session's cwd. */
   meta?: Record<string, string | number | boolean | null> | null
+  /**
+   * The desk row this object came off, when it came off one.
+   *
+   * Not a fact about the object, and not part of the brief: it is how the sheet
+   * asks `/api/cards/<group>/slack` which conversation the row is, so the reply
+   * picker can offer the replies Wake already holds. The card is the only thing
+   * that knows its own group key and `cardContext` is the only place that sees
+   * a whole card, so it rides in on the items rather than through a prop the
+   * detail pane would have to be edited to pass.
+   *
+   * `createPack` strips it on the way out. A pack file says what a brief is
+   * made of, not how the sheet found it.
+   */
+  group?: string | null
 }
 
 export type Template = {
@@ -38,6 +52,18 @@ export type Template = {
   skills: string[]
   defaultRepo: string | null
   instruction: string
+  /**
+   * What kind of thing this template is.
+   *
+   * Ten of them say what to find out. One — the Humanizer — says how the last
+   * message reads, and is meant to be chosen *on top of* one of the others
+   * rather than instead of it. The picker is the only surface where that
+   * distinction can be shown, so it is the only reason this field exists.
+   *
+   * Optional because the ten that predate it do not carry it, and absent reads
+   * as `investigation` everywhere. See HANDOFF_HUMANIZER.md.
+   */
+  kind?: 'investigation' | 'voice'
 }
 
 /**
@@ -92,7 +118,13 @@ export type Session = {
 }
 
 /**
- * The two real `--permission-mode` values a brief may name.
+ * The two real `--permission-mode` values a session is started under.
+ *
+ * They used to be values a brief could only *describe*: the hand-off was a
+ * `claude.ai/new?q=` link, that URL carries a prompt and nothing else, and the
+ * mode reached the session only as a sentence asking it to behave. It is now a
+ * real flag on a real process — the pack row carries it and
+ * `POST /api/claude/terminals` starts the session with it.
  *
  * `bypassPermissions` is the default position. A brief is written, read and
  * approved before it is sent; asking again at the terminal is asking the same
@@ -104,10 +136,6 @@ export const PERMISSION_MODES: ReadonlyArray<{ id: PermissionMode; label: string
   { id: 'acceptEdits', label: 'Accept edits' },
 ]
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'bypassPermissions'
-
-/** The command that rejoins a session on the machine it is actually on. */
-export const resumeCommand = (id: string, mode: PermissionMode) =>
-  `claude --resume ${id} --permission-mode ${mode}`
 
 export type Pack = {
   id: string
@@ -176,6 +204,22 @@ export type LaunchState = {
   sessions: Session[]
   packs: Pack[]
   defaultPermissionMode: PermissionMode
+  /**
+   * Whether this box can start a session at all.
+   *
+   * On `/state` so the sheet can be off *with a reason* — `tmux` missing,
+   * `python3` missing, no `claude` binary — instead of offering a commit that
+   * answers 503 after the brief has been written and read. `missing` is the
+   * server's own sentence naming what is absent.
+   *
+   * Optional because a Wake that has not deployed the terminal routes yet still
+   * serves a `/state` without it, and a sheet that crashes on a missing key is
+   * a worse failure than one that assumes the box is fine and reports the 503.
+   */
+  terminal?: {
+    available: { ok: boolean; tmux: boolean; python: boolean; claude: boolean; missing: string | null }
+    running: Array<{ id: string; sessionId: string; cwd: string; repo: string | null }>
+  }
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -199,7 +243,13 @@ export const launchApi = {
     skills?: string[]
     sessionId?: string | null
     permissionMode?: PermissionMode
-  }) => req<Pack>('/packs', { method: 'POST', body: JSON.stringify(b) }),
+  }) => req<Pack>('/packs', {
+    method: 'POST',
+    // `group` is the sheet's own routing key and never the brief's business —
+    // see `PackItem.group`. Dropped here rather than at every call site, so
+    // there is one place that decides what a pack item is on the wire.
+    body: JSON.stringify({ ...b, items: b.items.map(({ group, ...item }) => item) }),
+  }),
   sessions: (opts: { all?: boolean; repo?: string; window?: number; limit?: number } = {}) => {
     const q = new URLSearchParams()
     if (opts.all) q.set('all', '1')
@@ -255,11 +305,14 @@ type Basket = {
   repoHint: string | null
   title: string | null
   /**
-   * The Claude Code session this brief is about, or null for a fresh start.
+   * The Claude Code session this brief goes to, or null for a new one.
    *
-   * Context, not continuity — a link can only open a *new* conversation. What
-   * choosing one buys is the session's directory, its branch and the resume
-   * command, written into the brief. See DECISIONS.md #35.
+   * It used to be context and not continuity: the hand-off was a link to a chat
+   * surface, no URL reaches an existing conversation, and choosing a session
+   * bought its directory, its branch and a `claude --resume` line to paste
+   * somewhere else. The brief now goes to a Claude Code process on this box, so
+   * naming a session here is the session that is resumed — `--resume <id>`, in
+   * the directory it already ran in, with everything it already knows.
    */
   session: string | null
   permissionMode: PermissionMode
@@ -294,11 +347,23 @@ const set = (p: Partial<Basket>) => {
   listeners.forEach(l => l())
 }
 
+/**
+ * The basket as it stands, without a component.
+ *
+ * `useSyncExternalStore` wants a snapshot function, and this is it — named,
+ * rather than two closures written out at the call site, so there is one answer
+ * to "what is in the basket" and React and everything else read the same one.
+ * The store is otherwise private, and a mutation that could only be observed
+ * through a rendered component would be a mutation nothing but a browser can
+ * check.
+ */
+export const launchBasket = (): Readonly<Basket> => basket
+
 export function useLaunchBasket() {
   return useSyncExternalStore(
     useCallback((l: () => void) => (listeners.add(l), () => listeners.delete(l)), []),
-    () => basket,
-    () => basket,
+    launchBasket,
+    launchBasket,
   )
 }
 

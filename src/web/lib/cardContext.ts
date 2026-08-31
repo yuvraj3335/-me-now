@@ -106,9 +106,26 @@ function metaFor(s: CardSource): Record<string, string | number | boolean | null
       // `turns_in_view`, not `exchanges`: only the tail of a transcript is read,
       // so the number is a floor. A brief that states it as a total invites a
       // session to conclude the work was shorter than it was.
+      //
+      //
+      // `session`, not `resume_with`. This line used to carry the card's
+      // `meta.resume_cmd` — a `claude --resume <uuid> --permission-mode …`
+      // string — into the brief, back when the only way to reach a session was
+      // to paste one into a terminal. Wake starts the session itself now, so
+      // that would be a command telling the reader to go and hand-start the
+      // very thing it is already running inside of, and the field has been
+      // taken off the card entirely. `pick` drops what is undefined, so leaving
+      // it here would have quietly cost the entry its only identifier.
+      //
+      // The id is what replaces it, and it is a better fact than the command
+      // ever was: the same string is the transcript's filename, the id in the
+      // Sessions list, what `liveSessions()` reports and the `/terminal/<id>`
+      // route. A brief that names it names something every part of this product
+      // can act on.
       return pick({
+        session: m.session_id,
         working_directory: m.cwd, branch: m.branch, turns_in_view: m.turns,
-        permission_mode: m.permission_mode, resume_with: m.resume_cmd,
+        permission_mode: m.permission_mode,
       })
     default:
       return {}
@@ -138,6 +155,15 @@ export function cardContext(card: Card): PackItem[] {
     excerpt: i === 0 ? (card.excerpt ?? null) : null,
     why: s.why || `seen in ${LABEL[s.source]}`,
     meta: metaFor(s),
+    /*
+     * Which desk row this came off.
+     *
+     * The sheet needs it to ask `/api/cards/<group>/slack` for the replies under
+     * a Slack row, and this function is the only place in the browser that sees
+     * a whole card. It is not a fact about the object and it never reaches the
+     * brief — `createPack` strips it. See `PackItem.group`.
+     */
+    group: card.group_key,
   }))
 }
 

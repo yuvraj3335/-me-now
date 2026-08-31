@@ -474,6 +474,38 @@
   [data-swipe='none'] { touch-action: none !important; }
 
   /*
+    And the third policy: a row inside a table that scrolls sideways, which
+    gives both axes back to the browser.
+
+    `pan-y` hands the app the horizontal axis. That is exactly right on a row
+    whose only horizontal gesture is its own drawer, and it is a trap on the
+    phone desk, where the row lives inside a 540px table in 358px of screen.
+    Measured on the deployed site at 390px: the scroller was scrollable in
+    principle — clientWidth 358, scrollWidth 540, `overflow-x: auto`, nothing in
+    the ancestor chain clipping it — and the Title cell computed `touch-action:
+    pan-y`. Title is pinned, it is the widest column, it is the one part of the
+    row that is always on screen, and it is where a thumb lands. So the four
+    columns this table was rebuilt to draw at a readable width could not be
+    reached by the one input the device has. A trackpad appeared to work,
+    because the drawer's own `wheel` handler scrolls the table on the way past;
+    that is why it survived a laptop and a resized desktop window.
+
+    Where the two genuinely want the same axis under a finger, the table wins.
+    What that costs is the drawer under a *touch* on those rows and nothing
+    else: the same row still opens on a tap, still peeks on a long press, still
+    carries its own `Status` control two columns along, and still opens its
+    drawer to a mouse or a trackpad on the narrow laptop that renders the same
+    table. A phone that cannot see its own columns is the worse failure by a
+    long way.
+
+    `manipulation` rather than `auto` for the same reason the cells used to say
+    it one at a time: both axes and pinch, without the double-tap zoom delay
+    sitting in front of every tap that opens a row.
+  */
+  [data-swipe='manipulation'],
+  [data-swipe='manipulation'] > td { touch-action: manipulation; }
+
+  /*
     The page pad, once, as one value.
 
     Measured before this existed: four horizontal page pads in use on the laptop
@@ -548,6 +580,28 @@
     pointer-events: none;
     background: linear-gradient(to left, var(--color-ink-900), transparent);
   }
+
+  /*
+    The edge on a pinned column, painted only while there is something behind it.
+
+    The phone desk pins Title so the name of a row survives a sideways scroll,
+    and a 1px rule down its right edge is what says that column is pinned rather
+    than merely first. Written as a permanent `shadow-[1px_0_0_0_…]` on the
+    heading and on every row's Title cell it said no such thing: at `scrollLeft:
+    0` there is nothing behind the column, so what a phone drew was a full-height
+    vertical line through the middle of the table, on every row, before anything
+    had been scrolled. Measured on the deployed site at 390px — `box-shadow: rgb(200,
+    200, 211) 1px 0px 0px 0px` on the `<th>` and on every Title `<td>` — and
+    plainly visible in a screenshot as a rule nobody designed. An edge that is
+    always there is not marking anything.
+
+    `data-moved` is `useRail`'s other half and it hangs on the scroller exactly
+    as `data-spill` does, for the same reason: the answer is a fact about a
+    scroll position, so it is written where the scroll position is measured and
+    read from there by everything that is pinned to that scroller. The edge
+    arrives on the first pixel of travel and leaves when the table is put back.
+  */
+  [data-moved] .pin-edge { box-shadow: 1px 0 0 0 var(--color-rule); }
 
   /*
     Small ink, generous target — where there are fingers.

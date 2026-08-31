@@ -1,0 +1,643 @@
+/**
+ * A live Claude Code session, on this box, reachable from a phone.
+ *
+ * This file is the correction to DECISIONS.md #35. That decision was right about
+ * the facts and wrong about the conclusion: `claude.ai/new?q=` really does open a
+ * *new* conversation and really cannot target an existing one — so Wake stopped
+ * there and shipped a link to the Claude **chat** product, plus a `claude
+ * --resume …` line for the operator to find a terminal and paste. Which meant
+ * the button labelled "Open in Claude" opened the one surface that has neither
+ * his repository, nor his tools, nor the session he was actually in.
+ *
+ * The missing step was never a URL. It was a terminal.
+ *
+ *     browser --ws--> Bun --pipes--> ptybridge.py --pty--> tmux --> claude
+ *
+ * Each link in that chain is there because the one before it cannot do the job:
+ *
+ *   **tmux** owns the session's life. It is what makes closing the tab harmless,
+ *   what makes a laptop and a phone two views of one screen, and what makes a
+ *   Wake restart a non-event for work already running. Wake holding the process
+ *   itself would tie a conversation's lifetime to a web server's, which is the
+ *   `claude -p` mistake in a nicer coat.
+ *
+ *   **ptybridge.py** owns the pseudo-terminal, because `tmux attach` refuses to
+ *   run without a tty and node-pty delivers no bytes under Bun. See that file.
+ *
+ *   **Bun** owns nothing but the relay and the rules. Which repositories may be
+ *   named, which sessions may be resumed, and what a caller is allowed to put on
+ *   a command line — all of which is this file's real subject.
+ *
+ * The security posture is a whitelist in three parts, and it is worth stating
+ * plainly because "start a process" is the most dangerous verb in this product:
+ *
+ *   1. The **command** is never supplied by a caller. It is `CLAUDE_BIN` and a
+ *      fixed set of flags built here. There is no field in any request body that
+ *      reaches argv except the brief, which `claude` reads as a prompt.
+ *   2. The **directory** comes from `resolveCwd` — the registry — or, for a
+ *      resume, from the session's own transcript, bounded to `WORKSPACE_ROOT`.
+ *   3. The **session** must already exist, read through the same
+ *      `sources/claudeSessions.ts` the Sessions page reads.
+ *
+ * And one thing Wake deliberately does *not* do: it never writes
+ * `hasTrustDialogAccepted` into `~/.claude.json`. A directory Claude Code has
+ * not seen before makes it ask whether the project is trusted, and the answer to
+ * that question is the operator's. What Wake does instead is say so on the way
+ * in — `trusted: false` on the response — so the screen he lands on tells him
+ * there is a prompt waiting rather than leaving him staring at one.
+ */
+
+import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
+import {
+  CLAUDE_BIN, CLAUDE_CONFIG_PATH, PYTHON_BIN, TERMINAL_COLS, TERMINAL_NAME_PREFIX,
+  TERMINAL_ROWS, TERMINAL_SIZE_DIR, TERMINAL_TMUX_SOCKET, TMUX_BIN, WORKSPACE_ROOT,
+} from '../env'
+import { getRepo } from '../registry/scan'
+import { getSession } from '../sources/claudeSessions'
+import {
+  DEFAULT_PERMISSION_MODE, resolveCwd, type PermissionMode,
+} from './launch'
+
+/* ------------------------------- identity --------------------------------- */
+
+/**
+ * A Claude Code session id, and nothing else.
+ *
+ * Every id in this file — the one in a request body, the one in a tmux name, the
+ * one in a URL — is a session uuid, because `--session-id` lets Wake *choose*
+ * the id it is about to create. That is the single decision that makes the whole
+ * feature line up: the id the browser routes on, the id in the transcript's
+ * filename, the id `liveSessions()` reports and the id the Sessions page already
+ * shows are one string, so nothing has to be reconciled anywhere.
+ *
+ * The shape is checked rather than trusted. This value becomes a tmux target and
+ * a filename, so "looks like a uuid" is the boundary between a session id and an
+ * argument.
+ */
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export const isSessionId = (v: unknown): v is string =>
+  typeof v === 'string' && SESSION_ID.test(v)
+
+/** The tmux session that holds one Claude Code session. */
+export function tmuxNameFor(sessionId: string): string | null {
+  return isSessionId(sessionId) ? `${TERMINAL_NAME_PREFIX}${sessionId.toLowerCase()}` : null
+}
+
+/**
+ * The inverse, used to read `list-sessions` back.
+ *
+ * Anything on Wake's tmux socket that does not spell out a session id is not a
+ * terminal this API knows how to describe, and is skipped rather than guessed
+ * at. In practice nothing else is ever there — the socket is Wake's alone — but
+ * a list that can only contain well-formed rows is a list no caller can be
+ * surprised by.
+ */
+export function sessionIdFromTmuxName(name: string): string | null {
+  if (!name.startsWith(TERMINAL_NAME_PREFIX)) return null
+  const id = name.slice(TERMINAL_NAME_PREFIX.length)
+  return isSessionId(id) ? id : null
+}
+
+/** Where the session lives in the app, and where its bytes come from. */
+export const terminalRoute = (id: string) => `/terminal/${id}`
+export const terminalSocketPath = (id: string) => `/api/claude/terminals/${id}/socket`
+
+/* ------------------------------ the command ------------------------------- */
+
+/**
+ * The argv Wake will run, built from a closed set of parts.
+ *
+ * Exported because it is the single place a caller's input becomes a command
+ * line, so it is the single thing worth testing directly. Everything variable in
+ * it is either an id whose shape has been checked, a mode from a two-item list,
+ * or the brief — and the brief is a positional argument that `claude` reads as a
+ * prompt, not as an option, which is why it cannot become a flag however it is
+ * written. There is no field anywhere in this API for "extra arguments".
+ *
+ * **The brief goes in as argv rather than typed into the composer.** Both work —
+ * pasting the pack file through `tmux load-buffer` was measured landing a full
+ * multi-line markdown brief with its newlines intact. Argv wins because Claude
+ * Code owns the ordering: the trust dialog and the "this session is 6d old"
+ * resume dialog both come *first*, and the queued prompt is submitted after they
+ * are answered. Pasting requires Wake to decide, by reading the screen, whether
+ * a dialog is up — and getting that wrong means a brief typed into a menu and an
+ * Enter that picks whatever was highlighted. Screen-scraping another product's
+ * chrome to decide when to press a key is not a thing to build on purpose.
+ *
+ * **Wake submits it; it does not leave a draft.** The read-and-approve moment
+ * already happened and was already paid for — the sheet renders the brief, he
+ * edits it, and pressing Open is the approval. Leaving the text sitting unsent
+ * in the composer would ask the same question a second time, and on a phone it
+ * asks it through a soft keyboard. "The brief is the first message the session
+ * receives" is the requirement; a draft is not a message.
+ */
+export function claudeArgv(o: {
+  sessionId: string
+  resume: boolean
+  permissionMode: PermissionMode
+  brief?: string | null
+}): string[] {
+  const argv = [CLAUDE_BIN, '--permission-mode', o.permissionMode]
+  argv.push(o.resume ? '--resume' : '--session-id', o.sessionId)
+  // An empty brief is no brief. `claude ""` would submit a blank first turn.
+  if (o.brief && o.brief.trim()) argv.push(o.brief)
+  return argv
+}
+
+/* -------------------------------- tmux ------------------------------------ */
+
+/**
+ * Wake's own tmux, configured by a file rather than by the operator's.
+ *
+ * `-f` matters more than it looks. Without it the server would read
+ * `~/.tmux.conf`, and a personal config that sets a status bar, rebinds a key or
+ * turns on mouse mode would change what the browser renders and what a keystroke
+ * does — silently, and only on this machine. The conf is written on every start
+ * so a change here takes effect on the next new server rather than whenever the
+ * file happened to be created.
+ */
+const confPath = () => `${TERMINAL_SIZE_DIR}/tmux.conf`
+
+const TMUX_CONF = [
+  // Escape must arrive as Escape. tmux's default 500ms wait exists to
+  // disambiguate a real Escape from the start of an arrow-key sequence, and it
+  // is exactly wrong here: cancelling out of a Claude Code prompt is one of the
+  // handful of keys this feature exists to deliver, and the browser has already
+  // told us which one was pressed.
+  'set -s escape-time 0',
+  // No status bar. tmux steals a row for it, the browser is not a tmux client
+  // the operator drives, and a green strip across the bottom of a session he
+  // reached from a phone is chrome for a program he did not ask to see.
+  'set -g status off',
+  // The window follows whichever client last interacted. With a laptop and a
+  // phone attached at once the alternative — sizing to the smallest — would let
+  // an idle phone in a pocket squeeze the laptop he is typing on.
+  'set -g window-size latest',
+  // `screen-256color` rather than `tmux-256color`: the second is the better
+  // terminfo and is not present on every box, and a missing entry makes tmux
+  // refuse to start the server at all. RGB is declared as a feature instead,
+  // which is what actually carries Claude Code's true-colour output.
+  'set -g default-terminal "screen-256color"',
+  'set -as terminal-features ",*:RGB"',
+  // Enough scrollback to read back a long tool run, bounded so a forgotten
+  // session cannot grow without limit.
+  'set -g history-limit 20000',
+  // Claude Code asks for this by name — it prints "add 'set -g focus-events on'
+  // … for focus tracking" into its own pane when it is off. It is how the TUI
+  // knows the reader has looked away, and xterm.js sends the events.
+  'set -g focus-events on',
+  // Mouse mode stays off, deliberately. It would put tmux between a tap and the
+  // program, and its wheel binding enters copy-mode — a second modal state, on a
+  // phone, that nothing on screen explains how to leave. Scrollback belongs to
+  // xterm.js, which already has a viewport a thumb can drag.
+].join('\n') + '\n'
+
+function tmuxArgs(args: string[]): string[] {
+  return [TMUX_BIN, '-L', TERMINAL_TMUX_SOCKET, '-f', confPath(), ...args]
+}
+
+type Ran = { ok: boolean; out: string; err: string }
+
+function tmux(args: string[], stdin?: string): Ran {
+  ensureDir()
+  const [bin, ...rest] = tmuxArgs(args)
+  const r = Bun.spawnSync([bin!, ...rest], {
+    stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  return {
+    ok: r.exitCode === 0,
+    out: r.stdout.toString(),
+    err: r.stderr.toString().trim(),
+  }
+}
+
+/**
+ * Written once per process, synchronously, before the first tmux call.
+ *
+ * Both halves of that matter. `Bun.write` returns a promise, and this function
+ * is called from a synchronous path that spawns `tmux -f <conf>` immediately
+ * afterwards — so an unawaited write is a race in which tmux reads a file that
+ * is not there yet and silently starts a server with its defaults, status bar
+ * and all. And rewriting it on every `list-sessions` — which is every `/state` —
+ * is a file write per page load for a constant.
+ */
+let confWritten = false
+
+function ensureDir() {
+  mkdirSync(TERMINAL_SIZE_DIR, { recursive: true })
+  if (confWritten) return
+  try {
+    writeFileSync(confPath(), TMUX_CONF, 'utf8')
+    confWritten = true
+  } catch { /* tmux falls back to its own defaults, which still work */ }
+}
+
+/* ----------------------------- what is running ---------------------------- */
+
+export type TerminalInfo = {
+  /** The Claude Code session id. The terminal has no identity of its own. */
+  id: string
+  sessionId: string
+  cwd: string
+  repo: string | null
+  permissionMode: PermissionMode
+  /** True when this was `--resume <id>` rather than a fresh `--session-id`. */
+  resumed: boolean
+  /** False means it was already running and we simply pointed the browser at it. */
+  started: boolean
+  /** Whether a brief was delivered as this call's doing. */
+  briefSent: boolean
+  /** False means Claude Code will ask about this directory before it starts. */
+  trusted: boolean
+  route: string
+  socket: string
+  cols: number
+  rows: number
+  createdAt: number
+  /** Browsers attached right now. Two is normal: a laptop and a phone. */
+  clients: number
+}
+
+/**
+ * Six fields per session, read out of tmux rather than remembered.
+ *
+ * There is no `terminals` table on purpose. tmux already holds the only copy of
+ * this state that can be right — a row saying "running" survives a process that
+ * did not — and a second copy would be a thing to reconcile on every boot. The
+ * same reasoning `liveSessions()` gives for reading Claude Code's own per-process
+ * files instead of tracking sessions itself.
+ */
+const LIST_FORMAT = [
+  '#{session_name}', '#{session_attached}', '#{window_width}',
+  '#{window_height}', '#{session_created}', '#{session_path}',
+].join('\t')
+
+function infoFrom(line: string): TerminalInfo | null {
+  const [name, attached, width, height, created, path] = line.split('\t')
+  const id = name ? sessionIdFromTmuxName(name) : null
+  if (!id) return null
+  const cwd = path ?? ''
+  return {
+    id,
+    sessionId: id,
+    cwd,
+    repo: getRepo(cwd)?.name ?? null,
+    // What it is *running* under is a fact about the process, and the process is
+    // the authority on it — Wake's request is only what it asked for. The
+    // Sessions list already reads the real mode off the transcript
+    // (`permissionMode` there), so this is not the place to make a second claim.
+    permissionMode: DEFAULT_PERMISSION_MODE,
+    resumed: false,
+    started: false,
+    briefSent: false,
+    trusted: isTrusted(cwd),
+    route: terminalRoute(id),
+    socket: terminalSocketPath(id),
+    cols: Number(width) || TERMINAL_COLS,
+    rows: Number(height) || TERMINAL_ROWS,
+    // tmux reports seconds; every other timestamp in Wake is epoch ms.
+    createdAt: (Number(created) || 0) * 1000,
+    clients: Number(attached) || 0,
+  }
+}
+
+export function listTerminals(): TerminalInfo[] {
+  if (!available().tmux) return []
+  const r = tmux(['list-sessions', '-F', LIST_FORMAT])
+  // "no server running" is the normal resting state, not a failure.
+  if (!r.ok) return []
+  return r.out.split('\n').map(l => l.trim()).filter(Boolean)
+    .map(infoFrom).filter((t): t is TerminalInfo => t !== null)
+}
+
+export function getTerminal(id: string): TerminalInfo | null {
+  if (!isSessionId(id)) return null
+  return listTerminals().find(t => t.id === id) ?? null
+}
+
+export const isRunning = (id: string): boolean => getTerminal(id) !== null
+
+/* ------------------------------ availability ------------------------------ */
+
+export type Available = {
+  ok: boolean
+  tmux: boolean
+  python: boolean
+  claude: boolean
+  /** A sentence naming what is missing, or null when nothing is. */
+  missing: string | null
+}
+
+/**
+ * Whether this machine can start a session at all, answered before anything is
+ * spawned.
+ *
+ * A 503 that names the missing binary is a diagnosable outage; a spawn that
+ * fails somewhere inside tmux is a stack trace in a log nobody is reading. The
+ * check is cheap — a `which` and a stat — and the answer is on `/state`, so the
+ * button can be off rather than broken.
+ */
+export function available(): Available {
+  // A stat rather than a subprocess. This runs on every `/state` and on every
+  // start, and spawning `test -x` to answer "is there a file here" is a process
+  // per page load for a question the kernel answers in place.
+  const has = (bin: string) => {
+    if (!bin) return false
+    if (!bin.includes('/')) return Bun.which(bin) !== null
+    try { accessSync(bin, constants.X_OK); return true } catch { return false }
+  }
+  const tmuxOk = has(TMUX_BIN)
+  const pythonOk = has(PYTHON_BIN)
+  const claudeOk = has(CLAUDE_BIN)
+  const missing = [
+    tmuxOk ? null : 'tmux',
+    pythonOk ? null : 'python3',
+    claudeOk ? null : 'the claude binary (WAKE_CLAUDE_BIN)',
+  ].filter(Boolean)
+  return {
+    ok: tmuxOk && pythonOk && claudeOk,
+    tmux: tmuxOk,
+    python: pythonOk,
+    claude: claudeOk,
+    missing: missing.length
+      ? `this machine cannot start a Claude Code session: ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not available`
+      : null,
+  }
+}
+
+/* --------------------------------- trust ---------------------------------- */
+
+/**
+ * Has Claude Code been told this directory is trusted.
+ *
+ * One read of `~/.claude.json`, never a write. A `false` here is not a refusal —
+ * the session starts fine — it is the difference between the operator landing on
+ * a screen that says "answer the trust prompt" and landing on an unexplained
+ * dialog he did not ask for. Unreadable config answers `false`, which errs
+ * towards warning about a prompt that does not appear rather than staying quiet
+ * about one that does.
+ */
+export function isTrusted(cwd: string): boolean {
+  if (!cwd) return false
+  try {
+    const cfg = JSON.parse(readFileSync(CLAUDE_CONFIG_PATH, 'utf8')) as {
+      projects?: Record<string, { hasTrustDialogAccepted?: boolean }>
+    }
+    return cfg.projects?.[cwd]?.hasTrustDialogAccepted === true
+  } catch {
+    return false
+  }
+}
+
+/* ------------------------------ where it runs ----------------------------- */
+
+/**
+ * The directory a resumed session runs in.
+ *
+ * A resume does not take a directory from the caller — it takes the one the
+ * transcript recorded — but "not from the caller" is not the same as "safe", so
+ * it is bounded anyway. `resolveCwd` covers the registry, and the second clause
+ * covers the case the registry legitimately cannot: a session started in a
+ * *subdirectory* of a repository (`truto-app/packages/web`) is real work in a
+ * real checkout, and `getRepo` has never heard of it.
+ *
+ * The bound is `WORKSPACE_ROOT`, which is the same root the registry scans and
+ * the same one `env.ts` says nothing outside may be named. `resolve` collapses
+ * any `..` before the prefix test, so a recorded path cannot climb out of it.
+ */
+export function resolveSessionCwd(cwd: string | null | undefined):
+  { ok: true; path: string; repo: string | null } | { ok: false; error: string } {
+  const raw = cwd?.trim()
+  if (!raw) return { ok: false, error: 'that session does not record where it ran, so there is nowhere to resume it' }
+
+  const direct = resolveCwd(raw)
+  if (direct.ok) return direct
+
+  const path = resolve(raw)
+  const root = resolve(WORKSPACE_ROOT)
+  if (path === root || path.startsWith(`${root}/`)) {
+    return { ok: true, path, repo: getRepo(path)?.name ?? null }
+  }
+  return {
+    ok: false,
+    error: `that session ran in "${raw}", which is outside the workspace (${WORKSPACE_ROOT}) — Wake will not start a session there`,
+  }
+}
+
+/* -------------------------------- starting -------------------------------- */
+
+export type OpenInput = {
+  /** Resume this session. It must already exist on this machine. */
+  sessionId?: string | null
+  /** A repository name or absolute path, for a new conversation. */
+  cwd?: string | null
+  /** The first message. Delivered as the process's prompt argument. */
+  brief?: string | null
+  permissionMode?: PermissionMode
+  cols?: number
+  rows?: number
+  /** The pack file, when there is one, so a resend pastes the same artifact. */
+  briefPath?: string | null
+}
+
+export type OpenFailure = { error: string; status: 400 | 409 | 503 }
+
+const size = (v: unknown, fallback: number, max: number) => {
+  const n = Math.floor(Number(v))
+  return Number.isFinite(n) && n >= 8 && n <= max ? n : fallback
+}
+
+/**
+ * Start a session, resume one, or point at the one that is already running.
+ *
+ * Three outcomes rather than two, and the third is the one that makes a phone
+ * and a laptop work: asking for a session that is already up is not an error and
+ * does not restart anything. It reattaches, which is what "reopening a brief"
+ * has to mean once sessions outlive browsers.
+ */
+export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
+  /*
+   * What was asked for is checked before whether this machine can do it.
+   *
+   * The availability check used to come first, which meant a box without tmux
+   * answered "tmux is not available" to a request naming a repository that does
+   * not exist — the less useful of the two true things, and the one he cannot
+   * act on. It also meant no allowlist refusal was reachable without a working
+   * tmux, so the tests that pin those refusals could not run without a machine
+   * that can start real Claude Code sessions. Validate, then check, then spawn.
+   */
+  const mode = input.permissionMode ?? DEFAULT_PERMISSION_MODE
+  const cols = size(input.cols, TERMINAL_COLS, 500)
+  const rows = size(input.rows, TERMINAL_ROWS, 300)
+
+  /* --- resuming a session that exists ------------------------------------ */
+  if (input.sessionId) {
+    const id = String(input.sessionId).toLowerCase()
+    if (!isSessionId(id)) return { error: `"${input.sessionId}" is not a session id`, status: 400 }
+
+    const running = getTerminal(id)
+    if (running) {
+      // Already up. Deliver the brief into the live composer and reattach —
+      // there is no argv to put it in on a process that is already running.
+      const sent = input.brief ? sendBrief(id, input.brief, input.briefPath) : false
+      return { ...running, resumed: true, started: false, briefSent: sent }
+    }
+
+    // The allowlist for a resume is the Sessions surface itself: if that page
+    // cannot see the session, this route will not start one. Which also means a
+    // caller cannot invent an id and have Wake create a directory for it.
+    const session = getSession(id)
+    if (!session) return { error: `no session ${id} on this machine`, status: 400 }
+
+    const where = resolveSessionCwd(session.cwd)
+    if (!where.ok) return { error: where.error, status: 400 }
+
+    const ready = available()
+    if (!ready.ok) return { error: ready.missing!, status: 503 }
+
+    return spawn({ id, cwd: where.path, repo: where.repo, resume: true, mode, cols, rows, brief: input.brief })
+  }
+
+  /* --- a new conversation ------------------------------------------------ */
+  const where = resolveCwd(input.cwd)
+  if (!where.ok) return { error: where.error, status: 400 }
+
+  const ready = available()
+  if (!ready.ok) return { error: ready.missing!, status: 503 }
+
+  // Wake chooses the id rather than discovering it afterwards. Without
+  // `--session-id` the only way to learn what was created is to watch
+  // `~/.claude/sessions` and guess by cwd and start time, which is a race with
+  // every other session the operator might start in the same second.
+  return spawn({
+    id: randomUUID(), cwd: where.path, repo: where.repo,
+    resume: false, mode, cols, rows, brief: input.brief,
+  })
+}
+
+function spawn(o: {
+  id: string
+  cwd: string
+  repo: string | null
+  resume: boolean
+  mode: PermissionMode
+  cols: number
+  rows: number
+  brief?: string | null
+}): TerminalInfo | OpenFailure {
+  const name = tmuxNameFor(o.id)
+  if (!name) return { error: `"${o.id}" is not a session id`, status: 400 }
+
+  const argv = claudeArgv({
+    sessionId: o.id, resume: o.resume, permissionMode: o.mode, brief: o.brief,
+  })
+
+  // Detached, so the session's life is tmux's business rather than this
+  // request's. `-x`/`-y` matter for a detached session: with no client attached
+  // tmux would size the window to 80x24 and Claude Code would lay its boxes out
+  // against that until the first browser arrives.
+  const r = tmux([
+    'new-session', '-d', '-s', name,
+    '-x', String(o.cols), '-y', String(o.rows), '-c', o.cwd,
+    ...argv,
+  ])
+  if (!r.ok) return { error: `tmux refused to start the session: ${r.err || 'no reason given'}`, status: 409 }
+
+  const started = getTerminal(o.id)
+  if (!started) {
+    return {
+      error: 'the session exited immediately — check that the claude binary runs on this machine',
+      status: 409,
+    }
+  }
+  return {
+    ...started,
+    permissionMode: o.mode,
+    resumed: o.resume,
+    started: true,
+    briefSent: !!(o.brief && o.brief.trim()),
+    repo: o.repo,
+  }
+}
+
+/**
+ * Put a brief into a session that is already running.
+ *
+ * The only path where the composer has to be typed into, because a live process
+ * has no argv left to give. `load-buffer` + `paste-buffer` rather than
+ * `send-keys`: send-keys would deliver a multi-line markdown brief as a sequence
+ * of keystrokes, and every newline in it would submit whatever was above.
+ * A tmux buffer arrives as one paste with its newlines intact.
+ *
+ * `-d` deletes the buffer after pasting, so a brief does not sit in tmux's paste
+ * stack where the next session could pick it up.
+ *
+ * When there is a pack file, it is pasted straight from disk. That is the
+ * property `launch.ts` protects and it is worth keeping here: what the sheet
+ * showed, what the file holds and what the session received are one artifact
+ * rather than three copies that could differ.
+ */
+export function sendBrief(id: string, brief: string, briefPath?: string | null): boolean {
+  const name = tmuxNameFor(id)
+  if (!name || !brief.trim()) return false
+
+  const loaded = briefPath
+    ? tmux(['load-buffer', '-b', 'wake', briefPath])
+    : tmux(['load-buffer', '-b', 'wake', '-'], brief)
+  if (!loaded.ok) return false
+
+  if (!tmux(['paste-buffer', '-d', '-b', 'wake', '-t', name]).ok) return false
+  // Sent as its own call. A key and its Enter delivered together were measured
+  // not registering reliably; the composer needs the paste to settle first.
+  return tmux(['send-keys', '-t', name, 'Enter']).ok
+}
+
+/* -------------------------------- closing --------------------------------- */
+
+/**
+ * End the process, keep the conversation.
+ *
+ * Killing the tmux session sends the pane's process a HUP and Claude Code exits;
+ * the transcript under `~/.claude/projects` is untouched, so the session is still
+ * in the Sessions list and can be resumed later. This is deliberately not
+ * `DELETE /sessions/:id`, which removes four directories under `~/.claude` and
+ * asks a bound confirmation first.
+ */
+export function closeTerminal(id: string): { ok: true; closed: boolean } {
+  const name = tmuxNameFor(id)
+  if (!name || !isRunning(id)) return { ok: true, closed: false }
+  return { ok: true, closed: tmux(['kill-session', '-t', name]).ok }
+}
+
+/* ------------------------------- attaching -------------------------------- */
+
+/**
+ * The command one browser runs to look at a session.
+ *
+ * `attach-session` rather than anything clever, because a tmux client is exactly
+ * what a browser tab is: several may exist at once, each may leave without
+ * affecting the others, and the session outlives all of them. `-t` names a
+ * session whose id was shape-checked before it got here.
+ */
+export function attachArgv(o: { id: string; cols: number; rows: number; sizeFile: string }): string[] | null {
+  const name = tmuxNameFor(o.id)
+  if (!name) return null
+  return [
+    PYTHON_BIN, bridgePath(), String(o.cols), String(o.rows), o.sizeFile,
+    ...tmuxArgs(['attach-session', '-t', name]),
+  ]
+}
+
+/** Beside this module, so it moves with it and is not a path in a config. */
+export const bridgePath = () => new URL('./ptybridge.py', import.meta.url).pathname
+
+/** One size file per attachment, named for the socket rather than the session. */
+export function sizeFileFor(token: string): string {
+  ensureDir()
+  return `${TERMINAL_SIZE_DIR}/${token}.size`
+}

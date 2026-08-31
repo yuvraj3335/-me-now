@@ -1228,3 +1228,107 @@ On a card `Delete` sets `Won't do`, which is how Wake already dismisses work —
 leaves the desk, stays reachable through the Status filter, and undoes. A red
 button that irreversibly destroyed a card would be the only irreversible action
 in the product, and inventing a fourth word for it would have been a fourth word.
+
+---
+
+## 39. The hand-off starts a session, and #35 was the wrong conclusion
+
+**Reverses #35, and #26 with it.** Every fact in #35 still holds. What was wrong
+was what we did about them.
+
+#35 established that `claude.ai/new?q=` opens a *new* conversation, that no URL
+targets an existing one, and that `claude --resume <id>` is a terminal command on
+the box. All true, all still true. The conclusion drawn was that the picker
+therefore supplies **context**, and that the brief should print a `claude
+--resume <uuid> --permission-mode bypassPermissions` line for the operator to
+paste. That was called "the honest version of the feature".
+
+It was honest about the mechanism and dishonest about the product. The button
+said **Open in Claude**, and what it opened was the Claude **chat** surface — a
+different product from Claude Code, with no repository, no tools, no MCP servers,
+no skills and nothing to resume. The one thing "Open in Claude" is for is the
+one thing it could not do. And the paste line is the tell: a feature whose final
+act is asking the operator to go and find a terminal is a feature that has given
+up, and on a phone at 7am there is no terminal to find.
+
+### What was actually missing
+
+Not a URL. A terminal.
+
+```
+browser --ws--> Bun --pipes--> ptybridge.py --pty--> tmux --> claude
+```
+
+Four processes, each because the one before it cannot do the job:
+
+* **tmux** owns the session's lifetime. This is what makes closing the tab
+  harmless, what lets a laptop and a phone attach to one screen at once, and what
+  makes restarting Wake a non-event for work already running. Holding the process
+  in Bun would tie a conversation's life to a web server's, which is the `claude
+  -p` mistake of #26 in a nicer coat.
+* **`ptybridge.py`** owns the pseudo-terminal. `tmux attach` refuses to run
+  without a tty, and node-pty — measured on this box — installs, builds, spawns
+  and then delivers no bytes at all under Bun. Nine lines of CPython do what the
+  native module could not.
+* **Bun** owns the relay and the rules, and nothing else.
+
+### Why this is not #26 coming back
+
+#26 refused `claude -p`: a headless process, no terminal attached, output nobody
+could see, permission prompts nobody could answer. Every one of those objections
+is about *visibility*, and every one of them is answered here rather than argued
+around. The operator sees the TUI. He types into it. He answers its dialogs —
+including the two Claude Code actually shows, the one-time "is this a project you
+trust?" and the "this session is 6d old and 177.2k tokens" resume menu, both of
+which are the strongest argument for a real terminal rather than a spawn.
+
+Wake still holds no model key and still runs no model of its own. It starts the
+operator's `claude`, under his login, in his repository.
+
+### What bounds it
+
+"Start a process" is the most dangerous verb in this product, so the allowlist is
+three parts and none of them is a caller's:
+
+1. **The command** is `CLAUDE_BIN` plus a fixed set of flags built in
+   `terminal.ts`. No request field reaches argv except the brief, which `claude`
+   reads as a positional prompt and cannot become an option.
+2. **The directory** comes from `resolveCwd` — the registry — or, for a resume,
+   from the session's own transcript, bounded to `WORKSPACE_ROOT` with `..`
+   collapsed first.
+3. **The session** must already exist, read through the same
+   `sources/claudeSessions.ts` the Sessions page reads. A caller cannot invent an
+   id and have Wake create one.
+
+Validation runs *before* the availability check, so a box without tmux still
+refuses an unknown repository by name — and so the refusals are testable without
+a machine that can start real sessions.
+
+### Two things that fell out for free
+
+`--session-id <uuid>` means Wake **chooses** the id before the process exists. So
+the id in the URL, the id in the transcript filename, the id `liveSessions()`
+reports and the id the Sessions page shows are one string, and nothing has to be
+reconciled. It also means a session Wake starts appears as **live** in the
+existing Sessions surface with no change to that source at all: Claude Code
+writes its own `~/.claude/sessions/<pid>.json`, and `liveSessions()` was already
+reading it.
+
+### What Wake still refuses to do
+
+Write `hasTrustDialogAccepted` into `~/.claude.json`. A directory Claude Code has
+not seen makes it ask whether the project is trusted, and that answer is the
+operator's. Wake reads the flag, says `trusted: false` on the way in so the
+screen he lands on tells him a prompt is waiting, and leaves the answering to
+him. Silently accepting trust on someone's behalf would be a worse version of
+exactly the thing #26 was right about.
+
+### The sentence that is now gone
+
+The brief used to end its session section with a fenced command line. It says
+this instead:
+
+> This is a Claude Code session already underway on my machine, and this message
+> is its next turn.
+
+Which is a claim the product can now keep.

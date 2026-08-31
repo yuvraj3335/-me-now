@@ -54,6 +54,9 @@ const card = (over: Partial<Card> & { sources: CardSource[] }): Card => ({
   url: over.sources[0]?.url ?? 'https://example.test',
   kind: over.sources[0]?.kind ?? 'thread',
   ts: 1787814333000,
+  // The desk's sort key. One number with `ts`, set on every card the server
+  // sends — see `activityAt` in `src/server/api.ts`.
+  activity_at: 1787814333000,
   first_seen_at: 1787814333000,
   activity: { count: 0, tagged: false, at: null },
   meta: {},

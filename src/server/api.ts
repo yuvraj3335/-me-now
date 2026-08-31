@@ -6,6 +6,11 @@ import { fetchStatus, startFetch, isFetchScope } from './fetch'
 import { notify, runReminders, vapidPublicKey } from './push'
 import { CARD_PRIORITIES, CARD_STATUSES, type CardPriority, type CardStatus } from './sources/types'
 import { readThread, slackTsToMs } from './sources/slack'
+import {
+  isDmChannel, itemFromEntry, parseSlackLink, slackAppLink,
+  type SlackThreadItem, type StoredThreadEntry,
+} from '../shared/slackThread'
+import { SLACK_TEAM_ID } from './env'
 import { sessionExcerpt } from './sources/claudeSessions'
 import { getThread } from './mail/service'
 import { analytics } from './analytics'
@@ -138,6 +143,80 @@ function activityOf(members: Row[], baseline: number): Activity {
   }
 }
 
+/* -------------------------------- recency -------------------------------- */
+
+/**
+ * When this row last had something happen on it. The desk's one sort key.
+ *
+ * The order rows appear in used to be an emergent property of five adapters
+ * that each decided `ts` for their own reasons, and those reasons are not the
+ * same reason: a Slack thread's `ts` is its newest message, a Sentry issue's is
+ * a last-seen, a Claude session's is a transcript's mtime, a GitHub row's is an
+ * `updated_at`. Four of those move when new work lands and one of them does not
+ * always, and there was nowhere to point at and say what the sort *means*. This
+ * is that place, and it is deliberately not "trust each source's `ts`": it is
+ * the union of `ts` with the per-message facts the card already carries, so a
+ * source whose own stamp lags cannot silently hold a row down.
+ *
+ * It is the same set of facts `eventsOf` walks, minus the baseline clamp and the
+ * mine/tagged filter — which is the property worth having. "How much is new" and
+ * "when did it last happen" are two questions about one pile of events, and
+ * answering them from two different piles is how a row shows `+3` while sitting
+ * eleventh.
+ *
+ * What feeds it, per source:
+ *
+ *   * **Slack thread** — the card's `ts` (already the newest of parent, replies
+ *     and search hits), every `meta.thread[].ts`, and `meta.last_reply_at`.
+ *   * **Slack alert** — the card's `ts` (its newest member) and every
+ *     `meta.thread[].ts`, which for a folded row includes the human replies
+ *     `foldThreadIntoAlert` merged in.
+ *   * **Gmail** — the card's `ts` (now the newest of the thread stamp and every
+ *     message) and every `meta.messages[].ts`.
+ *   * **GitHub** — the card's `ts`, which is the issue or pull request's
+ *     `updated_at`, and that moves on a comment, a push and a review.
+ *   * **Sentry** — the card's `ts`, which is `lastSeen`, so a new event on the
+ *     short id moves it. A *comment* has no instant anywhere in what the MCP
+ *     server answers with; on this deployment one arrives as a `#sentry-alerts`
+ *     message, which merges into this group on the shared `sentry:` reference
+ *     and moves the row through its Slack member instead.
+ *   * **Claude Code** — the card's `ts` (the transcript's mtime, so a new turn
+ *     moves it) and `meta.live_at`, which is when the session became live. An
+ *     mtime alone cannot express "he came back to this and it is open now",
+ *     because a finished session satisfies a recent mtime just as well.
+ *
+ * A member contributes; it never subtracts. `Math.max` over an empty group is
+ * `-Infinity`, so the seed is 0 — a group with no readable timestamp anywhere
+ * sorts last rather than before the epoch.
+ */
+function memberActivityAt(m: Row): number {
+  let at = typeof m.ts === 'number' && Number.isFinite(m.ts) ? m.ts : 0
+  const meta = j(m.meta)
+
+  // The per-message lists, in the two spellings the adapters use. `eventMs`
+  // reads a Slack ts string and a Gmail epoch alike, which is the whole reason
+  // the desk has one clock.
+  for (const key of ['thread', 'messages'] as const) {
+    const list = meta[key]
+    if (!Array.isArray(list)) continue
+    for (const e of list) {
+      const t = eventMs(e?.ts)
+      if (t !== null && t > at) at = t
+    }
+  }
+
+  // And the two facts a source states directly rather than as a message.
+  for (const key of ['last_reply_at', 'live_at'] as const) {
+    const t = eventMs(meta[key])
+    if (t !== null && t > at) at = t
+  }
+  return at
+}
+
+/** The newest activity across every member of a group. */
+export const activityAt = (members: Row[]): number =>
+  Math.max(0, ...members.map(memberActivityAt))
+
 /**
  * Cards grouped into the dedup unit the UI actually renders.
  *
@@ -147,6 +226,11 @@ function activityOf(members: Row[], baseline: number): Activity {
  * recognise.
  */
 function groupedCards(opts: { hidden?: boolean } = {}) {
+  // The query's order decides nothing a reader sees: members are re-sorted by
+  // source below to pick the one that speaks, and the list itself is ordered at
+  // the bottom of this function by `activity_at`. It is `ts DESC` so that the
+  // newest member of a group is the first one seen, which keeps the tie-breaks
+  // inside `sorted` deterministic.
   const cards = db.query<Row, []>(`SELECT * FROM cards WHERE gone = 0 ORDER BY ts DESC`).all()
   const states = new Map<string, Row>(
     db.query<Row, []>(`SELECT * FROM card_state`).all().map(s => [s.group_key, s]),
@@ -189,6 +273,7 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
      */
     const voice = sorted.find(m => m.pile === natural) ?? sorted[0]!
     const firstSeen = state?.first_seen_at ?? Math.min(...members.map(m => m.first_seen_at))
+    const at = activityAt(members)
 
     out.push({
       group_key,
@@ -205,7 +290,21 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
       excerpt: voice.excerpt,
       url: voice.url,
       kind: voice.kind,
-      ts: Math.max(...members.map(m => m.ts)),
+      /*
+       * One number, read twice.
+       *
+       * `ts` was `max(member.ts)` and `activity_at` is that same maximum unioned
+       * with the per-message facts on the members, so it is never earlier — it
+       * only ever moves forward onto an event that really happened. Emitting
+       * both and letting them differ would put a row at the top of the list
+       * while the age beside it said three days, with nothing on screen to
+       * explain the gap. `activity_at` is the name the sort reads and the name
+       * to write new code against; `ts` stays because half the product already
+       * says `card.ts` and none of it should have to change to get the right
+       * answer.
+       */
+      ts: at,
+      activity_at: at,
       first_seen_at: firstSeen,
       meta: j(voice.meta),
       sources: sorted.map(m => ({
@@ -253,10 +352,20 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
     return out
   }
 
+  /*
+   * Pinned, then pile, then the newest activity.
+   *
+   * The third term is the whole of change two: a row moves to the top of its
+   * list when anything lands on it — a Slack reply, a mail reply, another
+   * Sentry event, another turn in a session, a session going live — because all
+   * five of those feed `activity_at` and nothing else decides this order. The
+   * first two terms are untouched: a pin is a standing instruction and the pile
+   * is where a card belongs, and recency does not outrank either.
+   */
   out.sort((a, b) =>
     Number(b.state?.pinned ?? 0) - Number(a.state?.pinned ?? 0) ||
     (RANK[a.pile] ?? 9) - (RANK[b.pile] ?? 9) ||
-    b.ts - a.ts,
+    b.activity_at - a.activity_at,
   )
   return out
 }
@@ -689,6 +798,225 @@ api.get('/cards/:group/thread', async c => {
     return c.json(bad((e as Error).message), 502)
   }
 })
+
+/* ---------------------- slack threads, from what we hold ------------------- */
+
+/**
+ * One Slack conversation on a card, in the shape a brief can carry.
+ *
+ * `parent` and `replies` are separate rather than one flat list because the two
+ * questions a launch sheet asks are separate: which message names this row, and
+ * which of the things said under it are worth attaching. A thread nobody has
+ * answered comes back with `replies: []` — an empty array the sheet renders as
+ * nothing at all, which is a different and more useful answer than a 404 or a
+ * placeholder entry saying there is nothing here.
+ */
+type SlackThread = {
+  channel: string | null
+  channel_id: string
+  team_id: string | null
+  thread_ts: string
+  /** Slack's own header total, which can exceed `replies.length`. */
+  reply_total: number
+  /** The poll's thread read failed, so these replies are what search saw. */
+  partial: boolean
+  /** An alert row: separate top-level messages, not a parent and its replies. */
+  alert: boolean
+  url: string
+  app_url: string | null
+  parent: SlackThreadItem | null
+  replies: SlackThreadItem[]
+}
+
+/** The https origin a stored permalink was minted from, so links stay on his workspace. */
+function originOf(u: unknown): string | null {
+  if (typeof u !== 'string') return null
+  try {
+    const o = new URL(u)
+    return o.protocol === 'https:' ? o.origin : null
+  } catch {
+    return null
+  }
+}
+
+/** Whatever of a stored `thread` array is actually an entry. Same guard as `slack.ts`. */
+const storedEntries = (v: unknown): StoredThreadEntry[] =>
+  Array.isArray(v)
+    ? v.filter((e): e is StoredThreadEntry => !!e && typeof (e as StoredThreadEntry).ts === 'string')
+    : []
+
+/**
+ * Stored Slack cards, as conversations.
+ *
+ * Reading `meta`, and never the network. Wake already asks Slack for every
+ * thread it holds on every poll — `buildThreadCard` stores the parent and the
+ * newest twenty replies with the author, the text, and whether each names him —
+ * so re-asking at the moment somebody opens a sheet buys nothing, costs a round
+ * trip, and adds a way for the sheet to fail that has nothing to do with the
+ * sheet.
+ *
+ * Direct messages cannot appear here. The refusal lives in `bucketHits`
+ * (`sources/slack.ts`), which throws a `D…` conversation away before it can
+ * become a bucket and therefore before it can become a card — so this reads
+ * from a store that has never contained one. `isDmChannel` is applied anyway,
+ * on the way out, because "the data cannot contain it" is an invariant one
+ * future adapter can quietly break, and this is the surface where it would be
+ * noticed last.
+ */
+function threadsFromCards(rows: Row[]): SlackThread[] {
+  const out: SlackThread[] = []
+  const seen = new Set<string>()
+
+  for (const row of rows) {
+    const meta = j(row.meta)
+    const channelId = typeof meta.channel_id === 'string' ? meta.channel_id : ''
+    const threadTs = typeof meta.thread_ts === 'string' ? meta.thread_ts : ''
+    if (!channelId || !threadTs) continue
+    if (isDmChannel(channelId)) continue
+
+    const key = `${channelId}:${threadTs}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    const teamId = typeof meta.team_id === 'string' ? meta.team_id : null
+    const channel = typeof meta.channel === 'string' ? meta.channel : null
+    const origin = originOf(row.url)
+    const ctx = { channelId, channel, teamId, threadTs, origin }
+
+    /*
+     * An alert row has no parent and is not pretending to.
+     *
+     * Its members are separate top-level messages in an alert channel that
+     * dedup unioned on a short id — Sentry's post and Cursor's triage of it,
+     * five minutes apart — so there is no message the others hang off. Calling
+     * the oldest one "the parent" would be a tidy lie, and the flag is on the
+     * response so the sheet can say "3 messages" rather than "2 replies".
+     */
+    const alert = !!meta.alert
+    const parentEntry = storedEntries(meta.parent ? [meta.parent] : [])[0] ?? null
+    const parent = parentEntry
+      ? itemFromEntry(parentEntry, { ...ctx, parent: true })
+      : null
+
+    const replies = storedEntries(meta.thread)
+      // The parent is not one of its own replies. `foldThreadIntoAlert` merges a
+      // thread's parent into the alert's `thread` array, so on a folded row it
+      // genuinely can be in both.
+      .filter(e => e.ts !== parentEntry?.ts)
+      .map(e => itemFromEntry(e, { ...ctx, parent: false }))
+
+    out.push({
+      channel,
+      channel_id: channelId,
+      team_id: teamId,
+      thread_ts: threadTs,
+      // The header's total when the poll got one, and what we hold when it did
+      // not. Counting the array would quietly report a fourteen-reply thread as
+      // a twenty-reply one's worth of nothing.
+      reply_total: typeof meta.replies === 'number' ? meta.replies : replies.length,
+      partial: !!meta.thread_partial,
+      alert,
+      url: typeof row.url === 'string' ? row.url : '',
+      app_url: slackAppLink({ teamId, channelId, ts: threadTs }),
+      parent,
+      replies,
+    })
+  }
+  return out
+}
+
+const slackCardsIn = (group: string) =>
+  db.query<Row, [string]>(
+    `SELECT url, meta FROM cards WHERE group_key = ? AND source = 'slack' AND gone = 0 ORDER BY ts DESC`,
+  ).all(group)
+
+/**
+ * The Slack messages this row is made of: the parent, and the replies under it.
+ *
+ * A sibling of `/cards/:group/thread` rather than an extension of it, and the
+ * three reasons are worth writing down because "add a field to the existing
+ * route" was the obvious move:
+ *
+ *   1. That route is a *live* `slack_read_thread` on every open. It costs a
+ *      round trip, it answers 502 when Slack is unreachable, and it needs a
+ *      thread-read tool `discoverTools` treats as optional. A sheet somebody
+ *      presses fifty times a day cannot have Slack's availability in its path
+ *      when the answer is already on disk.
+ *   2. It returns `SlackThreadRead` — the reader's own vocabulary, parent and
+ *      replies and a total — and `src/web/lib/api.ts` already calls it. Widening
+ *      a shipped response to carry refs, deep links and team ids changes a
+ *      contract for the benefit of a caller that does not want the rest of it.
+ *   3. It reads one card (`ORDER BY ts DESC LIMIT 1`) and one `thread_ts`. A
+ *      merged group can hold two Slack cards — an alert row and the human thread
+ *      that collided with it — and a sheet offering only one of them is offering
+ *      half the conversation.
+ *
+ * Always 200. A group with no Slack in it answers `{ threads: [] }`, because
+ * "this card is not a Slack card" is a fact the sheet renders as an absent
+ * section, not an error it has to catch.
+ */
+api.get('/cards/:group/slack', c => {
+  const g = decodeURIComponent(c.req.param('group'))
+  return c.json({ threads: threadsFromCards(slackCardsIn(g)) })
+})
+
+/**
+ * A Slack link somebody pasted, as the same item shape the route above returns.
+ *
+ * The desk lists what the poll found; the operator can always see one more
+ * thing than the poll asked about. So a pasted URL becomes an attachable item
+ * through one parser — `parseSlackLink` in `src/shared/slackThread.ts`, written
+ * against both formats this codebase already mints and reads: the https archive
+ * form `SLACK_ARCHIVE` in `dedup.ts` parses, and the `slack://` form
+ * `slackAppUrl` builds.
+ *
+ * Two things this does that the pure function cannot. It supplies the workspace
+ * id for the https form, which carries none — without it there is no `slack://`
+ * link to build. And it looks the message up in what the poll already stored, so
+ * pasting a link to a thread Wake *has* listed comes back with the real author,
+ * the real text and `tagged`/`mine` already decided, rather than an empty shell
+ * the brief would quote as silence.
+ *
+ * A refusal is a 400 carrying the parser's own sentence. The three of them —
+ * a direct message, a channel with no message, something that is not a Slack
+ * link — are all things a person can act on, and none of them is a server fault.
+ */
+api.post('/slack/link', async c => {
+  const body = await c.req.json<{ url?: unknown }>().catch(() => ({ url: undefined }))
+  if (typeof body.url !== 'string' || !body.url.trim()) {
+    return c.json(bad('url must be a Slack message link'), 400)
+  }
+  const parsed = parseSlackLink(body.url, { teamId: SLACK_TEAM_ID })
+  if (!parsed.ok) return c.json(bad(parsed.reason), 400)
+
+  /*
+   * The stored copy wins whole, not field by field.
+   *
+   * It is the same message described twice, and the stored one knows strictly
+   * more: who said it, what they said, which thread it hangs off — a pasted
+   * reply link with no `thread_ts` on it comes back knowing its parent. Merging
+   * the two per field would produce an item that is half what Slack minted and
+   * half what Wake read, which is a shape nobody can reason about when one of
+   * them is wrong.
+   */
+  const stored = storedSlackItem(parsed.item.channel_id, parsed.item.ts)
+  return c.json({ item: stored ?? parsed.item })
+})
+
+/** One message out of every Slack conversation on the desk, by channel and ts. */
+function storedSlackItem(channelId: string, ts: string): SlackThreadItem | null {
+  const rows = db.query<Row, [string]>(
+    `SELECT url, meta FROM cards
+      WHERE source = 'slack' AND gone = 0 AND json_extract(meta, '$.channel_id') = ?
+      ORDER BY ts DESC`,
+  ).all(channelId)
+
+  for (const t of threadsFromCards(rows)) {
+    const hit = [t.parent, ...t.replies].find(e => e?.ts === ts)
+    if (hit) return hit
+  }
+  return null
+}
 
 /** The last exchanges of the Claude Code session in this group. */
 api.get('/cards/:group/session', c => {

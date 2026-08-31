@@ -49,7 +49,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Archive, ArchiveRestore, ArrowUpRight, Loader2, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowUpRight, Loader2, SquareTerminal, Trash2 } from 'lucide-react'
 import {
   Button, Empty, Menu, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice, rowStateClass,
   useRail,
@@ -61,6 +61,8 @@ import { toast } from '../lib/toast'
 import { setParam, useParams } from '../lib/route'
 import { PERMISSION_MODES, launchApi, openLaunch, type Session } from '../lib/launch'
 import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
+import { inSessionOrder } from '../../shared/sessionOrder'
+import { openTerminalAndGo } from '../lib/terminal'
 
 /** Typed exactly, or the button stays disabled. */
 const CONFIRM_WORD = 'delete'
@@ -324,7 +326,22 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     return all.filter(s => sessionInRepo(s, repo))
   }, [index, scoped, repo])
 
-  const rows = useMemo(() => inRepo.filter(s => matchesView(s, view)), [inRepo, view])
+  /**
+   * What is on this page, in the order the rest of the product uses.
+   *
+   * Live first, then most recently active — `inSessionOrder` in
+   * `src/shared/sessionOrder.ts`, which is the Sessions dialect of the desk's
+   * `activity_at`. The server hands these back by transcript mtime, and an mtime
+   * cannot express "running right now": a session that finished an hour ago
+   * satisfies a recent mtime exactly as well as one that is open on this
+   * machine, so the thing he is in the middle of sat wherever its last write
+   * happened to put it. A copy, never a sort in place — these rows are two
+   * fetches' state, not this render's.
+   */
+  const rows = useMemo(
+    () => inSessionOrder(inRepo.filter(s => matchesView(s, view))),
+    [inRepo, view],
+  )
 
   /**
    * How many sessions this page is standing over, reported to the header.
@@ -568,6 +585,31 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
 /* ---------------------------------- tile ---------------------------------- */
 
 /**
+ * Go to the session itself, on this box, in its own repository.
+ *
+ * The other control on this row opens the *brief* sheet — it packs the session
+ * as context for a conversation about it. This one is the session: Wake resumes
+ * the real Claude Code process under tmux and navigates to it, so the thing he
+ * was in the middle of is a click away on a laptop and on a phone.
+ *
+ * `openTerminalAndGo` from `src/web/lib/terminal.ts`, which is the same helper
+ * the launch sheet ends in. One path to starting a process, not two: the rules
+ * about which directories may be named and which sessions may be resumed live
+ * on the server behind that one route, and a second client-side way in would be
+ * a second place for them to be got wrong.
+ *
+ * A refusal arrives as the server's own sentence, so it goes straight into a
+ * toast rather than being reworded into something less specific.
+ */
+async function openSession(s: Session): Promise<void> {
+  try {
+    await openTerminalAndGo({ sessionId: s.id })
+  } catch (e) {
+    toast((e as Error).message)
+  }
+}
+
+/**
  * Hand this session to Claude, with everything the brief needs to resume it.
  *
  * One function rather than two call sites: the tile and the detail sheet offer
@@ -653,6 +695,13 @@ function Tile({
   onDelete: () => void
 }) {
   const swipe = useSwipe(`session:${s.id}`, 2)
+  /**
+   * Starting a session is a round trip — tmux has to come up and the process has
+   * to survive its first second — so the control says so and refuses a second
+   * press. Without it an impatient double-tap is two `POST /terminals`, and the
+   * second one races the first into `getTerminal`.
+   */
+  const [opening, setOpening] = useState(false)
 
   return (
     <li
@@ -723,8 +772,45 @@ function Tile({
 
             Three of those widths were rendering the branch at zero pixels.
           */}
+          {/*
+            Two Opens, and they are two different things.
+
+            This one is the session: it resumes the real process and takes him
+            to it. The one beside it packs the session into a brief and opens the
+            sheet, which is a conversation *about* this work rather than the work
+            itself. Both keep their words at `xl` and collapse to their own mark
+            below it — a terminal and an arrow-out — for the reason the comment
+            directly above this one measures out.
+
+            It is offered on every row, not only the live ones. `s.live` says
+            whether a process is already up, and the difference that makes is
+            whether the server attaches to it or starts it — which is the
+            server's business. Hiding the control on a session that is merely
+            not running right now would make the commonest case, coming back to
+            yesterday's work, the one case with no button.
+          */}
           <Button
             size="sm"
+            title={s.live ? 'Open the running session' : 'Resume this session on this machine'}
+            ariaLabel="Open"
+            disabled={opening}
+            onClick={() => {
+              setOpening(true)
+              void openSession(s).finally(() => setOpening(false))
+            }}
+          >
+            {opening ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <>
+                <span className="hidden xl:inline">Open</span>
+                <SquareTerminal size={14} className="xl:hidden" />
+              </>
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
             title="Open in Claude"
             ariaLabel="Open in Claude"
             onClick={() => openInClaude(s)}
