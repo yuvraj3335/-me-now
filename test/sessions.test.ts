@@ -34,8 +34,9 @@ import {
 import { archivedSessionIds, setSessionArchived } from '../src/server/db'
 import { claudecode } from '../src/server/claudecode/router'
 import {
-  ALL_REPOS, chooseRepo, matchesView, readView, repoIdOf, repoList,
+  ALL_REPOS, chooseRepo, listedSessions, repoIdOf, repoList,
 } from '../src/web/components/sessions'
+import type { Session } from '../src/web/lib/launch'
 import { sessionInRepo } from '../src/shared/sessionRepo'
 
 const app = new Hono()
@@ -278,30 +279,34 @@ describe('archiving a session', () => {
     expect(archivedSessionIds().has(id), 'un-archiving left a row behind').toBe(false)
   })
 
-  test('the flag rides the rows the list already returns', async () => {
+  test('archiving takes a session off the list rather than labelling it', async () => {
+    // The old contract was that `archived` rode along as a *flag* and the page
+    // filtered on it, which is exactly how archived work ended up on the same
+    // surface as live work. There is one list now and being on it means active,
+    // so the only thing archiving can do is remove.
     const rows = async () => {
-      const r = await call('/sessions?all=1')
+      const r = await call('/sessions')
       return (await r.json() as { sessions: Array<{ id: string; archived: boolean }> }).sessions
     }
 
-    expect((await rows()).find(s => s.id === id)?.archived).toBe(false)
+    markLiveAs(5151, id)
+    expect((await rows()).map(s => s.id), 'a live session was not listed').toContain(id)
 
     const on = await call(`/sessions/${id}/archive`, { method: 'POST', body: '{}' })
     expect(on.status).toBe(200)
     expect(await on.json()).toMatchObject({ archived: true })
 
     const after = await rows()
-    expect(after.find(s => s.id === id)?.archived).toBe(true)
-    expect(
-      after.filter(s => s.archived).map(s => s.id),
-      'archiving one session moved another',
-    ).toEqual([id])
+    expect(after.map(s => s.id), 'an archived session is still on the list').not.toContain(id)
+    expect(after.filter(s => s.archived), 'the list rendered an archived row').toEqual([])
 
     const off = await call(`/sessions/${id}/archive`, {
       method: 'POST', body: JSON.stringify({ archived: false }),
     })
     expect(await off.json()).toMatchObject({ archived: false })
-    expect((await rows()).find(s => s.id === id)?.archived).toBe(false)
+    expect((await rows()).map(s => s.id)).toContain(id)
+
+    rmSync(`${CLAUDE_HOME}/sessions/5151.json`, { force: true })
   })
 
   test('a running session can be archived, and still cannot be deleted', async () => {
@@ -345,18 +350,34 @@ describe('archiving a session', () => {
 })
 
 describe('what the page shows, before it is rendered', () => {
-  test('Active is what he opens on, and it hides what he put away', () => {
-    expect(readView(null)).toBe('active')
-    expect(readView('nonsense')).toBe('active')
-    expect(readView('archived')).toBe('archived')
-    expect(readView('all')).toBe('all')
+  test('there is one list, and being on it means running', () => {
+    // `Active / Archived / All` is gone, and this is what replaced it. The
+    // segmented control was how a hundred and thirty dead transcripts ended up
+    // on the same surface as live work: one tap on `All`, and every id on the
+    // page was one he could open and be told by Claude Code — on his phone, at
+    // 7am — that the session had been archived.
+    //
+    // So there is no view to choose and nothing to filter *between*. What is
+    // left is a single gate, stated as a function rather than as a condition
+    // inside a `useMemo`, so it can be asserted without rendering anything.
+    const row = (p: Partial<Session>): Session => ({
+      id: 'x', title: 't', cwd: '/w', project: 'w', lastPrompt: null, turns: 1,
+      lastTs: 1, path: '/p', pr: null, live: true, ...p,
+    })
+    const rows = [
+      row({ id: 'seen', lastTs: 3 }),
+      row({ id: 'hidden', lastTs: 2, archived: true }),
+      // A row from before the flag existed carries none at all, and an absent
+      // flag has never meant archived.
+      row({ id: 'old', lastTs: 1 }),
+    ]
 
-    // A row from before this release carries no flag at all, and an absent
-    // flag is not an archived session.
-    const rows = [{ archived: false }, { archived: true }, {}]
-    expect(rows.filter(r => matchesView(r, 'active'))).toHaveLength(2)
-    expect(rows.filter(r => matchesView(r, 'archived'))).toHaveLength(1)
-    expect(rows.filter(r => matchesView(r, 'all'))).toHaveLength(3)
+    expect(listedSessions(rows).map(s => s.id)).toEqual(['seen', 'old'])
+    expect(listedSessions(rows).some(s => s.archived), 'an archived row reached the list')
+      .toBe(false)
+    // And the source array is left alone: these rows are a fetch's state, not
+    // this render's, so sorting in place would reorder something else's list.
+    expect(rows.map(s => s.id)).toEqual(['seen', 'hidden', 'old'])
   })
 
   test('the picker lists every repository that has a session, and counts it once', () => {

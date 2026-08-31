@@ -46,7 +46,7 @@ import {
   ArrowUpRight, Check, ChevronDown, ListPlus, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
 import type { Card, CardPriority, CardStatus } from '../lib/types'
-import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
+import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL } from '../lib/types'
 import { actions, reload } from '../lib/api'
 import { ago, wallClock } from '../lib/time'
 import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } from '../lib/thread'
@@ -54,8 +54,8 @@ import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, DateTimePicker, Select } from './primitives'
 import { useStill } from '../lib/motion'
 import { cardKind, KindGlyph } from './kinds'
-import { plainMarkdown, titleOf } from './CardTable'
-import { PriorityGlyph, StatusGlyph, isSettled } from './status'
+import { plainMarkdown, StatusPicker, titleOf } from './CardTable'
+import { PriorityGlyph, isSettled } from './status'
 import { openTarget } from '../lib/appLinks'
 import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
 import { openLaunch } from '../lib/launch'
@@ -262,13 +262,13 @@ export function CardDetail({
           properties of the card rather than as a toolbar bolted to it.
         */}
         <div className="mt-2 border-b border-rule">
-          <Row label="Status" mark={<StatusGlyph status={card.status} />}>
-            <Select
-              value={card.status}
-              options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
-              onChange={s => void setStatus(s)}
-              ariaLabel="Status"
-            />
+          {/* No `mark`. The slot is still rendered — the empty 20px keeps this
+              control on the same x as Priority's and Due's below it — but the
+              glyph that used to sit in it is now inside the chip two pixels to
+              its right, and the same ring drawn twice on one line is a fact the
+              eye stops reading. See `StatusPicker`. */}
+          <Row label="Status">
+            <StatusPicker value={card.status} onChange={s => void setStatus(s)} />
           </Row>
           <Row label="Priority" mark={<PriorityGlyph priority={card.priority} />}>
             <Select

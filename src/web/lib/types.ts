@@ -146,7 +146,8 @@ export type Card = {
     priority: CardPriority
     due_at: number | null
   } | null
-  tasks: Array<{ id: string; title: string; status: string }>
+  /** The tasks made from this card, with the status they are in — the five. */
+  tasks: Array<{ id: string; title: string; status: CardStatus }>
 }
 
 export type Note = {
@@ -157,7 +158,17 @@ export type Note = {
 
 export type Task = {
   id: string; title: string; detail: string | null
-  status: 'todo' | 'doing' | 'done'
+  /**
+   * The same five a card has, and the same five the desk paints.
+   *
+   * This was `todo | doing | done` — a second vocabulary for one idea, which is
+   * how Work came to keep its own circles and drift three states behind the
+   * rest of the product. The column was rewritten by migration 14 and every row
+   * is mapped again on its way out of `/state`, so nothing here has to know the
+   * old words: a task arriving from an unmigrated writer is already one of the
+   * five by the time it reaches this type.
+   */
+  status: CardStatus
   goal_id: string | null; source_card_group: string | null
   due_at: number | null; color: string | null; sort: number
   created_at: number; updated_at: number

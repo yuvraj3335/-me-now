@@ -1,7 +1,7 @@
 import { MotionConfig, motion } from 'motion/react'
 import { Suspense, lazy, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
-  BarChart3, Inbox, Mail as MailIcon, PenLine, RefreshCw, RotateCcw, Settings2,
+  BarChart3, Inbox, Mail as MailIcon, MessagesSquare, PenLine, RefreshCw, RotateCcw, Settings2,
   SquareCheck, SquareTerminal,
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
@@ -9,6 +9,7 @@ import { registerSW } from './lib/push'
 import { Home } from './pages/Home'
 import { Work } from './pages/Work'
 import Sessions from './pages/Sessions'
+import { SessionPage, sessionRouteOf } from './pages/Session'
 import { Pulse } from './pages/Pulse'
 import { Settings } from './pages/Settings'
 import { Mail } from './pages/Mail'
@@ -48,12 +49,21 @@ import { navigate, setParam, terminalIdOf, useRoute } from './lib/route'
  * columns with the same `.pad-x`, which is what puts the second column's left
  * edge on one vertical across the product instead of on a 360px inset that only
  * Work used. Everything else gets the shell's own padding.
+ *
+ * Sessions carries `MessagesSquare` and not `SquareTerminal`, and that is a
+ * statement about the destination rather than a change of taste. The tab used
+ * to wear a terminal because the only thing Wake could do with a session was
+ * attach a VT emulator to it; what is behind it now is a conversation — turns,
+ * a composer, body text in a proportional font — and an icon promising a
+ * terminal on the one tab that deliberately has no terminal on it is the first
+ * thing that would be read and the first thing that would be wrong. The
+ * terminal still exists, at `/terminal/<id>`, which is not a tab.
  */
 const TABS = [
   { path: '/', label: 'Desk', Icon: Inbox, Page: Home, flush: true },
   { path: '/mail', label: 'Mail', Icon: MailIcon, Page: Mail, flush: true },
   { path: '/work', label: 'Work', Icon: SquareCheck, Page: Work, flush: true },
-  { path: '/sessions', label: 'Sessions', Icon: SquareTerminal, Page: Sessions, flush: false },
+  { path: '/sessions', label: 'Sessions', Icon: MessagesSquare, Page: Sessions, flush: false },
   { path: '/pulse', label: 'Pulse', Icon: BarChart3, Page: Pulse, flush: false },
   { path: '/settings', label: 'Settings', Icon: Settings2, Page: Settings, flush: false },
 ] as const
@@ -86,7 +96,30 @@ export default function App() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
-  const active = TABS.find(t => t.path === path) ?? TABS[0]
+  /**
+   * One conversation, which is a place inside Sessions rather than a seventh tab.
+   *
+   * `/sessions/<id>` and `/sessions/new` are real paths for the same three
+   * reasons `/terminal/<id>` is: a session is deep-linkable, it is what a push
+   * notification about a session should point at, and the phone's Back button
+   * has to close it. They are deliberately *not* rows in `TABS` — six
+   * destinations is the shell's whole contract and a route that renders inside
+   * one of them is not a seventh destination, it is that destination showing
+   * something specific.
+   *
+   * Which is why the tab still lights up: `active` falls through to Sessions
+   * for anything under it, so the bar answers "where am I" with the truth
+   * instead of highlighting Desk while a conversation is on screen.
+   *
+   * Unlike the terminal, this stays inside the shell. The terminal takes the
+   * whole viewport because a VT emulator has to; a conversation does not, and
+   * taking the tab bar away would make leaving one cost a gesture nobody was
+   * told about.
+   */
+  const conversation = sessionRouteOf(path)
+  const active = TABS.find(t => t.path === path)
+    ?? (conversation ? TABS.find(t => t.path === '/sessions') : undefined)
+    ?? TABS[0]
   /**
    * A live Claude Code session, which is a place rather than a tab.
    *
@@ -241,7 +274,12 @@ export default function App() {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.14 }}
         >
-          <active.Page />
+          {/* The page keyed on the session, so moving from one conversation to
+              another starts clean rather than showing the previous one's turns
+              until the fetch lands. */}
+          {conversation
+            ? <SessionPage key={conversation.id ?? 'new'} id={conversation.id} />
+            : <active.Page />}
         </motion.div>
       </main>
 

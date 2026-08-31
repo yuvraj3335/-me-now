@@ -11,11 +11,26 @@
          wear a black status bar. -->
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0a0c" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f9" />
+    <!-- Both spellings. `apple-` is the one iOS has always read and is what
+         makes the installed app open without Safari chrome; the unprefixed name
+         is the standard that replaced it, and every current browser logs a
+         deprecation warning when only the Apple one is present. Dropping the
+         Apple one to silence that warning would un-install the app on the only
+         phone that matters here. -->
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Wake" />
     <meta name="description" content="What's on me, what I'm working on, how fast I'm moving." />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- `use-credentials` because this origin sits behind Cloudflare Access.
+         A manifest link fetches anonymously by default, so Access answered it
+         with a redirect to its login page, the browser refused that as a CORS
+         failure, and the manifest never loaded — which on iOS is the difference
+         between "Add to Home Screen" installing an app and installing a
+         bookmark. Sending the Access cookie with the request is the whole fix.
+         Measured against the deployed origin: two console errors per page load,
+         both this. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <title>Wake</title>

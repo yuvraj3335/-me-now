@@ -1,14 +1,22 @@
 /**
- * The phone desk: three failures that only exist on a real device.
+ * The phone desk: failures that only exist on a real device.
  *
- * Every one of these was measured on the deployed site at 390px and none of
- * them reproduces in a resized desktop window, which is what makes them worth
- * pinning here rather than trusting to a screenshot pass. A laptop has a
- * trackpad, and a trackpad reaches the swipe layer through `wheel` rather than
- * through a pointer, so the horizontal scroll appeared to work; a laptop has no
- * coarse pointer, so half the stylesheet that runs on a phone never loaded; and
- * a laptop is wide enough for the detail pane, so the phone's own detail
- * surface was never on screen at all.
+ * Every one of these was measured on the deployed site — the first three at
+ * 390px, the last four at 375px — and none of them reproduces in a resized
+ * desktop window, which is what makes them worth pinning here rather than
+ * trusting to a screenshot pass. A laptop has a trackpad, and a trackpad
+ * reaches the swipe layer through `wheel` rather than through a pointer, so the
+ * horizontal scroll appeared to work; a laptop has no coarse pointer, so half
+ * the stylesheet that runs on a phone never loaded; and a laptop is wide enough
+ * for the detail pane, so the phone's own detail surface was never on screen at
+ * all.
+ *
+ * **The table's own contracts moved up a band rather than being deleted.** A
+ * phone is under `COLUMNS_MIN` now and gets row-cards, and everything from 640
+ * to 1024 — a narrow laptop window, a tablet, a phone turned sideways — still
+ * gets `PhoneTable` and still has to obey every rule below about reaching its
+ * columns. What is pinned there is unchanged; what it is pinned *for* is a
+ * viewport where four columns nearly fit rather than one where they cannot.
  *
  * These read the source rather than a DOM, like the rest of the suite: there is
  * no layout engine here, and what is being pinned is what the components and
@@ -117,7 +125,10 @@ describe('a phone can reach every column of its own table', () => {
     const line = bodyOf(table, 'CardLine')
     expect(line, 'tap-to-open is gone from the phone row').toContain('actions.onOpen(card)')
     expect(line, 'long-press-to-peek is gone from the phone row').toContain('useLongPress')
-    expect(line, 'the row lost its own status control').toContain('<Select')
+    // A `<Select>` until this pass, and the control changed rather than left —
+    // see `a status is a colour before it is a word` below for what a closed
+    // one now has to draw.
+    expect(line, 'the row lost its own status control').toContain('<StatusPicker')
     // And the drawer itself stays, for the mouse and the trackpad on the narrow
     // laptop that renders this same table.
     expect(line, 'the drawer was deleted rather than yielded').toContain('<SwipeDrawer')
@@ -163,8 +174,216 @@ describe('nothing is pinned, so every column moves under a thumb', () => {
   })
 })
 
+/**
+ * The three things a screenshot of the deployed desk at 375px showed, and what
+ * each one now has to be.
+ *
+ * All three are the same failure in different clothes: a control that is on the
+ * screen and says nothing until it is operated. A status that is a grey box
+ * with a word in it, a filter that says `Any date`, and four columns that have
+ * to be scrolled to before they can be read.
+ */
+describe('a status is a colour before it is a word', () => {
+  /*
+   * Twenty rows of identical grey `<select>`s reading `Not started`, `Not
+   * started`, `In progress`. The word was there and the state was not: the ring
+   * and the hue this product says a status with everywhere else stopped at the
+   * edge of the control, so the one column a person taps to see where things
+   * stand answered only by being read, row by row, in 13px type.
+   */
+  const picker = bodyOf(table, 'StatusPicker')
+
+  test('the closed control is the chip, not a box with a word in it', () => {
+    expect(picker, 'the closed status control stopped drawing the chip')
+      .toContain('<StatusChip status={value} />')
+    // Every surface that shows a card's status shows this one. A second closed
+    // status control is how the desk and the pane come to disagree about what
+    // `In review` looks like.
+    for (const row of ['CardRow', 'CardLine', 'RowCard']) {
+      expect(bodyOf(table, row), `${row} lost the status control`).toContain('<StatusPicker')
+    }
+    expect(read('src/web/components/CardDetail.tsx'), 'the pane kept a control of its own')
+      .toContain('<StatusPicker')
+    expect(code(table), 'a card status went back to a native select').not.toContain('<Select')
+  })
+
+  test('the five options are coloured too, and each of them is a thumb wide', () => {
+    // The same failure one press deeper. The colour is how you aim at `In
+    // review` without reading four labels first, and a picker of plain words
+    // hands the whole vocabulary back at the moment it is being used.
+    expect(picker, 'the options went back to plain words')
+      .toContain('<StatusChip status={s} size="md" />')
+    expect(picker, 'an option is smaller than a thumb').toContain('min-h-11')
+    expect(picker, 'the picker stopped offering exactly the shared five')
+      .toContain('STATUS_ORDER.map')
+    // And the tick stays: five chips all wearing their own colour do not say
+    // which one the card is currently on.
+    expect(picker, 'the picker stopped saying which status is set').toContain('aria-selected')
+  })
+
+  test('it keeps no colour table of its own', () => {
+    // `status.tsx` is the only file allowed to map the five. `Work.tsx` kept a
+    // private set of circles and drifted three states behind the desk; a picker
+    // is exactly where that would happen next.
+    expect(code(table), 'the picker grew its own hues').not.toMatch(/--color-status-/)
+  })
+
+  test('it is a real control on a laptop, and the desk cannot act through it', () => {
+    for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End', 'Escape', 'Tab']) {
+      expect(picker, `the picker does not answer ${key}`).toContain(`'${key}'`)
+    }
+    /*
+     * Capture, and it stops there. The desk binds `j`, `k`, `Enter`, `Escape`
+     * and `e` to `document`, and `e` finishes a card with no confirmation — a
+     * picker that let those through would settle the row the cursor happens to
+     * be on while somebody was choosing a status for a different one.
+     */
+    expect(picker, 'the picker stopped taking the keyboard while it is open')
+      .toContain("document.addEventListener('keydown', onKey, true)")
+    expect(picker, 'a keystroke inside the picker still reaches the desk')
+      .toContain('e.stopPropagation()')
+  })
+
+  test('and the panel cannot be clipped by the list it opens inside', () => {
+    // Every caller is inside a scroll container: the phone list, the page
+    // column, the detail pane's own scrolling body. An absolutely positioned
+    // panel is cut off by all three.
+    expect(picker, 'the panel stopped being a portal').toContain('document.body')
+    expect(picker, 'the panel went back to being positioned in the flow')
+      .toContain('fixed z-[55]')
+  })
+})
+
+describe('the phone spends one row on filter chrome, not two', () => {
+  /*
+   * Measured at 375px: a full-width `Search`, and `Any date · Any priority ·
+   * Any status` wrapped underneath it. Two rows — about 88px — of chrome above
+   * a list, on an 812px screen. And the three closed sets on that second row
+   * were telling him nothing: a closed set whose value is `Any date` is a
+   * control reporting that it is not doing anything.
+   */
+  const row = bodyOf(home, 'FilterRow')
+
+  test('below sm the four collapse into one control that says how many are set', () => {
+    expect(row, 'the phone filter row stopped being one control').toContain('sm:hidden')
+    expect(row, 'the button stopped counting what is set')
+      .toContain('<CountBadge count={count} />')
+    expect(home, 'the count went back to being a yes-or-no')
+      .toMatch(/const filterCount = /)
+  })
+
+  test('and the four are moved rather than dropped', () => {
+    expect(row, 'the filters stopped being reachable at all on a phone').toContain('<Sheet')
+    expect(row, 'the sheet lost the search field').toContain('<Field label="Search">')
+    expect(row, 'the closed sets went into the sheet unlabelled')
+      .toContain('<Field key={label} label={label}>')
+    // One set of controls in two arrangements. Two copies of these option lists
+    // is how the sheet and the row come to offer different answers.
+    expect((row.match(/<Select\b/g) ?? []).length, 'the sheet built its own copy of the sets')
+      .toBe(3)
+  })
+
+  test('the laptop row is exactly the row it was', () => {
+    expect(row, 'the laptop lost the filter row it had no problem with')
+      .toContain('hidden sm:flex flex-wrap items-center gap-2 py-2')
+    expect(row, 'the laptop search field changed size').toContain('h-8 py-0 w-full sm:w-64')
+  })
+
+  test('opening it does not raise the keyboard', () => {
+    // The sheet's first field is a search box. Focused on open it covers the
+    // three controls under it before they have been seen, for a reader who came
+    // here to press `Overdue`.
+    expect(code(home), 'a field on the desk grabs focus by itself').not.toContain('autoFocus')
+    expect(code(table), 'a cell on the desk grabs focus by itself').not.toContain('autoFocus')
+    // And the due cell still has a way out, now that a blur it never receives
+    // is not the thing closing it.
+    expect(bodyOf(table, 'DueCell'), 'the date editor can no longer be dismissed')
+      .toContain("document.addEventListener('pointerdown', away, true)")
+  })
+
+  test('the commit strip sits above the bar and above the keyboard', () => {
+    // `Sheet`'s footer is a flex sibling of the scrollport and the panel
+    // carries `pad-bottom`, so the tab bar and the home indicator are handled.
+    // iOS does not shrink the layout viewport for the keyboard, so nothing in
+    // CSS can answer that half — the visual viewport is the only thing that
+    // knows, and the gap between the two is what the footer pads by.
+    expect(row, 'the footer went back inside the scrolling body').toMatch(/footer=\{/)
+    expect(row, 'the commit strip stopped measuring the keyboard')
+      .toContain('paddingBottom: keyboard')
+    expect(home, 'nothing measures the visual viewport any more')
+      .toContain('window.visualViewport')
+  })
+})
+
+describe('below sm a row is a card, and nothing scrolls sideways', () => {
+  /*
+   * The table shipped at 375px with `Title · Status · Where · Due` in a
+   * scroller of its own: 552px of columns inside a 343px page column, so `WHO`
+   * was cut off mid-word at the fold before any finger moved. Every argument
+   * for those columns is still true and every one of them was reachable only by
+   * knowing that the table moves. A column that has to be discovered is not a
+   * column.
+   */
+  const card = bodyOf(table, 'RowCard')
+
+  test('the desk changes layout where the columns stop fitting', () => {
+    expect(table, 'the phone boundary is gone').toMatch(/export const COLUMNS_MIN = 640/)
+    expect(home, 'the desk stopped choosing a layout for the phone')
+      .toContain('const hasColumns = width >= COLUMNS_MIN')
+    expect(home, 'the phone went back to the sideways table').toContain('<CardList')
+    // And the table it replaces is still what everything above 640 gets.
+    expect(home, 'the narrow-window table was deleted with the phone one')
+      .toContain('<PhoneTable')
+  })
+
+  test('the card carries the four facts the table was drawn for', () => {
+    expect(card, 'the title left the row').toContain('{name}')
+    expect(card, 'the status left the row').toContain('<StatusPicker')
+    expect(card, 'the customer left the row').toContain('{where}')
+    expect(card, 'the deadline left the row').toContain("{words ?? '—'}")
+  })
+
+  test('and it has no scroller of any kind', () => {
+    // This is the honest half of `a page never scrolls sideways`: the page
+    // column clips, and this no longer asks it for an exception.
+    expect(bodyOf(table, 'CardList'), 'the phone list grew a horizontal scroller')
+      .not.toMatch(/overflow-x/)
+    expect(card, 'a row grew a scroller of its own').not.toMatch(/overflow-x/)
+    // So it needs none of the axis handover the table needs: with nothing
+    // competing for the horizontal, the row keeps it and the drawer works from
+    // the first pixel.
+    expect(card, 'the row-card yields the axis to a table it is not in')
+      .not.toContain("'manipulation'")
+  })
+
+  test('a row can still be acted on, held, and pointed at', () => {
+    expect(card, 'the row lost the drawer').toContain('<SwipeDrawer')
+    expect(card, 'the row lost the long press').toContain('useLongPress')
+    expect(card, 'a tap stopped opening the card').toContain('actions.onOpen(card)')
+    // Selected, focused and unseen from the one function every list uses. A
+    // phone has no hover, so a row that says which one it is only on hover says
+    // nothing at all.
+    expect(card, 'the row stopped saying which one is selected').toContain('rowStateClass(')
+  })
+
+  test('the last row clears the tab bar', () => {
+    // `pb-24` was 96px against a bar that is 53 plus whatever the device puts
+    // under it — a guess that is 43px too much on one phone and not enough on
+    // another. `--nav-h` is the strip the bar actually owns, measured once.
+    expect(home, 'the list went back to guessing at the height of the bar')
+      .toContain("paddingBottom: 'calc(var(--nav-h) + 24px)'")
+    // Stripped of prose first: the page explains in a comment what the guess
+    // used to be, and a note about history is not a class name.
+    expect(code(home), 'a fixed pad came back under the list').not.toMatch(/pb-24/)
+  })
+})
+
 describe('the phone detail is a page', () => {
-  const page = home.slice(home.indexOf('function DetailPage('))
+  /* The component's own body, not everything after it. Sliced to the end of the
+     file, this read the whole rest of `Home.tsx` — so a paragraph about
+     viewport units in a component two hundred lines further down failed the
+     assertion that *this* surface is not a fraction of the viewport. */
+  const page = bodyOf(home, 'DetailPage')
 
   test('it fills the screen the shell allows it', () => {
     // 55dvh of an 844px phone is a title, three controls, a fact grid, a

@@ -269,7 +269,7 @@ DO NOT. Refresh credentials, mint tokens, or change the account. Report only.`,
   {
     id: 'continue-session',
     label: 'Continue earlier work',
-    blurb: 'Pick a session up where it stopped, in the repository it stopped in.',
+    blurb: 'Carry on a conversation that is still open, in the repository it is running in.',
     slots: ['session', 'task', 'note'],
     defaultRepo: null,
     skills: [],
@@ -278,23 +278,31 @@ DO NOT. Refresh credentials, mint tokens, or change the account. Report only.`,
      *
      * "You are not resuming that session and you cannot: a link opens a new
      * conversation, so the transcript is not loaded" was true of the hand-off
-     * that shipped this template — a `claude.ai/new?q=` link, which really did
-     * start a stranger every time. It is now false, and it is false in the worst
-     * possible place: this text is the first message *inside* the resumed
-     * session, so a session that had the whole transcript above it was being
-     * told, in its own words, that it had none.
+     * that shipped this template — a link to a chat surface, which really did
+     * start a stranger every time. It became false the moment Wake started the
+     * session itself, and it was false in the worst possible place: this text is
+     * the first message *inside* that session, so a session with its whole
+     * transcript above it was being told, in its own words, that it had none.
      *
-     * The replacement does not assert the opposite either, because both cases
-     * are still real: pick a session and the brief lands in that session with
-     * its history above it; pick a new conversation and the same session's tail
-     * arrives quoted, in the same repository. One sentence cannot know which, so
-     * this asks rather than claims — and "check what you can actually see" is
-     * the right first move under either, which is why it reads as one
-     * instruction instead of two branches.
+     * The word that replaced it — "resumed" — is now wrong in the other
+     * direction, and that is what this edit is. The composer offers only
+     * conversations that are **running right now**, and Send delivers one more
+     * turn into the live one; nothing is being resumed off a transcript, because
+     * an id that could only be resumed is an id the composer refuses to carry.
+     * A session that stopped is not a row in that menu, so the brief cannot
+     * arrive claiming to continue it.
+     *
+     * It still does not assert which case it is in, because both are real: pick
+     * a session and this lands in that session with its history above it; pick
+     * `A new conversation` and the same session's tail arrives quoted, in the
+     * same repository. One sentence cannot know which, so this asks rather than
+     * claims — and "check what you can actually see" is the right first move
+     * under either, which is why it reads as one instruction instead of two
+     * branches.
      */
     instruction: `Pick up the work below. It comes from a Claude Code session on this machine, in the repository named above.
 
-You may be that session, resumed — with everything above this message already yours — or a new one in the same working directory, holding only what is quoted here. Look before you answer: if the earlier turns are above you, use them; if all you have is the quote, treat it as a handover note from someone who has stopped talking and say so. Do not reconstruct from memory what you cannot see, and do not re-ask me for anything that is in front of you.
+You may be that session itself, still running, with everything above this message already yours — or a new one in the same working directory, holding only what is quoted here. Look before you answer: if the earlier turns are above you, use them; if all you have is the quote, treat it as a handover note from someone who has stopped talking and say so. Do not reconstruct from memory what you cannot see, and do not re-ask me for anything that is in front of you.
 
 ESTABLISH. Where it got to, in your own words, before you carry on. If your reading differs from what the last prompt implies, say so — that gap is usually the reason the session stopped.
 

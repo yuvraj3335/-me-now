@@ -284,6 +284,93 @@ export const actions = {
     ),
 }
 
+/* ------------------------------ one session ------------------------------- */
+
+/**
+ * One turn of a Claude Code conversation, as the server parses it off the
+ * transcript.
+ *
+ * Deliberately not a line of a terminal. Three record types in a transcript are
+ * not conversation and never arrive here — a subagent's sidechain, a
+ * `tool_result` filed as a user record, and an assistant turn that was only a
+ * tool call — because drawing any of them inline is what makes a session page
+ * read like a log instead of a chat. `tools` is what survives of the third: the
+ * names the assistant reached for, which the page renders as one collapsed chip
+ * rather than as a wall.
+ */
+export type SessionTurn = {
+  role: 'user' | 'assistant'
+  text: string
+  ts: number
+  tools: string[]
+}
+
+/**
+ * A session as the page that renders it needs to know it.
+ *
+ * `active` is the field the composer is gated on, and it is the whole reason
+ * this shape differs from a list row. It means a process on this box is holding
+ * the transcript open right now — so a message can be delivered — rather than
+ * "there is a file with this name", which is a claim any finished conversation
+ * satisfies just as well and which is what used to get handed to `--resume`.
+ */
+export type OpenSession = import('./launch').Session & {
+  active: boolean
+  /** When the process came up, or the transcript's own last write if it is not up. */
+  startedAt: number
+}
+
+/**
+ * The conversation half of the Claude Code API.
+ *
+ * It lives here rather than beside `launchApi` because these four calls are the
+ * session *page* — reading a conversation, following it, starting one, adding a
+ * turn — while that file is the brief composer's client. One is about a thing
+ * on this box, the other is about a document being assembled to send to it.
+ */
+export const sessionApi = {
+  /** Everything the page opens with: the row, the turns, the paths, the excerpt. */
+  get: (id: string) =>
+    req<{ session: OpenSession; turns: SessionTurn[]; excerpt: string; paths: string[] }>(
+      `/claude/sessions/${encodeURIComponent(id)}`,
+    ),
+  /**
+   * The tail of the conversation, for polling.
+   *
+   * `after` is the timestamp of the last turn the page holds, not an index: the
+   * server reads a bounded tail of a file that is being appended to, so an
+   * index into that tail means something different on every read while a
+   * timestamp does not. A phone backgrounds its tab and kills any stream that
+   * was open, which is why this is asked rather than pushed.
+   */
+  since: (id: string, after: number) =>
+    req<{ turns: SessionTurn[]; active: boolean }>(
+      `/claude/sessions/${encodeURIComponent(id)}/turns?after=${after}`,
+    ),
+  /**
+   * Start a real session on this box — new uuid, running under tmux.
+   *
+   * It cannot hand back an archived id because it does not take one, which is
+   * the fix for the bug this whole surface exists to correct. The session is
+   * active by Claude Code's own reckoning the instant it exists.
+   */
+  create: (b: { repo: string; text?: string; permissionMode?: string }) =>
+    post<{ ok: true; id: string; session: { sessionId: string; cwd: string; repo: string | null } }>(
+      '/claude/sessions/new', b,
+    ),
+  /**
+   * One more turn in a conversation already underway.
+   *
+   * The refusals come back as the server's own sentences and are rendered
+   * verbatim. "That session is not running any more" and "that session is open
+   * in a terminal Wake did not start" are two different true things, and
+   * collapsing them into one client-side apology is how a person stops being
+   * able to tell which of them just happened.
+   */
+  send: (id: string, text: string) =>
+    post<{ ok: true }>(`/claude/sessions/${encodeURIComponent(id)}/send`, { text }),
+}
+
 /** Poll while the tab is visible; stop entirely when it is not. */
 export function useLiveState(intervalMs = 60_000) {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)

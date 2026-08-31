@@ -76,12 +76,15 @@ describe('emptiness changes what is in a slot, never which slots exist', () => {
       .not.toMatch(/if \(!tasks\.length/)
   })
 
-  test('the pane column and the three sheets are rendered unconditionally', () => {
+  test('the pane column and the sheets are rendered unconditionally', () => {
     // One `<aside>`, one of each sheet, none of them inside a branch — this is
     // what makes "he closed the task and the pane went with it" impossible.
     expect((body.match(/<aside/g) ?? []).length, 'the pane column is conditional now').toBe(1)
     expect((body.match(/<TaskSheet/g) ?? []).length).toBe(2)
     expect((body.match(/<GoalSheet/g) ?? []).length).toBe(1)
+    // And the read sheet, which is what a tap on a title opens on a phone.
+    expect((body.match(/<TaskRead/g) ?? []).length, 'the phone read sheet is conditional').toBe(1)
+    expect((body.match(/<RailSheet/g) ?? []).length, 'the rail sheet is conditional').toBe(1)
   })
 
   test('an unread list is not an empty one', () => {
@@ -90,7 +93,7 @@ describe('emptiness changes what is in a slot, never which slots exist', () => {
     expect(body, 'the page stopped distinguishing not-read-yet from empty')
       .toMatch(/const loaded = !!state/)
     expect(body, 'the empty state paints before the first read lands')
-      .toMatch(/\{loaded && !todo\.length/)
+      .toMatch(/\{loaded && !tasks\.length/)
   })
 
   test('the empty state is a line and a button, not a bare word', () => {
@@ -101,6 +104,59 @@ describe('emptiness changes what is in a slot, never which slots exist', () => {
     // forty pixels above it, and one surface spends the accent once.
     expect(blank.slice(0, 900), 'a second amber fill landed on one surface')
       .not.toMatch(/variant="primary"/)
+  })
+})
+
+describe('the list is grouped, and the finished half is folded away', () => {
+  test('the live sections are three, in the order a phone reads them', () => {
+    // In progress first because it is what he is holding; Not started last
+    // because it is the biggest and the least urgent. The headings are the
+    // shared labels rather than strings of this page's own, so a rename lands
+    // on the desk and the list at once.
+    expect(work, 'the live sections were reordered or renamed')
+      .toMatch(/const LIVE_GROUPS = \['in_progress', 'in_review', 'not_started'\]/)
+    expect(work, 'a section heading went back to a literal of its own')
+      .toMatch(/<Group key=\{status\} label=\{STATUS_LABEL\[status\]\}>/)
+    expect(body, 'an empty section started rendering its own heading')
+      .toMatch(/rows\.length === 0 \? null/)
+  })
+
+  test('Done and Won\'t do are counted, folded and paged separately', () => {
+    const settled = work.slice(work.indexOf('function Settled('))
+    expect(settled.slice(0, 1200), 'the fold lost its Show control').toMatch(/'Hide' : 'Show'/)
+    expect(settled.slice(0, 1200), 'an empty settled list started drawing a heading')
+      .toMatch(/if \(!rows\.length\) return null/)
+    // The count is on the heading, so a fold never hides how much is behind it.
+    expect(body, 'the Done heading lost its count')
+      .toMatch(/\$\{STATUS_LABEL\.done\} — \$\{done\.length\}/)
+    expect(body, "the Won't do list is gone, or lost its count")
+      .toMatch(/\$\{STATUS_LABEL\.wont_do\} — \$\{dropped\.length\}/)
+    // One page parameter each: `Show`ing the second list would otherwise land
+    // it on whatever page the first was left at.
+    expect(body).toMatch(/setParam\('page'/)
+    expect(body).toMatch(/setParam\('wpage'/)
+  })
+
+  test('the glyph is a switch, not a five-way cycle', () => {
+    // A cycle on the one control a thumb hits without aiming puts the fourth
+    // state four presses away and makes every mis-tap a thing to undo.
+    expect(body, 'the tick stopped remembering where the row came from')
+      .toMatch(/beforeDone\.get\(t\.id\) \?\? 'not_started'/)
+    expect(work, 'the previous status is no longer recorded on the way to done')
+      .toMatch(/if \(status === 'done'\) beforeDone\.set\(t\.id, was\)/)
+  })
+
+  test('a row is a status, a title and its meta', () => {
+    const row = work.slice(work.indexOf('function TaskRow('), work.indexOf('function GoalList('))
+    expect(row, 'the row paints a status of its own again').toContain('<StatusChip')
+    expect(row, 'a terminal came back onto every row in the list')
+      .not.toContain('SquareTerminal')
+  })
+
+  test('the last row clears the tab bar', () => {
+    // `--nav-h` is the strip the phone's tab bar owns. Without the reserve the
+    // final row of the list sits under it: unreadable, and unswipeable.
+    expect(body, 'the page stopped reserving the tab bar').toMatch(/pb-\[var\(--nav-h\)\]/)
   })
 })
 

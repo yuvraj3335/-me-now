@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { db, latestFinishedRuns, logEvent, now, uid } from './db'
+import { db, isTaskStatus, latestFinishedRuns, logEvent, now, taskStatus, uid } from './db'
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
 import { fetchStatus, startFetch, isFetchScope } from './fetch'
@@ -331,7 +331,7 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
         : null,
       tasks: db.query<Row, [string]>(
         `SELECT id, title, status FROM tasks WHERE source_card_group = ?`,
-      ).all(group_key),
+      ).all(group_key).map(outTask),
     })
   }
 
@@ -396,6 +396,18 @@ const statusOf = (s: Row | undefined): CardStatus =>
   (s?.status as CardStatus | undefined) ??
   (s?.not_mine ? 'wont_do' : s?.done_at ? 'done' : 'not_started')
 
+/**
+ * One task row, with its status said in the words the product uses.
+ *
+ * Every task leaves the server through this, so nothing in the browser has to
+ * know that the column once held `todo`. Migration 14 rewrote the rows that
+ * existed the day it ran; this covers the ones written since by something that
+ * has not moved — `tools/seed-demo.ts` writes the old words straight into
+ * SQLite — because a status the UI cannot map draws no glyph and no word, and a
+ * blank where a status should be reads as a broken page.
+ */
+const outTask = (t: Row): Row => ({ ...t, status: taskStatus(t.status) })
+
 /* -------------------------------- state --------------------------------- */
 
 api.get('/state', async c => {
@@ -410,7 +422,10 @@ api.get('/state', async c => {
     open: cards.filter(x => x.pile === 'open'),
     parked: cards.filter(x => x.pile === 'parked'),
     tasks: db.query<Row, []>(`SELECT * FROM tasks ORDER BY sort, created_at DESC`).all()
-      .map(t => ({ ...t, notes: db.query(`SELECT * FROM notes WHERE task_id = ? ORDER BY sort, created_at`).all(t.id) })),
+      .map(t => ({
+        ...outTask(t),
+        notes: db.query(`SELECT * FROM notes WHERE task_id = ? ORDER BY sort, created_at`).all(t.id),
+      })),
     goals: db.query<Row, []>(`SELECT * FROM goals WHERE archived = 0 ORDER BY sort, created_at`).all(),
     reminders: db.query<Row, []>(
       `SELECT * FROM reminders WHERE dismissed_at IS NULL ORDER BY fire_at`,
@@ -1083,16 +1098,30 @@ const ORIGIN_FIELDS = ['origin_source', 'origin_title', 'origin_why', 'origin_ur
  */
 const restoring = (b: Row) => b.restore === true
 
+/**
+ * What a client is allowed to call a task's status, on the way in.
+ *
+ * The five are the vocabulary; the old three are still accepted because
+ * accepting them costs one lookup and refusing them would 400 a client that has
+ * not shipped yet. Both are normalised to the five before they reach the column,
+ * so the legacy words can only ever enter this table the way `seed-demo` puts
+ * them there — straight into SQLite, past every route.
+ *
+ * Anything else is refused rather than defaulted. A typo'd status silently
+ * stored as `not_started` is a row that quietly moved section, which is worse
+ * than a request that failed.
+ */
 api.post('/tasks', async c => {
   const b = await c.req.json<Row>()
   if (!b.title?.trim()) return c.json(bad('title required'), 400)
+  if (b.status !== undefined && !isTaskStatus(b.status)) return c.json(bad('bad status'), 400)
   const id = uid()
   db.query(
     `INSERT INTO tasks (id, title, detail, status, goal_id, source_card_group, due_at, color, sort,
                         created_at, updated_at, started_at, completed_at, ${ORIGIN_FIELDS.join(', ')})
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
-    id, b.title.trim(), b.detail ?? null, b.status ?? 'todo', b.goal_id ?? null,
+    id, b.title.trim(), b.detail ?? null, taskStatus(b.status ?? 'not_started'), b.goal_id ?? null,
     b.source_card_group ?? null, b.due_at ?? null, b.color ?? null,
     b.sort ?? -now(), now(), now(),
     num(b.started_at), num(b.completed_at),
@@ -1104,7 +1133,7 @@ api.post('/tasks', async c => {
     b.origin_meta ? JSON.stringify(b.origin_meta).slice(0, 2_000) : null,
   )
   if (!restoring(b)) logEvent('task_created', { task_id: id, group_key: b.source_card_group ?? null })
-  return c.json(db.query(`SELECT * FROM tasks WHERE id = ?`).get(id))
+  return c.json(outTask(db.query<Row, [string]>(`SELECT * FROM tasks WHERE id = ?`).get(id)!))
 })
 
 const TASK_FIELDS = ['title', 'detail', 'status', 'goal_id', 'source_card_group', 'due_at', 'color', 'sort']
@@ -1112,25 +1141,44 @@ const TASK_FIELDS = ['title', 'detail', 'status', 'goal_id', 'source_card_group'
 api.patch('/tasks/:id', async c => {
   const id = c.req.param('id')
   const b = await c.req.json<Row>()
+  if (b.status !== undefined && !isTaskStatus(b.status)) return c.json(bad('bad status'), 400)
   const prev = db.query<Row, [string]>(`SELECT * FROM tasks WHERE id = ?`).get(id)
   if (!prev) return c.json(bad('not found'), 404)
 
-  const keys = TASK_FIELDS.filter(k => k in b)
-  const extra: Row = {}
-  if (b.status && b.status !== prev.status) {
-    if (b.status === 'done') extra.completed_at = now()
-    if (b.status === 'doing' && !prev.started_at) extra.started_at = now()
-    if (b.status !== 'done') extra.completed_at = null
+  /*
+   * The move is decided in the five, on both sides.
+   *
+   * `prev.status` is whatever the column holds, which on a reseeded box is
+   * still `doing` — so comparing the incoming word against the raw column made
+   * `in_progress` land on a `doing` row as a *transition*, stamping a fresh
+   * `started_at` over the one the task already had and writing a second
+   * `task_in_progress` event for a move nobody made.
+   */
+  const next = b.status === undefined ? null : taskStatus(b.status)
+  const was = taskStatus(prev.status)
+  const moved = next !== null && next !== was
+
+  const values: Row = Object.fromEntries(TASK_FIELDS.filter(k => k in b).map(k => [k, b[k]]))
+  if (next !== null) values.status = next
+  if (moved) {
+    // Derived from the transition, never sent: `completed_at` is the one column
+    // the Done list is ordered by, and `started_at` is what the response-time
+    // chart measures from. A status that arrives at `wont_do` clears the
+    // completion time with everything else that is not `done` — a task he
+    // dropped was not finished, and the two must not sort together.
+    values.completed_at = next === 'done' ? now() : null
+    if ((next === 'in_progress' || next === 'in_review') && !prev.started_at) values.started_at = now()
   }
-  const sets = [...keys, ...Object.keys(extra)]
+
+  const sets = Object.keys(values)
   if (sets.length) {
     db.query(`UPDATE tasks SET ${sets.map(k => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`)
-      .run(...keys.map(k => b[k]), ...Object.values(extra), now(), id)
+      .run(...sets.map(k => values[k]), now(), id)
   }
-  if (b.status && b.status !== prev.status) {
-    logEvent(b.status === 'done' ? 'task_done' : `task_${b.status}`, { task_id: id })
-  }
-  return c.json(db.query(`SELECT * FROM tasks WHERE id = ?`).get(id))
+  // `task_done` is what Pulse counts as work finished; the other four are
+  // written for the record and drawn by nothing.
+  if (moved) logEvent(next === 'done' ? 'task_done' : `task_${next}`, { task_id: id })
+  return c.json(outTask(db.query<Row, [string]>(`SELECT * FROM tasks WHERE id = ?`).get(id)!))
 })
 
 api.delete('/tasks/:id', c => {

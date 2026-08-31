@@ -16,14 +16,15 @@ import { Hono } from 'hono'
 import { unlinkSync } from 'node:fs'
 import { archivedSessionIds, audit, db, setSessionArchived } from '../db'
 import {
-  deleteSession, getSession, listAllSessions, liveSessions, sessionExcerpt, sessionFilePaths,
+  deleteSession, getSession, listActiveSessions, liveSessions,
+  parseSessionTurns, sessionExcerpt, sessionFilePaths,
 } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
 import {
   DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode, resolveCwd,
 } from './launch'
 import {
-  available, closeTerminal, getTerminal, listTerminals, openTerminal,
+  available, closeTerminal, getTerminal, isRunning, listTerminals, openTerminal, sendBrief,
   type OpenInput, type TerminalInfo,
 } from './terminal'
 import { handoffConfig } from './handoff'
@@ -75,7 +76,7 @@ claudecode.get('/state', c =>
       whenToUse: s.when_to_use?.slice(0, 200) ?? null,
       mutating: !!s.mutating,
     })),
-    sessions: sessionRows({ windowDays: 30, limit: 30 }),
+    sessions: sessionRows({ limit: 100 }),
     defaultPermissionMode: DEFAULT_PERMISSION_MODE,
     packs: listPacks(20),
     // Whether this machine can start a session at all, and which ones it has
@@ -86,50 +87,157 @@ claudecode.get('/state', c =>
 )
 
 /**
- * Sessions, with the two facts a transcript cannot carry.
+ * The sessions a composer may offer to continue.
  *
- * A transcript's mtime says it was written to recently, which a *finished*
- * session satisfies just as well as a running one. `liveSessions()` reads the
- * per-process files Claude Code keeps, and that is the only place "right now"
- * is actually recorded.
- *
- * `archived` is the other direction: nothing on disk records that he is done
- * with a session, so it is Wake's own state, joined on here rather than inside
- * the filesystem source. That file's whole job is to say what the disk says,
- * and an opinion Wake holds is not that.
+ * Active only, and that is not a default the caller can widen. Every id that
+ * leaves this function ends up somewhere that *starts* something — the picker,
+ * the pack, the resume line — and the failure this whole pass exists to fix was
+ * a dead id reaching one of those and Claude Code opening an archived session
+ * on his phone. A picker that cannot name a corpse cannot hand one over.
  */
-function sessionRows(opts: { windowDays?: number; repo?: string; limit?: number }) {
-  const live = liveSessions()
+function sessionRows(opts: { repo?: string; limit?: number } = {}) {
   const archived = archivedSessionIds()
-  return listAllSessions(opts).map(s => ({
-    ...s, live: live.has(s.id), archived: archived.has(s.id),
-  }))
+  return listActiveSessions(opts)
+    .filter(s => !archived.has(s.id))
+    .map(s => ({ ...s, live: true, archived: false }))
 }
 
+/**
+ * The Sessions list: what Claude Code is running, and nothing else.
+ *
+ * There is no `all` and no window any more. Both were ways of asking for more
+ * transcripts, and transcripts were the bug — the page listed a hundred and
+ * thirty dead conversations, he tapped one, and Claude Code on his phone said
+ * it was archived. `listActiveSessions` reads the live-process files instead,
+ * so "active" is Claude Code's answer rather than a filter Wake computes and
+ * he has to remember to leave switched on.
+ *
+ * Wake's own archive table still hides a row he has put away, because "I am
+ * done with this one" is a real thing to want about a session that is still
+ * technically up. It can only ever *remove* from this list now; it can no
+ * longer disagree with Claude Code about what is alive.
+ */
 claudecode.get('/sessions', c => {
-  const all = c.req.query('all') === '1'
-  return c.json({
-    sessions: sessionRows({
-      // `all` widens the window rather than removing it: "every session on this
-      // machine" is 130 transcript tails, and the page that asks for it is a
-      // list, not an archive.
-      windowDays: Number(c.req.query('window')) || (all ? 365 : 30),
-      repo: c.req.query('repo') || undefined,
-      limit: Number(c.req.query('limit')) || (all ? 500 : 30),
-    }),
+  const live = liveSessions()
+  const archived = archivedSessionIds()
+  const rows = listActiveSessions({
+    repo: c.req.query('repo') || undefined,
+    limit: Number(c.req.query('limit')) || 100,
   })
+    .filter(s => !archived.has(s.id))
+    .map(s => ({ ...s, live: true, archived: false, startedAt: live.get(s.id)?.startedAt ?? s.lastTs }))
+  return c.json({ sessions: rows })
 })
 
+/**
+ * One session, as a conversation.
+ *
+ * `turns` is the page; `excerpt` stays because a pack quotes a session as prose
+ * and has no use for the structure. `active` is the gate every composer checks
+ * before it offers to send: a transcript that no process is holding open may be
+ * read here, but it may not be continued, and saying so is the whole fix.
+ */
 claudecode.get('/sessions/:id', c => {
   const id = c.req.param('id')
   const s = getSession(id)
   if (!s) return c.json(bad('no such session on this machine'), 404)
+  const live = liveSessions().get(id)
   const excerpt = sessionExcerpt(id, 4_000)
   return c.json({
-    session: { ...s, live: liveSessions().has(id) },
+    session: { ...s, live: !!live, active: !!live, startedAt: live?.startedAt ?? s.lastTs },
+    turns: parseSessionTurns(id, { limit: 200 }).turns,
     excerpt: excerpt.found ? excerpt.text ?? '' : '',
     paths: sessionFilePaths(id),
   })
+})
+
+/**
+ * The tail of one conversation, for polling.
+ *
+ * A phone backgrounds its tab and an SSE stream dies with it, so the page asks
+ * again rather than being told. `after` is the timestamp of the last turn it
+ * has, which survives the tail read moving underneath it in a way an index
+ * would not.
+ */
+claudecode.get('/sessions/:id/turns', c => {
+  const id = c.req.param('id')
+  const after = Number(c.req.query('after')) || 0
+  const r = parseSessionTurns(id, { after, limit: 200 })
+  if (!r.found) return c.json(bad('no such session on this machine'), 404)
+  return c.json({ turns: r.turns, active: liveSessions().has(id) })
+})
+
+/**
+ * Start a conversation, from the composer, as a real session on this box.
+ *
+ * This is what `+` and a blank Send do, and it is the whole answer to the bug
+ * that opened this pass. It creates a session — new uuid, chosen by Wake via
+ * `--session-id`, running under Wake's tmux — so the thing he is now typing
+ * into is *active* by Claude Code's own reckoning the instant it exists. It
+ * cannot hand back an archived id because it does not take one.
+ *
+ * `claude.ai/new?q=` is not involved. That opens a different product with no
+ * repository and nothing to resume, which is what #39 already established.
+ */
+claudecode.post('/sessions/new', async c => {
+  const b = await c.req.json<any>().catch(() => ({}))
+  const mode = parsePermissionMode(b.permissionMode)
+  if ('error' in mode) return c.json(bad(mode.error), 400)
+
+  const cwd = typeof b.repo === 'string' && b.repo.trim() ? b.repo.trim()
+    : typeof b.cwd === 'string' ? b.cwd : null
+  if (!cwd) return c.json(bad('name a repository to start in'), 400)
+
+  const text = typeof b.text === 'string' ? b.text : null
+  const r = openTerminal({ cwd, brief: text, permissionMode: mode.mode })
+  if ('error' in r) {
+    audit('claude.session.new', { target: cwd, ok: false, error: r.error })
+    return c.json(bad(r.error), r.status)
+  }
+  audit('claude.session.new', {
+    target: `${r.repo ?? r.cwd} → ${r.sessionId}`,
+    detail: { sessionId: r.sessionId, cwd: r.cwd, briefSent: r.briefSent },
+  })
+  return c.json({ ok: true, id: r.sessionId, session: r })
+})
+
+/**
+ * The composer's Send: one more turn in a conversation already underway.
+ *
+ * Three refusals, and each is a different true thing rather than one vague one:
+ *
+ * 1. **Not running.** The id names a transcript and nothing is holding it open.
+ *    This is the refusal the whole pass is for — Wake used to hand exactly this
+ *    id to `--resume` or to a `claude.ai` link and let Claude Code be the one to
+ *    say the session was archived. It says so here instead, and offers a new one.
+ * 2. **Running, but not Wake's.** He has it open in a terminal somewhere. Wake
+ *    can read that transcript and cannot type into it — the only way in would be
+ *    Claude Code's own control socket, and writing to another process's socket
+ *    is a line this product does not cross.
+ * 3. **Wake's, and the paste failed.** tmux is there and did not take it.
+ *
+ * The delivery is `sendBrief`, which is Wake pasting into *its own* tmux — the
+ * same buffer path the pack has always used, not a new way in.
+ */
+claudecode.post('/sessions/:id/send', async c => {
+  const id = c.req.param('id')
+  const b = await c.req.json<{ text?: string }>().catch(() => ({}) as { text?: string })
+  const text = typeof b.text === 'string' ? b.text.trim() : ''
+  if (!text) return c.json(bad('nothing to send'), 400)
+  if (!getSession(id)) return c.json(bad('no such session on this machine'), 404)
+
+  if (!liveSessions().has(id)) {
+    return c.json(bad('that session is not running any more — start a new one'), 409)
+  }
+  if (!isRunning(id)) {
+    return c.json(bad('that session is open in a terminal Wake did not start, so Wake can read it but cannot type into it'), 409)
+  }
+  if (!sendBrief(id, text)) {
+    audit('claude.session.send', { target: id, ok: false, error: 'tmux refused the paste' })
+    return c.json(bad('tmux would not take that message'), 503)
+  }
+  audit('claude.session.send', { target: id, detail: { chars: text.length } })
+  return c.json({ ok: true })
 })
 
 /**

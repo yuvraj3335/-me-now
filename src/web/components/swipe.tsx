@@ -34,6 +34,11 @@ import {
   axisFor, clampSwipe, openSwipeKey, setOpenSwipe, snapSwipe, SWIPE_ACTION_W, SWIPE_ENGAGE_PX,
   swipeWidth, useOpenSwipe, type SwipeAxis,
 } from '../lib/swipe'
+import { statusColor, statusWash } from './status'
+import { STATUS_LABEL, type CardStatus } from '../lib/types'
+
+/** Whether a picker option is one of the five, or something else entirely. */
+const isCardStatus = (id: string): id is CardStatus => id in STATUS_LABEL
 
 /* ---------------------------------- hook ---------------------------------- */
 
@@ -486,17 +491,46 @@ export function SwipeDrawer({
         role="group"
         aria-label="Status"
       >
-        {status.options.map(o => (
-          <button
-            key={o.id}
-            onClick={act(() => status.onPick(o.id))}
-            aria-pressed={o.id === status.current}
-            className={`min-w-11 px-1 sm:px-2 text-sm font-medium whitespace-nowrap transition-colors duration-100
-              ${o.id === status.current ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}
-          >
-            {o.label}
-          </button>
-        ))}
+        {status.options.map(o => {
+          /*
+           * The five options are painted, and this is the whole reason the
+           * picker was worth reopening.
+           *
+           * It used to render five words in `fg-mute` with the current one in
+           * `fg`. That is a menu you have to *read*, on the surface where he is
+           * least able to — mid-swipe, one thumb, holding a row open. Two of
+           * the five even shared a colour on the row underneath, so picking the
+           * right one and confirming you had were both jobs for the label text.
+           *
+           * The hue comes from `status.tsx` through a function rather than a
+           * token spelled here, because there is exactly one status→colour
+           * table in this product and a second one written in a drawer is how
+           * the last one drifted. An id this file does not recognise — a filter
+           * passing `any`, say — keeps the old neutral treatment rather than
+           * guessing at a colour for it.
+           */
+          const st = isCardStatus(o.id) ? o.id : null
+          const hue = st ? statusColor(st) : null
+          const on = o.id === status.current
+          return (
+            <button
+              key={o.id}
+              onClick={act(() => status.onPick(o.id))}
+              aria-pressed={on}
+              // The wash marks the current one. `aria-pressed` says it too, but
+              // a picker whose selected item is only announced is a picker he
+              // cannot check at a glance, which is the state he is in here.
+              style={st
+                ? { color: statusColor(st), background: on ? statusWash(st) : undefined }
+                : undefined}
+              className={`min-w-11 px-1 sm:px-2 text-sm font-medium whitespace-nowrap transition-colors duration-100
+                ${hue ? (on ? 'font-semibold' : 'opacity-80 hover:opacity-100')
+                      : on ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'}`}
+            >
+              {o.label}
+            </button>
+          )
+        })}
       </div>
     )
   }

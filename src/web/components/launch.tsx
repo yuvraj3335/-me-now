@@ -1,86 +1,91 @@
 /**
- * Write the brief — one screen, ending in a session that is actually running.
+ * The composer: a field, and the one control that sends it.
  *
- * There was a three-step wizard here: `1 Context · 2 Instruction · 3 Read it`,
- * with a clickable rail, a step whose primary action was a 38px amber button
- * labelled `Instruction` — a filled accent slab whose entire job was "go to the
- * next tab" — and a native `<select>` for the repository whose popup painted
- * over the object list it was supposed to sit under. Five amber marks in one
- * 460px sheet, for an operation whose real content is "confirm this text, then
- * tap".
+ * What this replaced was one long scroll — repository, session, ten template
+ * essays, twenty-eight skill blurbs, the attachments, the Slack replies, the
+ * instruction, the permission mode — with a sticky commit bar hacked inside the
+ * scroller. Measured on a 375px phone that was over two thousand pixels of
+ * content above a field nobody could find, and the first thing it did on open
+ * was raise the keyboard, because the skill search was a live `<input>` mounted
+ * in the scroll path. A person at 7am with one thumb opened this to type a
+ * sentence and was handed a settings screen.
  *
- * So: one scroll, in the order the decision is actually made — which
- * repository, which session in it, which templates, which skills, what is
- * attached, what you want, and how it should run. The brief is the next beat,
- * at a size you can read. There is one commit, and it is the last thing on the
- * page.
+ * So the first paint is the field and Send, and nothing else. Everything that
+ * used to be a section is a chip: the repository and the session are menus on
+ * the chip itself, and the two browsable lists live behind `+ Context` and
+ * `Shape` — a second room, entered on purpose. **Configuration is opt-in.** The
+ * order the decision is made in has not changed; what changed is that only the
+ * part he actually types is on screen when he arrives.
  *
- * **That commit starts a Claude Code process on this box.** It was an
- * `<a href="https://claude.ai/new?q=…">` — the Claude *chat* surface, which is a
- * different product: a new conversation every time, no repository, no tools,
- * nothing to resume, and a URL budget the brief had to be trimmed to fit. It is
- * now `POST /api/claude/terminals`, which starts or resumes a real session in
- * the chosen repository under the chosen `--permission-mode` with this brief as
- * its first message, and the sheet goes to `/terminal/<id>` — a real terminal,
- * on a laptop or a phone. Nothing is trimmed and there is no budget, so the
- * `N / 12,000` counter that used to sit under the field is gone with the thing
- * it counted. See HANDOFF_LAUNCH_API.md.
+ * **Packing is not a step any more.** There used to be a `Write the brief`
+ * commit that produced a monospace draft, and then a second commit that sent it
+ * — two presses for one intention, the first of which asked him to read 600
+ * lines of Markdown he did not write. `Send` packs and sends. The packed brief
+ * is still readable and still editable, behind `Details`, as a hatch for when he
+ * wants to see exactly what leaves. It is prose there, not a terminal: it was
+ * `font-mono` in a fixed `44vh` box, which is most of why this product read as a
+ * console rather than as a composer.
  *
- * **The session picker resumes.** It used to supply context and say so:
- * `claude.ai/new?q=` opened a new conversation, no URL reached an existing one,
- * so choosing a session put its directory and its last exchanges in the brief
- * and printed a `claude --resume` line to paste into a terminal he had to go and
- * find. That was honest about a hand-off nobody wants. A chosen session is now
- * `--resume <id>` in the directory it already ran in, with everything it already
- * knows, and no line anywhere on this sheet asks him to type a command.
- * DECISIONS.md #35 is the decision that has just been overtaken.
+ * **Send goes to a session that is running right now.** `/state` returns only
+ * active sessions — every id in that list is a process on this box — and the
+ * picker narrows it again to the chosen repository. `A new conversation` is the
+ * first row and it is a genuinely new session, never a resume line for an id
+ * that has stopped. A session that dies while the composer is open is dropped
+ * out of the brief rather than handed to `--resume`, which is the bug this pass
+ * exists to kill: Claude Code opening on his phone to say the conversation was
+ * archived.
  *
- * The repository is asked first because it is what that list is drawn from. It
- * used to be asked second, under a session menu that offered all thirty
- * sessions on the machine whatever repository was picked — five directories'
- * work in one list, none of it marked as belonging anywhere in particular.
+ * **The commit is `Sheet`'s footer, not a sticky box.** A `position: sticky`
+ * strip is held inside the scroll container, can be pushed by its padding, and
+ * vanishes the moment an ancestor grows an `overflow: hidden`. The footer slot
+ * is a flex sibling of the scrollport that never scrolls — see the note on
+ * `Sheet`. On the phone page the same arrangement is built here, and the whole
+ * page rides up when the on-screen keyboard appears, because a footer under the
+ * keyboard is a Send button that cannot be pressed.
+ *
+ * **Nothing on this surface takes focus.** Opening the composer must not raise
+ * the keyboard; the one field that does take it is the skill search, and only
+ * after the button that reveals it has been pressed, which is a tap that asked
+ * for a keyboard.
  *
  * **A Slack row is a thread parent, and the replies under it are the work.**
  * "we're seeing 500s on the sync" is the parent; the reply naming the account
  * and the hour is the answer. Every brief written off a Slack row used to carry
  * the question and none of the answers, so the replies Wake already holds are
- * listed here — author, words, when — and each is picked on its own. Not all of
- * them, not the channel, and never a direct message: the poll refuses those
- * before a card exists and the route refuses them again on the way out.
+ * listed under `+ Context` — author, words, when — and each is picked on its
+ * own. Not all of them, not the channel, and never a direct message: the poll
+ * refuses those before a card exists and the route refuses them again on the
+ * way out.
  *
- * **On a phone this is a page.** It was the same modal at every width, and at
- * 390px that modal was measured showing 693px of a 2,431px scroll — eleven
- * template rows, twenty-nine skills, a thread parent with its replies, the
- * attachments, two fields and the brief — under a 48px title bar, over a hundred
- * pixels of desk still visible and not reachable. A modal over a page is the
- * right shape for a question with three fields in it; this has never been that.
- * So below `sm` it takes the screen, with a back control and a chevron path
- * exactly like the card detail beside it. Same sections, same order, same
- * decisions, same one commit at the end: the room is what changed, not the flow.
+ * **On a phone this is a page.** A modal over a page is the right shape for a
+ * question with three fields in it; this has never been that. Below `sm` it
+ * takes the screen, with a back control and a chevron path exactly like the card
+ * detail beside it. Same decisions, same one commit at the end: the room is what
+ * changed, not the flow.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ArrowUpRight, Check, ChevronLeft, ChevronRight, Copy, FileText, Link2, Loader2,
-  Search, Sparkles, SquareTerminal, X,
+  ArrowUpRight, Check, ChevronLeft, ChevronRight, Copy, FileText, FolderGit2, Info, Link2,
+  Loader2, Paperclip, Search, SendHorizontal, Sliders, Sparkles, SquareTerminal, X,
 } from 'lucide-react'
 import {
-  Button, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
+  Button, Chip, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
 } from './primitives'
 import {
-  PERMISSION_MODES, PHONE_COMPOSER, closeLaunch, composerIsAPage, launchApi,
-  launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
-  resolveSkillIds, setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
+  PERMISSION_MODES, PHONE_COMPOSER, claudeAppUrl, closeLaunch, composerIsAPage, launchApi,
+  launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch, resolveSkillIds,
+  setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
   type LaunchState, type PackItem, type PermissionMode, type Session,
 } from '../lib/launch'
-import { useDetailKey, useRoute } from '../lib/route'
+import { navigate, useDetailKey, useRoute } from '../lib/route'
 import { useOverlay } from '../lib/overlay'
 import {
   messageWord, packItemFor, slackApi, slackLinkFor,
   type SlackThread, type SlackThreadItem,
 } from '../lib/slackThreads'
-import { openTerminalAndGo } from '../lib/terminal'
+import { openTerminalAndGo, terminalRoute } from '../lib/terminal'
 import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
 import { ago } from '../lib/time'
 import { Mic } from './voice'
@@ -96,48 +101,69 @@ const KIND_LABEL: Record<string, string> = {
 const sessionRef = (id: string) => `session:${id}`
 
 /**
- * The two browsable lists on this sheet — templates, skills — share one shape:
- * an identity on the left with its check, and the sentence that says what the
- * thing is filling the rest. These three classes are that shape, in one place,
+ * The two browsable lists — templates, skills — share one shape: an identity on
+ * the left with its check, and, where there is room for it, the sentence that
+ * says what the thing is. These three classes are that shape, in one place,
  * because the two lists drifted apart the moment they were written twice.
  *
- * **The name column is sized by the longest name in it.** It was a number
- * chosen once per list — `sm:w-40` for templates, `sm:w-52` for skills — and
- * both were wrong for their own data: measured at 1440×900, `Mapping — unified
- * vs proxy` wanted 162px against 122px of room, and twelve of the twenty-four
- * skill slugs on screen wanted up to 261px against 170px. Both lists ellipsised
- * names while the description beside them was nowhere near the edge of a 760px
- * dialog. A bigger fixed number is the same bug with a later trigger, since
- * both lists are data: `templates.ts` owns one and the machine's skill catalog
- * owns the other, and the next long name added breaks it again silently.
+ * **Below `sm` there is no sentence at all.** The blurb used to wrap onto a
+ * second line on a phone, which turned ten templates into an essay and
+ * twenty-eight skills into a wall — 2,431px of scroll over a 375px screen, all
+ * of it above the field. A name at 44px is one line and a list of names is
+ * scannable; what the blurb was for is now the ⓘ beside the row, pressed on the
+ * one row he is unsure about rather than paid for on all thirty-eight.
+ *
+ * **The name column is sized by the longest name in it**, from `sm` up. It was a
+ * number chosen once per list — `sm:w-40` for templates, `sm:w-52` for skills —
+ * and both were wrong for their own data: measured at 1440×900, `Mapping —
+ * unified vs proxy` wanted 162px against 122px of room, and twelve of the
+ * twenty-four skill slugs on screen wanted up to 261px against 170px. A bigger
+ * fixed number is the same bug with a later trigger, since both lists are data.
  *
  * So the rows share one grid and each row is a `subgrid` of it, which is the
  * only way separate row elements can agree on a column without one of them
  * measuring the others. The track is `fit-content(45%)`: as wide as the longest
- * name and no wider, and never past 45% of the row — the cap is what stops one
- * runaway slug from eating the description, and past it the `truncate` on the
- * label still catches the overflow. Measured: 200px for templates, 299px for
- * skills, nothing clipped in either, row height unchanged at 44px.
- *
- * From `sm` up only. Below it the row is a stack — name over description — for
- * the reason written on the templates section: two columns need about 340px and
- * a phone has 343 for both.
+ * name and no wider, and never past 45% of the row.
  */
 const NAME_GRID = 'sm:grid sm:grid-cols-[fit-content(45%)_minmax(0,1fr)]'
-const NAME_ROW = `w-full flex flex-col items-start gap-1 py-2
-                  sm:grid sm:grid-cols-subgrid sm:col-span-2
-                  sm:items-center sm:gap-0 sm:py-0 sm:min-h-11`
+const NAME_ROW = `flex items-center gap-1 border-b border-rule
+                  sm:grid sm:grid-cols-subgrid sm:col-span-2 sm:gap-0`
 /** `min-w-0` is what lets the cap bite: without it the cell refuses to shrink
     below its own content and the row overflows instead of truncating. */
-const NAME_CELL = 'w-full sm:w-auto min-w-0 shrink-0 flex items-center gap-2 sm:pr-4'
+const NAME_CELL = 'flex-1 min-w-0 flex items-center gap-2 min-h-11 text-left sm:pr-4'
 
 /**
- * `Open in Claude Code`, in full, because the missing two words were the whole
- * bug: this used to say `Open in Claude` over a control that opened claude.ai.
- * The product name is the honest title now that the product name is what it
- * opens. It is the sheet's title on a laptop and the last crumb on a phone.
+ * What this surface is called, which is now the verb rather than the product.
+ *
+ * It said `Open in Claude Code`, over a control that opened Claude Code — honest,
+ * and still the wrong name for a composer. What happens here is that a message
+ * goes to a conversation; "open" is what the Sessions page does. It is the
+ * sheet's title on a laptop and the last crumb on a phone.
  */
-const COMPOSER_TITLE = 'Open in Claude Code'
+const COMPOSER_TITLE = 'Send to Claude Code'
+
+/**
+ * The hatch, said in full wherever a screen reader or a hover asks.
+ *
+ * The visible label is four words; this is the sentence behind it, and it is
+ * written out because the honest version of this control is a warning. It opens
+ * a NEW conversation in the Claude app — a different product from Claude Code,
+ * with no repository, no tools and nothing to resume — and it never carries a
+ * session id, because there is no URL anywhere that reaches an existing
+ * conversation. It is here for the case the box is not: a phone, away from the
+ * desk, with a thread worth pasting somewhere that can read it.
+ */
+const APP_HATCH =
+  'Open a new conversation in the Claude app. It has no repository and cannot reach a session on this box.'
+
+/** The three rooms behind the chips. `null` is the field, which is the default. */
+type Panel = 'context' | 'shape' | 'run'
+
+const PANEL_TITLE: Record<Panel, string> = {
+  context: 'Context',
+  shape: 'Shape',
+  run: 'The brief, and how it runs',
+}
 
 /**
  * Which room the composer is drawn in — asked by width, because width is what
@@ -163,12 +189,62 @@ function useComposerIsAPage(): boolean {
   return page
 }
 
+/**
+ * How much of the screen the on-screen keyboard is covering, in pixels.
+ *
+ * A `position: fixed` box is placed against the *layout* viewport, which iOS
+ * does not shrink when the keyboard comes up — so a footer pinned above
+ * `--nav-h` sits behind the keyboard exactly when it is needed, on the one
+ * surface whose first act is to put a caret in a field. `visualViewport` is the
+ * only thing that reports the real area, and it reports it as a resize rather
+ * than as a media query.
+ *
+ * Anything under 80px is read as nothing. Browser chrome sliding in and out
+ * moves this by a few dozen pixels on every scroll, and a footer that shuffles
+ * with the URL bar is worse than one that ignores it; a keyboard is hundreds of
+ * pixels and cannot be confused with either.
+ */
+function useKeyboardInset(): number {
+  const [inset, setInset] = useState(0)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const read = () => {
+      const covered = window.innerHeight - (vv.height + vv.offsetTop)
+      setInset(covered > 80 ? Math.round(covered) : 0)
+    }
+    read()
+    vv.addEventListener('resize', read)
+    vv.addEventListener('scroll', read)
+    return () => {
+      vv.removeEventListener('resize', read)
+      vv.removeEventListener('scroll', read)
+    }
+  }, [])
+  return inset
+}
+
+/**
+ * The composer, mounted only while it is open.
+ *
+ * It used to stay mounted and render an empty panel on the way out, which is
+ * what let the sheet keep its slide-away. Two things are worth more than that
+ * animation: the state can live in one component that owns both the scrolled
+ * body and the footer — which is what moving the commit into `Sheet`'s `footer`
+ * slot requires — and the half-written draft is seeded during the first render
+ * rather than in an effect, so a resumed brief never paints an empty field.
+ *
+ * `key` is the subject, so opening a different brief while one is up rebuilds
+ * the composer instead of leaving the previous brief's panel open over it.
+ */
 export function LaunchSheet() {
   const basket = useLaunchBasket()
   const page = useComposerIsAPage()
 
-  const body = basket.open && (
-    <LaunchBody
+  if (!basket.open) return null
+  return (
+    <LaunchComposer
+      key={basket.subject}
       items={basket.items}
       preferred={basket.templates}
       repoHint={basket.repoHint}
@@ -177,14 +253,6 @@ export function LaunchSheet() {
       permissionMode={basket.permissionMode}
       page={page}
     />
-  )
-
-  if (page) return basket.open ? <LaunchPage>{body}</LaunchPage> : null
-
-  return (
-    <Sheet open={basket.open} onClose={closeLaunch} title={COMPOSER_TITLE} wide>
-      {body}
-    </Sheet>
   )
 }
 
@@ -195,33 +263,49 @@ export function LaunchSheet() {
  * same `pad-top`, the same stop at `--nav-h`, the same reason for each. A fixed
  * box at `top: 0` starts under the notch, and the phone tab bar is not this
  * page's to cover: `styles.css` states that as a rule and the card sheet that
- * broke it made all six destinations unreachable while a card was open. Between
- * those two edges is the whole surface the shell gives anything, which is what a
- * page means here.
+ * broke it made all six destinations unreachable while a card was open.
+ *
+ * The one departure is the keyboard. `--nav-h` is where the page stops when
+ * nothing is covering it; when something is, the page stops at the top of the
+ * keyboard instead, which is the only way the footer stays pressable while he is
+ * typing into the field directly above it.
  *
  * `z-[52]`, and the two pixels are load-bearing. The ladder is 50 for a sheet
  * and for the card detail page, 55 for a `Menu` — which is what the repository
- * and session pickers on this very surface open as — and 60 for the palette.
- * This has to cover the card detail, because the card detail is what it is
- * usually opened from and is still standing behind it, and it has to stay under
- * its own menus. Two equal z-indexes would leave that to DOM insertion order,
- * which is true today and is not a thing to depend on.
+ * and session chips on this very surface open as — and 60 for the palette. This
+ * has to cover the card detail, because the card detail is what it is usually
+ * opened from and is still standing behind it, and it has to stay under its own
+ * menus. Two equal z-indexes would leave that to DOM insertion order, which is
+ * true today and is not a thing to depend on.
  *
  * `useOverlay(true)` is the same non-decoration it is on the detail page: the
  * desk binds `j`, `k`, `e` and `s` to the document, two of those are destructive
  * and unconfirmed, and a surface that does not count itself leaves them live
  * underneath it.
  */
-function LaunchPage({ children }: { children: React.ReactNode }) {
+function LaunchPage({ footer, children }: { footer: React.ReactNode; children: React.ReactNode }) {
   useOverlay(true)
+  const kb = useKeyboardInset()
 
   return createPortal(
     <div
-      style={{ bottom: 'var(--nav-h)' }}
+      style={{ bottom: kb > 0 ? `${kb}px` : 'var(--nav-h)' }}
       className="fixed inset-x-0 top-0 z-[52] pad-top flex flex-col bg-ink-900"
     >
       <LaunchPath onBack={closeLaunch} />
-      {children}
+      {/* The vertical pad is on the content and not on the scroller, which is
+          the rule `Sheet` already states: a scroller's own padding is outside
+          the scrollport and cannot be cancelled by anything inside it. */}
+      <div className="grow min-h-0 overflow-y-auto overscroll-contain pad-x">
+        <div className="py-4">{children}</div>
+      </div>
+      {/* A flex sibling of the scroller, never a `sticky` box inside it. See the
+          note on `Sheet`'s own footer for the three ways sticky loses. Absent
+          rather than empty while `/state` is still being read: a 49px bar with
+          nothing in it is a control the eye goes to and finds nothing at. */}
+      {footer && (
+        <div className="shrink-0 pad-x py-3 border-t border-rule bg-ink-900">{footer}</div>
+      )}
     </div>,
     document.body,
   )
@@ -230,7 +314,7 @@ function LaunchPage({ children }: { children: React.ReactNode }) {
 /**
  * Where the composer sits, and the way out of it, in one line.
  *
- * `‹ Card › Open in Claude Code`. The shape is `DetailPath`'s and the reasons
+ * `‹ Card › Send to Claude Code`. The shape is `DetailPath`'s and the reasons
  * are its reasons: the first segment is the control, the rest is the sentence it
  * completes, and a bare chevron with no word beside it is a guess about what it
  * will close.
@@ -274,7 +358,9 @@ function LaunchPath({ onBack }: { onBack: () => void }) {
   )
 }
 
-function LaunchBody({
+/* -------------------------------- the state ------------------------------- */
+
+function LaunchComposer({
   items, preferred, repoHint, suggestedTitle, session, permissionMode, page,
 }: {
   items: PackItem[]
@@ -300,10 +386,7 @@ function LaunchBody({
    *
    * Copied, not referenced. `rememberLaunch` mutates the stored draft in place —
    * that is what makes it free to call on every keystroke — so holding the live
-   * object here would give `seed` a different meaning on every render, and every
-   * read of it below would silently become "as it is now" rather than "as it was
-   * when this opened". Only the initialisers read it today; a copy is what keeps
-   * that from mattering.
+   * object here would give `seed` a different meaning on every render.
    */
   const seed = useRef({ ...launchDraft() }).current
 
@@ -317,14 +400,13 @@ function LaunchBody({
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState<{ packId: string; brief: string } | null>(
     seed.brief ? { packId: seed.brief.packId, brief: seed.brief.text } : null)
+  const [panel, setPanel] = useState<Panel | null>(null)
 
   useEffect(() => {
     launchApi.state().then(setMeta).catch(e => setErr((e as Error).message))
   }, [])
 
-  /* Every decision on this surface, written back where it survives an unmount.
-     The brief's own text is remembered by `Review`, which is the only thing
-     that holds it while it is being edited. */
+  /* Every decision on this surface, written back where it survives an unmount. */
   useEffect(() => {
     rememberLaunch({ templates, cwd, skills, instruction })
   }, [templates, cwd, skills, instruction])
@@ -364,7 +446,7 @@ function LaunchBody({
 
   /**
    * Null means "whatever the templates say", so selecting one folds its skills
-   * into the list above and the count changes with it.
+   * into the list above and the count on the chip changes with it.
    *
    * Both lists go through `resolveSkillIds` before they meet. A template names
    * `truto-cli-toolbelt`; the picker stores `B/truto-cli-toolbelt`; without
@@ -377,14 +459,49 @@ function LaunchBody({
   )
   const effectiveSkills = skills ?? templateSkills
 
+  /**
+   * A packed brief is only true of the decisions it was packed from.
+   *
+   * The hatch writes a real pack — a row, a file on disk, a working directory —
+   * and `send` reuses it rather than packing a second time, so that what he read
+   * is what leaves. That is right until something underneath it moves: open the
+   * hatch, read the brief, go back, change the repository, and Send would start
+   * a session in the *old* repository, because the pack carries the cwd and the
+   * pack is what gets opened. Nothing on screen would say so.
+   *
+   * So any change to what the pack is made of drops it, and the hatch offers to
+   * write it again. It costs an edited brief when he then changes his mind about
+   * the shape, which is the honest half of the trade: a brief that no longer
+   * describes the decisions under it is worse than one he has to re-read.
+   *
+   * `shape` is null until `/state` lands, because `effectiveSkills` falls back to
+   * the templates' union and that union is empty until the templates are known —
+   * comparing against it would drop a resumed brief on the first paint.
+   */
+  const shape = meta ? JSON.stringify([
+    templates, cwd, effectiveSkills, instruction, session, permissionMode,
+    items.map(i => i.ref),
+  ]) : null
+  const packedFrom = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (shape === null) return
+    if (packedFrom.current === null || packedFrom.current === shape) {
+      packedFrom.current = shape
+      return
+    }
+    packedFrom.current = shape
+    setDraft(null)
+  }, [shape])
+
   /*
    * Which desk row this brief came off, kept once it is known.
    *
    * It rides in on the objects (`PackItem.group`), because the detail pane is
    * the only thing that sees a whole card and it hands over items and nothing
    * else. Sticky rather than recomputed: removing the card object from the
-   * attachments below should not also take away the list of replies he was in
-   * the middle of picking from.
+   * attachments should not also take away the list of replies he was in the
+   * middle of picking from.
    */
   const [group, setGroup] = useState<string | null>(null)
   useEffect(() => {
@@ -392,29 +509,80 @@ function LaunchBody({
     if (g && g !== group) setGroup(g)
   }, [items])
 
-  /* On a page these two answers have to fill the column they are in, or the
-     path bar sits over a viewport-tall stripe of nothing. */
-  const alone = page ? 'grow min-h-0 pad-x' : ''
-  if (err && !meta) return <p className={`text-sm text-bad py-6 ${alone}`}>{err}</p>
+  /**
+   * The room, whatever is in it.
+   *
+   * Every return below goes through this, including the two that happen before
+   * `/state` has answered. They used to return a bare paragraph and a bare
+   * spacer, which on a phone meant the composer's loading state was a stray line
+   * of text rendered inside the page it was supposed to be covering — the
+   * surface only existed once the fetch landed.
+   */
+  const shell = (children: React.ReactNode, footer: React.ReactNode = null) =>
+    page
+      ? <LaunchPage footer={footer}>{children}</LaunchPage>
+      : <Sheet open onClose={closeLaunch} title={COMPOSER_TITLE} footer={footer} wide>{children}</Sheet>
+
+  if (err && !meta) return shell(<p className="text-sm text-bad leading-snug">{err}</p>)
   // Nothing while the machine is read. It takes one round trip and a sentence
   // saying so is chrome that teaches.
-  if (!meta) return page ? <div className="grow min-h-0" /> : null
+  if (!meta) return shell(null)
 
-  const write = async () => {
+  /**
+   * Write the pack, which is what "packing happens on Send" means.
+   *
+   * It returns the brief rather than only setting state, because `send` needs
+   * the text in the same tick and a `useState` setter does not hand it back.
+   * A brief already written — he opened the hatch and read it, maybe edited it —
+   * is reused rather than repacked, so what he approved is what goes.
+   */
+  const pack = async () => {
+    const p = await launchApi.createPack({
+      templates,
+      title: suggestedTitle ?? undefined,
+      cwd,
+      instruction: instruction.trim() || undefined,
+      items,
+      skills: effectiveSkills,
+      sessionId: session,
+      permissionMode,
+    })
+    const next = { packId: p.id, brief: p.first_message ?? '' }
+    setDraft(next)
+    return next
+  }
+
+  /**
+   * The one commit, and the two shapes it takes.
+   *
+   * **A session that is running gets a message.** `POST /sessions/:id/send`
+   * pastes one more turn into the conversation and refuses, in a sentence, a
+   * session that has stopped or that Wake did not start. That refusal is the
+   * whole point: the id used to go to `--resume` and Claude Code was left to be
+   * the one that said the session was archived, on his phone, after the tap.
+   *
+   * **A new conversation gets a session.** `openTerminalAndGo` is the call that
+   * also *records* the hand-off — it writes the approved text back to the pack
+   * row and to the pack file before starting anything — which is the artifact
+   * this product promises to keep, and the reason the new-conversation half does
+   * not go through the plainer session route.
+   *
+   * A refusal is never swallowed: the composer stays open with the brief still
+   * in it, so the next press can be a different decision rather than a retype.
+   */
+  const send = async () => {
+    if (busy) return
     setBusy(true)
     setErr(null)
     try {
-      const pack = await launchApi.createPack({
-        templates,
-        title: suggestedTitle ?? undefined,
-        cwd,
-        instruction: instruction.trim() || undefined,
-        items,
-        skills: effectiveSkills,
-        sessionId: session,
-        permissionMode,
-      })
-      setDraft({ packId: pack.id, brief: pack.first_message ?? '' })
+      const { packId, brief } = draft ?? await pack()
+      if (session) {
+        await launchApi.send(session, brief)
+        navigate(terminalRoute(session))
+      } else {
+        await openTerminalAndGo({ packId, brief })
+      }
+      resetLaunch()
     } catch (e) {
       setErr((e as Error).message)
     } finally {
@@ -422,214 +590,210 @@ function LaunchBody({
     }
   }
 
-  const body = (
+  const setBrief = (text: string) =>
+    setDraft(d => (d ? { ...d, brief: text } : d))
+
+  /* Off with a reason, rather than a commit that answers 503 after the brief has
+     been written and read. `missing` is the server's own sentence naming which
+     of tmux, python3 or the claude binary is not on this box. */
+  const blocked = meta.terminal && !meta.terminal.available.ok
+    ? meta.terminal.available.missing ?? 'this machine cannot start a Claude Code session'
+    : null
+
+  const provenance = `${items.length} object${items.length === 1 ? '' : 's'} · ${
+    cwd ? (meta.repos.find(r => r.path === cwd)?.name ?? 'no repository') : 'no repository'
+  } · ${effectiveSkills.length} skill${effectiveSkills.length === 1 ? '' : 's'}`
+
+  const body = panel === null ? (
     <>
-      <Composer
-        items={items} meta={meta} cwd={cwd} setCwd={setCwd}
-        skills={effectiveSkills} setSkills={setSkills}
-        templates={templates}
-        onToggleTemplate={id => {
-          setTemplates(t => (t.includes(id) ? t.filter(x => x !== id) : [...t, id]))
-          // A template's skills are a starting point, not an answer: dropping the
-          // manual override lets the new selection's union show through.
-          setSkills(null)
-        }}
-        instruction={instruction} setInstruction={setInstruction}
-        session={session} permissionMode={permissionMode}
-        group={group}
+      {/*
+        The field, first and alone.
+
+        No heading over it. A section eyebrow reading `WHAT DO YOU NEED?` above a
+        field whose placeholder says the same thing is one line of the fold spent
+        saying a thing twice, and the fold is the product on this screen.
+      */}
+      <GrowingField
+        value={instruction}
+        onChange={setInstruction}
+        placeholder="What do you need? Leave it empty and the templates below speak for you."
       />
 
-      {draft ? (
-        <Review
-          packId={draft.packId} initial={draft.brief} session={session}
-          page={page}
-          // Off with a reason, rather than a commit that answers 503 after the
-          // brief has been written and read. `missing` is the server's own
-          // sentence naming which of tmux, python3 or the claude binary is not
-          // on this box.
-          blocked={meta.terminal && !meta.terminal.available.ok
-            ? meta.terminal.available.missing ?? 'this machine cannot start a Claude Code session'
-            : null}
-          provenance={`${items.length} object${items.length === 1 ? '' : 's'} · ${
-            cwd ? (meta.repos.find(r => r.path === cwd)?.name ?? 'no repository') : 'no repository'
-          } · ${effectiveSkills.length} skill${effectiveSkills.length === 1 ? '' : 's'}`} />
-      ) : (
-        /* `-mb-4` for the same reason as `-mx-4`: the bar breaks out of the
-           padding on every edge it touches, so it comes to rest on its
-           scroller's own bottom edge rather than 16px above it with list rows
-           sliding through the strip underneath. `Sheet` owns the other half of
-           this on a laptop — its bottom pad is inside the scrolled content
-           precisely so a sticky box can reach past it — and the page below
-           carries the same arrangement for the same reason.
+      {/*
+        Everything that used to be a section, as chips.
 
-           The ground is the surface's own, which differs between the two: a
-           sheet is `ink-850` and a page is `ink-900`, and a strip painted the
-           wrong one is a 64px band of the other product.
+        Wrapping rather than scrolling: a rail that scrolls hides the last chip
+        behind an edge with nothing saying why, and five chips at 375px are two
+        short rows. The repository and the session are menus on the chip itself
+        because they are one choice each; the other three open a room.
+      */}
+      <div className="flex flex-wrap items-center gap-2 mt-3">
+        <RepoChip repos={meta.repos} cwd={cwd} setCwd={setCwd} />
+        <SessionChip
+          sessions={meta.sessions} repos={meta.repos} repo={cwd}
+          value={session} setCwd={setCwd}
+        />
+        <Chip onClick={() => setPanel('context')} mark={<Paperclip size={13} aria-hidden />}
+          title="What this brief quotes" ariaLabel="Context">
+          + Context{items.length ? ` · ${items.length}` : ''}
+        </Chip>
+        <Chip onClick={() => setPanel('shape')} mark={<Sliders size={13} aria-hidden />}
+          title="Templates and skills" ariaLabel="Shape">
+          Shape{templates.length + effectiveSkills.length
+            ? ` · ${templates.length + effectiveSkills.length}` : ''}
+        </Chip>
+        {/* The overflow, with a name instead of a glyph — the same call
+            `pages/Session.tsx` makes, in the same words, for the same reason.
+            An ellipsis is banned in this codebase outright and rightly: an
+            anonymous lozenge on a phone is something you tap to find out what it
+            does. `Details` and not `More`, which is the same anonymity spelled
+            in letters. */}
+        <Chip onClick={() => setPanel('run')} title={PANEL_TITLE.run} ariaLabel={PANEL_TITLE.run}>
+          Details
+        </Chip>
+      </div>
+    </>
+  ) : (
+    <>
+      <PanelPath title={PANEL_TITLE[panel]} onBack={() => setPanel(null)} />
 
-           `-mb-4` only while there is nothing after it. A refusal from
-           `createPack` prints below this strip, and a negative bottom margin
-           with something following it does not free 16px, it pulls that
-           something 16px up underneath the bar. */
-        <div className={`sticky bottom-0 -mx-4 mt-4 px-4 py-3 border-t border-rule
-                         flex items-center ${err ? '' : '-mb-4'}
-                         ${page ? 'bg-ink-900' : 'bg-ink-850'}`}>
-          {/* The one commit on this surface, and the only amber on it. */}
-          <Button size="lg" variant="primary" className="ml-auto" onClick={write} disabled={busy}>
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
-            {busy ? 'Writing' : 'Write the brief'}
-          </Button>
-        </div>
+      {panel === 'context' && (
+        <>
+          <section className="py-4">
+            <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Attachments</h3>
+            {/* A line that names the state, not a dash. A dash is what a cell
+                prints when a value is missing; a section with nothing in it is
+                not a missing value, it is a brief that is going to be carried
+                entirely by the templates and what he typed. */}
+            {items.length === 0 && (
+              <Empty>Nothing attached — this brief carries the templates and your own instruction.</Empty>
+            )}
+            {items.map(i => (
+              <div key={`${i.kind}:${i.ref}`}
+                className="flex items-center h-11 border-b border-rule last:border-0">
+                {/* 96px for a word never longer than `Session` — 55px at this
+                    size — is 40px a phone does not have. The title beside it is
+                    the only thing that tells two Slack replies apart. */}
+                <span className="text-sm text-fg-mute w-16 sm:w-24 shrink-0">
+                  {KIND_LABEL[i.kind] ?? i.kind}
+                </span>
+                <span className="text-sm text-fg-dim truncate grow min-w-0" title={i.ref}>
+                  {i.title ?? i.ref}
+                </span>
+                {/* The character count that used to end this row is gone. It was
+                    there because the brief travelled in a URL with a budget and
+                    one long quote could spend it; the brief is handed to a
+                    process now. A number measuring nothing, in the column a
+                    phone needed for the title. */}
+                <span className="shrink-0 pl-2">
+                  <Button size="sm" variant="ghost" title="Remove" ariaLabel="Remove"
+                    onClick={() => removeFromLaunch(i.ref)}>
+                    <X size={14} />
+                  </Button>
+                </span>
+              </div>
+            ))}
+          </section>
+
+          {/* Directly under the attachments, because that is what it adds to:
+              the replies picked here become rows in the list above, with their
+              own refs and their own links, and can be taken off from either. */}
+          <SlackPicker group={group} attached={items} />
+        </>
       )}
 
-      {err && <p className="text-sm text-bad mt-3">{err}</p>}
+      {panel === 'shape' && (
+        <>
+          <TemplatePicker
+            all={meta.templates} chosen={templates}
+            onToggle={id => {
+              setTemplates(t => (t.includes(id) ? t.filter(x => x !== id) : [...t, id]))
+              // A template's skills are a starting point, not an answer: dropping
+              // the manual override lets the new selection's union show through.
+              setSkills(null)
+            }}
+          />
+          <SkillPicker all={meta.skills} selected={effectiveSkills} onChange={setSkills} />
+        </>
+      )}
+
+      {panel === 'run' && (
+        <RunPanel
+          mode={permissionMode} session={session} page={page}
+          draft={draft} setBrief={setBrief} onWrite={pack} provenance={provenance}
+        />
+      )}
     </>
   )
 
-  /*
-   * One scroll, in reading order: which session this is about, where the work
-   * is, which templates and skills, what is attached, what you need and how it
-   * should run — and then the brief itself, which is the last beat and the only
-   * commit.
-   *
-   * On a laptop that scroll belongs to `Sheet`, which owns the scroller and the
-   * padding around it; here the content is handed over bare. On a phone this
-   * component *is* the page below the path bar, so it owns both: `grow min-h-0`
-   * takes whatever the path bar left, `overflow-y-auto` puts the one scroll
-   * inside it, and the horizontal pad is `.pad-x` — the page pad, applied once
-   * by the class that owns it — rather than the sheet's own `px-4`.
-   *
-   * The vertical pad is on the content and not on the scroller, which is the
-   * rule `Sheet` already states and the reason a `sticky bottom-0` strip can
-   * cancel it with `-mb-4` and come to rest on the real bottom edge.
-   */
-  if (page) {
-    return (
-      <div className="grow min-h-0 overflow-y-auto overscroll-contain pad-x">
-        <div className="py-4">{body}</div>
-      </div>
-    )
-  }
+  const footer = (
+    <>
+      <div className="flex items-center gap-2">
+        {/*
+          A real anchor, and it has to stay one.
 
-  return <div>{body}</div>
+          `https://claude.ai/…` is a universal link on iOS: a genuine link
+          navigation hands it to the Claude app, and `window.open` after an await
+          lands in Safari instead. The URL is built from the server's own
+          hand-off config rather than written here, so a deployment that points
+          `WAKE_HANDOFF_URL` somewhere else is followed rather than contradicted.
+
+          It carries the packed brief when there is one and what he has typed
+          when there is not, and it never carries a session id — there is no URL
+          that reaches an existing conversation, which is exactly why this is the
+          hatch and not the commit.
+        */}
+        <a
+          href={claudeAppUrl(meta.handoff, draft?.brief ?? instruction)}
+          target="_blank"
+          rel="noreferrer"
+          title={APP_HATCH}
+          aria-label={APP_HATCH}
+          className="inline-flex items-center gap-2 min-w-0 h-11 -ml-2 px-2 rounded-control
+                     text-sm font-medium text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                     transition-colors duration-100"
+        >
+          <ArrowUpRight size={14} aria-hidden className="shrink-0" />
+          <span className="truncate">Open in the Claude app</span>
+        </a>
+
+        {/* The one commit on this surface, and the only amber on it. */}
+        <Button size="lg" variant="primary" className="ml-auto shrink-0"
+          onClick={send} disabled={busy || !!blocked}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <SendHorizontal size={14} />}
+          {busy
+            ? (session ? 'Sending' : 'Starting')
+            : (session ? 'Send to session' : 'Start a session')}
+        </Button>
+      </div>
+
+      {/* Two different sentences, and neither is a status code. `blocked` is what
+          this machine is missing and is known before the press; `err` is what the
+          server refused and arrives after it. Both are printed as they came,
+          because both were written for a person. */}
+      {blocked && <p className="text-sm text-bad mt-2 leading-snug">{blocked}</p>}
+      {err && <p className="text-sm text-bad mt-2 leading-snug">{err}</p>}
+    </>
+  )
+
+  return shell(body, footer)
 }
 
-/* -------------------------------- the sheet -------------------------------- */
-
 /**
- * Hairline-separated blocks, each a heading and no paragraph.
+ * The way back out of a room, shaped like the path bar above it.
  *
- * The objects are full-width rows rather than 16-character chips: a card with
- * three sources rendered three chips he could not tell apart, two of them
- * different Claude sessions. A row is the only place two sessions differ.
+ * A panel with no visible exit is a modal inside a modal, and on a phone the
+ * only other way out is the OS back gesture — which closes the whole composer,
+ * because that is the single history entry this surface pushes.
  */
-function Composer({
-  items, meta, cwd, setCwd, skills, setSkills, templates, onToggleTemplate,
-  instruction, setInstruction, session, permissionMode, group,
-}: {
-  items: PackItem[]
-  meta: LaunchState
-  cwd: string | null
-  setCwd: (v: string | null) => void
-  skills: string[]
-  setSkills: (v: string[]) => void
-  templates: string[]
-  onToggleTemplate: (id: string) => void
-  instruction: string
-  setInstruction: (v: string) => void
-  session: string | null
-  permissionMode: PermissionMode
-  /** The desk row, when this brief came off one. Null from the palette or Work. */
-  group: string | null
-}) {
+function PanelPath({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="divide-y divide-rule">
-      {/* Where the work is, before which conversation about it — the wider
-          choice first, and the one the list under it is drawn from. */}
-      <RepoPicker repos={meta.repos} cwd={cwd} setCwd={setCwd} />
-
-      <SessionPicker
-        sessions={meta.sessions} repos={meta.repos} repo={cwd}
-        value={session} attached={items} setCwd={setCwd}
-      />
-
-      <TemplatePicker all={meta.templates} chosen={templates} onToggle={onToggleTemplate} />
-
-      <SkillPicker all={meta.skills} selected={skills} onChange={setSkills} />
-
-      <section className="py-4">
-        {/*
-          The unit once, over the column — not glued to every number.
-
-          The cell read `36c`: a bare `c` with no header, no tooltip and nothing
-          else on the sheet to expand it, which is a unit only the person who
-          wrote it can read. What the eye wants to do with that column is
-          compare down it, so the word moves up into an eyebrow beside the
-          section's own and the cells stay numeric.
-
-          The 38px is the remove control's own footprint — a `sm` Button's 30px
-          plus the 8px it is padded by — so the eyebrow's right edge lands on
-          the numbers' right edge instead of over the crosses.
-        */}
-        <div className="flex items-baseline mb-2">
-          <h3 className="text-eyebrow uppercase text-fg-mute">Attachments</h3>
-          {items.length > 0 && (
-            <span className="ml-auto pr-[38px] text-eyebrow uppercase text-fg-mute">Characters</span>
-          )}
-        </div>
-        {/* A line that names the state, not a dash. A dash is what a cell prints
-            when a value is missing; a section with nothing in it is not a
-            missing value, it is a brief that is going to be carried entirely by
-            what is above and below this. */}
-        {items.length === 0 && (
-          <Empty>Nothing attached — this brief carries the templates above and your own instruction.</Empty>
-        )}
-        {items.map(i => (
-          <div key={`${i.kind}:${i.ref}`} className="flex items-center h-11 border-b border-rule last:border-0">
-            {/* 96px for a word that is never longer than `Session` — 55px at
-                this size — is 40px a phone does not have. The title beside it
-                is the only thing that tells two Slack replies apart and it had
-                180px of a 358px row to do it in, minus the count and the cross.
-                The laptop keeps the wider column, where a fact grid reads
-                better for having one; below `sm` the column is the width of
-                its own longest word. */}
-            <span className="text-sm text-fg-mute w-16 sm:w-24 shrink-0">{KIND_LABEL[i.kind] ?? i.kind}</span>
-            <span className="text-sm text-fg-dim truncate grow min-w-0" title={i.ref}>
-              {i.title ?? i.ref}
-            </span>
-            {/* How much of this object the brief actually quotes, before Write
-                rather than after. It used to be here because the link had a
-                budget and one long quote could spend it; the link is gone and
-                the number is not — `PER_ITEM_QUOTE_CHARS` still cuts any single
-                attachment at 2,000 characters, so this is the column that says
-                which quote is about to be cut. The unit is up in the eyebrow. */}
-            <span className="text-sm text-fg-mute tnum shrink-0 pl-3">
-              {Math.min(i.excerpt?.length ?? 0, 2000).toLocaleString()}
-            </span>
-            <span className="shrink-0 pl-2">
-              <Button size="sm" variant="ghost" title="Remove" ariaLabel="Remove"
-                onClick={() => removeFromLaunch(i.ref)}>
-                <X size={14} />
-              </Button>
-            </span>
-          </div>
-        ))}
-      </section>
-
-      {/* Directly under the attachments, because that is what it adds to: the
-          replies picked here become rows in the list above, with their own refs
-          and their own links, and can be taken off from either place. */}
-      <SlackPicker group={group} attached={items} />
-
-      <section className="py-4">
-        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">What do you need?</h3>
-        <GrowingField
-          value={instruction}
-          onChange={setInstruction}
-          placeholder="Type what you need. The templates above fill this in if you leave it empty."
-        />
-      </section>
-
-      <PermissionModeBlock mode={permissionMode} session={session} />
+    <div className="flex items-center gap-2 py-1 border-b border-rule">
+      <Button variant="default" size="sm" onClick={onBack}
+        ariaLabel="Back to the brief" title="Back to the brief" className="shrink-0">
+        <ChevronLeft size={14} aria-hidden /> Brief
+      </Button>
+      <span className="truncate text-sm text-fg-dim">{title}</span>
     </div>
   )
 }
@@ -640,24 +804,18 @@ function Composer({
  * Which template, or templates — and the one that is not a template like the
  * others.
  *
- * Name beside description on a laptop, name over description on a phone. Two
- * columns need about 340px to work and a 375px screen leaves 343 for both, so
- * the split gave the name 122 and the description 181 against 338 — every
- * blurb cut mid-sentence (`A customer report, taken to …`, `One stack trace to
- * the line th…`) and half the names cut with them. The blurb is the entire
- * reason this list is browsable rather than a dropdown of slugs, so below `sm`
- * it takes the whole width and wraps. The row stops being a fixed 44px there,
- * because a row that wraps is not one line tall.
+ * Names only on a phone, name beside description on a laptop. The blurb used to
+ * take the whole width below `sm` and wrap, which was the right answer to a
+ * worse question: with the list on first paint, ten wrapped blurbs were the
+ * screen. Behind `Shape` it is a list you came to read, so it is a list of names
+ * at 44px with the sentence one press away.
  *
  * **The voice rows are under their own heading.** Ten of these say what to find
  * out; the Humanizer says how the last message reads, and it is meant to be
  * chosen on top of one of the others rather than instead of one. As eleven
  * identical rows in one list that is unreadable — the list's own shape says
  * "pick one of eleven jobs", and the first thing anybody would assume is that
- * choosing `Humanizer` un-chooses `Customer incident`. A heading is the one
- * treatment that fixes it without adding a second: the rows keep exactly the
- * check, the ground and the blurb they have everywhere else, and what changes
- * is the sentence the group is filed under.
+ * choosing `Humanizer` un-chooses `Customer incident`.
  *
  * `kind` is optional on the wire and absent means `investigation`, so a `/state`
  * that does not send it yet renders precisely the flat list this replaced —
@@ -672,55 +830,34 @@ function TemplatePicker({
   chosen: string[]
   onToggle: (id: string) => void
 }) {
+  const [info, setInfo] = useState<string | null>(null)
   const work = all.filter(t => t.kind !== 'voice')
   const voice = all.filter(t => t.kind === 'voice')
 
-  const row = (t: LaunchState['templates'][number]) => {
-    const on = chosen.includes(t.id)
-    return (
-      <button
-        key={t.id}
-        onClick={() => onToggle(t.id)}
-        aria-pressed={on}
-        /* This list stays inline rather than becoming a menu: it is a
-           multi-select, and its blurbs are the whole reason it is browsable —
-           a popup that closes on the first pick can be neither. What it borrows
-           from the rest of the product is the row treatment, so a chosen row is
-           a lit ground here exactly as it is on the desk, instead of a check and
-           nothing else. */
-        className={`${NAME_ROW} text-left border-b border-rule last:border-0
-                   ${rowStateClass({ selected: on })}`}
-      >
-        {/* A check, not a filled amber box. One selected template used to be one
-            accent mark, so choosing three spent the budget. */}
-        <span className={NAME_CELL}>
-          <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
-          <span className={`text-sm truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>{t.label}</span>
-        </span>
-        {/* Two lines, not one clipped one. The blurb is the whole of what tells
-            `Sentry issue` from `Sync job failure`, and at 760px of dialog a
-            one-line clamp ellipsised half of them — the picker then reads by
-            title, which is the one thing 26 of these titles cannot be told apart
-            by. Two 18px lines still sit inside the 44px row, so the grid does
-            not move. */}
-        <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{t.blurb}</span>
-      </button>
-    )
-  }
+  const row = (t: LaunchState['templates'][number]) => (
+    <PickRow
+      key={t.id}
+      label={t.label}
+      blurb={t.blurb}
+      on={chosen.includes(t.id)}
+      onToggle={() => onToggle(t.id)}
+      open={info === t.id}
+      onInfo={() => setInfo(v => (v === t.id ? null : t.id))}
+    />
+  )
 
   return (
     <section className="py-4">
       {/* A label, not a readout. `Templates — 1` put a number where the name
           goes, and the number was already on screen: every chosen row has a
-          check on it. */}
+          check on it, and the chip that opened this room carries the count. */}
       <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Templates</h3>
       <div className={NAME_GRID}>{work.map(row)}</div>
 
       {voice.length > 0 && (
         <>
           {/* The heading carries the whole of the distinction, so it says it
-              rather than naming a category and leaving him to guess. `mt-4` is
-              the same air the section headings above get. */}
+              rather than naming a category and leaving him to guess. */}
           <h3 className="text-eyebrow uppercase text-fg-mute mb-2 mt-4">Voice, worn over the above</h3>
           <div className={NAME_GRID}>{voice.map(row)}</div>
         </>
@@ -730,17 +867,80 @@ function TemplatePicker({
 }
 
 /**
+ * One row of a browsable list: a name you press, and a sentence you can ask for.
+ *
+ * The ⓘ is the whole of what makes a names-only list usable, and it is a real
+ * 44px control rather than a long-press: a long-press is invisible, has no
+ * keyboard equivalent, and on a list that also scrolls it fights the gesture
+ * that scrolls it. Above `sm` there is room for the sentence beside the name, so
+ * the button is not rendered at all — a disclosure for something already
+ * disclosed is a control that does nothing.
+ */
+function PickRow({
+  label, blurb, on, mono, onToggle, open, onInfo,
+}: {
+  label: string
+  blurb: string
+  on: boolean
+  /** Slugs and paths: the texture is what tells them apart. */
+  mono?: boolean
+  onToggle: () => void
+  open: boolean
+  onInfo: () => void
+}) {
+  return (
+    <>
+      {/* Chosen is a lit ground, exactly as it is on the desk, rather than a
+          check and nothing else. One selected template used to be one accent
+          mark, so choosing three spent the budget. */}
+      <div className={`${NAME_ROW} ${rowStateClass({ selected: on })}`}>
+        <button onClick={onToggle} aria-pressed={on} className={NAME_CELL}>
+          <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
+          <span className={`text-sm truncate ${mono ? 'font-mono ' : ''}${on ? 'text-fg' : 'text-fg-mute'}`}>
+            {label}
+          </span>
+        </button>
+        <span className="hidden sm:block text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{blurb}</span>
+        {/* 44 by 44 outright rather than a small box wearing `.hit`. That class
+            draws its collar *outside* the control, and in a list every row's
+            collar overlaps its neighbours' — the last one painted takes the tap,
+            which here means reading one row's blurb when he meant to tick the
+            row below. */}
+        <button
+          type="button"
+          onClick={onInfo}
+          aria-expanded={open}
+          aria-label={`What ${label} is for`}
+          title={`What ${label} is for`}
+          className="sm:hidden shrink-0 inline-flex items-center justify-center h-11 w-11
+                     rounded-control text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                     transition-colors duration-100"
+        >
+          <Info size={14} />
+        </button>
+      </div>
+      {open && (
+        <p className="sm:hidden text-sm text-fg-mute leading-snug pl-[22px] pb-2">{blurb}</p>
+      )}
+    </>
+  )
+}
+
+/**
  * The instruction field, at the size of the thing being written.
  *
  * It was `rows={4}` — a four-line box for the one paragraph on this sheet that
- * nobody else can write for him, under a list of templates each of which gets a
- * full row. So it grows with its content from a floor of 8rem, the way a
- * composer does, and stops at a height that still leaves the commit visible;
- * past that it scrolls.
+ * nobody else can write for him. So it grows with its content from a floor of
+ * 8rem, the way a composer does, and stops at a height that still leaves the
+ * commit visible; past that it scrolls.
  *
  * The height is set from `scrollHeight`, which needs the box collapsed first —
  * otherwise a deletion never shrinks it, because `scrollHeight` never drops
  * below the height already applied.
+ *
+ * It does not take focus. This is the first thing on the surface and focusing it
+ * on mount is how opening the composer raises the keyboard, which puts the field
+ * behind it on the phone this is written for.
  */
 function GrowingField({
   value, onChange, placeholder,
@@ -761,6 +961,7 @@ function GrowingField({
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
+        aria-label="What you need"
         className={`${inputClass} min-h-32 leading-relaxed resize-none overflow-y-auto pr-10`}
       />
       <div className="absolute right-2 top-2">
@@ -773,10 +974,10 @@ function GrowingField({
 /* ------------------------------- the session ------------------------------ */
 
 /**
- * The row that means "no session", as an id.
+ * The row that means "a genuinely new session", as an id.
  *
- * `null` cannot carry a check, and "a new conversation" is a row like any
- * other. A session id is a UUID, so a leading colon cannot collide with one.
+ * `null` cannot carry a check, and "a new conversation" is a row like any other.
+ * A session id is a UUID, so a leading colon cannot collide with one.
  */
 const NEW_SESSION = ':new'
 
@@ -786,39 +987,35 @@ const NEW_SESSION = ':new'
  * Exported because the filter is the whole of what this control does, and it is
  * the part that cannot be seen to be right by looking at it.
  *
- * Two things keep a row out, and they are the same two everywhere else in the
- * product. It ran in another repository — `sessionInRepo`, the server's own
- * filter, so this menu and the Sessions page cannot disagree about what
- * "truto's sessions" means. Or he has archived it: putting a session away is
- * saying he is done with it, and a thing you are done with is not the default
- * context for new work. Thirteen of the thirty on this machine could be
- * archived, and offering them is what archiving exists to stop.
+ * **Every row is a session that is running right now.** `/state` and
+ * `/sessions` both read Claude Code's own per-process files, so being in this
+ * list is the same fact as being alive; there is no window, no `all`, and no
+ * archive of transcripts to page through. That is what removed the escape hatch
+ * this function used to have — a `chosen` session was allowed past the filters
+ * so the trigger could name the session a brief was already about, and under an
+ * active-only list that hatch is precisely a way to print a dead id as a live
+ * choice. A brief whose session has stopped drops the session instead; see
+ * `SessionChip`.
  *
- * `chosen` outranks both. A brief that is already about a session must be able
- * to name it — dropping the row would leave the trigger printing a dash over a
- * brief that says otherwise — so the session this brief carries survives the
- * repository filter *and* the archive filter, and its `title` is the fallback
- * for a session so old that this window has never seen it. Which is also the
- * way back to an archived one: open it from the Sessions page's Archived view
- * and it arrives here as the chosen row, named and pickable. Put away is not
- * out of reach; it is only out of the way.
+ * Two things still keep a row out. It ran in another repository —
+ * `sessionInRepo`, the server's own filter, so this menu and the Sessions page
+ * cannot disagree about what "truto's sessions" means. Or he has archived it:
+ * putting a session away is saying he is done with it, and a thing you are done
+ * with is not the default context for new work.
  */
 export function sessionChoices(
   sessions: readonly Session[],
   repo: string | null,
-  chosen: { id: string; title: string | null } | null,
   known: readonly string[] = [],
 ): MenuItem[] {
   const seen = new Set<string>()
   const rows = sessions
     .filter(s => {
       // The two reads overlap by construction: `/state` sends the machine's
-      // newest thirty and the repository read sends that repository's own.
+      // active sessions and the repository read sends that repository's own.
       if (seen.has(s.id)) return false
-      if (s.id !== chosen?.id) {
-        if (repo && !sessionInRepo(s, repo)) return false
-        if (s.archived) return false
-      }
+      if (repo && !sessionInRepo(s, repo)) return false
+      if (s.archived) return false
       seen.add(s.id)
       return true
     })
@@ -829,17 +1026,17 @@ export function sessionChoices(
    * this machine actually has, and the recorded directory only when none of
    * them contains it.
    *
-   * The directory alone was the heading until the filter learned to match
-   * under a repository, and then it broke the list it was meant to organise:
-   * with `wake` chosen the menu printed three headings — `wake`,
+   * The directory alone was the heading until the filter learned to match under
+   * a repository, and then it broke the list it was meant to organise: with
+   * `wake` chosen the menu printed three headings — `wake`,
    * `reverent-hertz-369f69`, `QA_EVIDENCE` — for one repository, and since
    * grouping reorders, the newest row of the second group sat below the oldest
    * of the first. A menu already scoped to one repository has one heading.
    *
    * `Menu` prints a heading whenever the group changes rather than nesting, so
-   * rows sharing one have to arrive together — the sorted list alone would
-   * print `truto` above every third row. Insertion order into the map is the
-   * order of each group's newest session, which is the order to read them in.
+   * rows sharing one have to arrive together — the sorted list alone would print
+   * `truto` above every third row. Insertion order into the map is the order of
+   * each group's newest session, which is the order to read them in.
    */
   const byRepo = new Map<string, { label: string; list: Session[] }>()
   for (const s of rows) {
@@ -857,49 +1054,37 @@ export function sessionChoices(
         id: s.id,
         label: s.title,
         group: dir,
-        // One fact beside the name, which is what a menu row has room for.
-        // Among sessions in one repository the title is often the same commit
-        // message twice, so what tells them apart is when each last ran — and
-        // `live` outranks an age, because a session running right now is the
-        // one whose transcript is still moving.
-        meta: s.live ? 'live' : ago(s.lastTs),
+        // One fact beside the name, which is what a menu row has room for. Among
+        // sessions in one repository the title is often the same commit message
+        // twice, so what tells them apart is when each last said anything.
+        meta: ago(s.lastTs),
       })
     }
-  }
-  if (chosen && !seen.has(chosen.id)) {
-    items.push({ id: chosen.id, label: chosen.title || 'The session this brief is about' })
   }
   return items
 }
 
 /**
- * Which session this brief goes to.
+ * Which conversation this brief goes to.
  *
- * The sessions were already being fetched on every sheet open and thrown away.
  * Picking one does three things: it fills the working directory from the
  * directory that session actually ran in, it attaches the session as an object
- * so its last exchanges are named in the brief, and — the part that used to be
- * impossible — it makes the commit `--resume <id>` rather than a new session.
- * The sentence under the heading used to explain that this was context and not
- * continuity, because a link to a chat surface could not be anything else. It
- * now says what happens, which is shorter.
+ * so its last exchanges are named in the brief, and it makes the commit one more
+ * turn in that conversation rather than a new one.
  *
- * It is a `Menu` now, for the reason every picker here is: the open list had no
- * ground, no edge and no z-index, it shoved the templates and the commit button
- * down the sheet as it opened, and it never marked which row was already
- * chosen. And it is given the repository, which it previously was not — so the
- * choice above it could not narrow this one even in principle.
+ * A chip rather than a section with a paragraph under it. The paragraph used to
+ * explain that a chosen session was resumed and a new one was not, which is a
+ * sentence about mechanics on a surface whose first job is a field — the two
+ * labels on the commit button say the same thing at the moment it matters.
  */
-function SessionPicker({
-  sessions, repos, repo, value, attached, setCwd,
+function SessionChip({
+  sessions, repos, repo, value, setCwd,
 }: {
   sessions: Session[]
   repos: LaunchState['repos']
   /** The chosen repository's path, or null for "not about one repository". */
   repo: string | null
   value: string | null
-  /** The basket, which is where a session chosen elsewhere left its title. */
-  attached: PackItem[]
   setCwd: (v: string | null) => void
 }) {
   const [inRepo, setInRepo] = useState<Session[]>([])
@@ -907,46 +1092,58 @@ function SessionPicker({
   /*
    * A repository's sessions are asked for, not filtered out of what is to hand.
    *
-   * `/state` sends the newest thirty sessions on the machine over thirty days,
-   * whatever directory they ran in — so a repository he last touched three
-   * weeks ago has none of its own in that thirty, and a filter alone would
-   * answer "nothing here" for a repository full of work. Scoping the read is
-   * what pays for asking the repository first: the list stops being the
-   * machine's last thirty and becomes this repository's own.
-   *
-   * Thirty rows, and a year of days behind them. The count is what bounds the
-   * menu — thirty because that is what the unscoped read already returns, one
-   * page size said once, and because a menu you scroll for a minute is a page.
-   * The year is not a second bound, it is what stops the first one being
-   * useless: a busy repository fills thirty rows in a fortnight and a quiet one
-   * needs months to fill any, so counting days would answer for neither. What
-   * this asks for is a repository's newest thirty, however far back it reaches.
+   * `/state` sends what is running on the machine; the scoped read sends what is
+   * running in this repository. They overlap almost entirely now that both are
+   * active-only, and the scoped read is still worth making: it is the one that
+   * stays correct when the machine is busier than one page of sessions.
    */
   useEffect(() => {
     if (!repo) { setInRepo([]); return }
     let live = true
-    launchApi.sessions({ repo, window: 365, limit: 30 })
+    launchApi.sessions({ repo })
       .then(r => { if (live) setInRepo(r.sessions) })
-      // A widening that fails is not an error on this sheet: what `/state`
+      // A widening that fails is not an error on this surface: what `/state`
       // already sent is still a true list, only a shorter one.
       .catch(() => {})
     return () => { live = false }
   }, [repo])
 
   const known = useMemo(() => [...sessions, ...inRepo], [sessions, inRepo])
-  const current = known.find(s => s.id === value) ?? null
-  const chosen = value
-    ? { id: value, title: current?.title ?? attached.find(i => i.ref === sessionRef(value))?.title ?? null }
-    : null
   const repoPaths = useMemo(() => repos.map(r => r.path), [repos])
-  const items = useMemo(
-    () => sessionChoices(known, repo, chosen, repoPaths),
-    [known, repo, chosen?.id, chosen?.title, repoPaths],
-  )
+  const items = useMemo(() => sessionChoices(known, repo, repoPaths), [known, repo, repoPaths])
+  const current = known.find(s => s.id === value) ?? null
+
+  /*
+   * A session the brief names but the machine is no longer running is dropped.
+   *
+   * This is the failure the whole pass is about, caught at the last place it can
+   * still be caught silently. The list is active-only, so an id that is not in
+   * it is a conversation that has ended — and every use of that id downstream
+   * *starts* something: the pack names it, and the commit would hand it to a
+   * resume. Dropping it turns the next press into a new conversation, which is
+   * the true option, instead of Claude Code opening on his phone to say the
+   * session was archived.
+   *
+   * A live session in another repository moves the repository rather than being
+   * dropped; a repository he changed by hand drops the session, because that is
+   * what changing it meant.
+   */
+  useEffect(() => {
+    if (!value) return
+    const live = known.find(s => s.id === value)
+    if (live && repo && !sessionInRepo(live, repo)) {
+      const home = repoForSession(live, repoPaths)
+      if (home && home !== repo) return setCwd(home)
+    }
+    if (!items.some(i => i.id === value)) {
+      // The session's own object goes with the session. Leaving it attached
+      // would quote a transcript the brief no longer claims to be about.
+      removeFromLaunch(sessionRef(value))
+      setLaunchSession(null)
+    }
+  }, [items, value, repo])
 
   const pick = (s: Session | null) => {
-    // The previous session's object goes with the previous session. Leaving it
-    // attached would quote a transcript the brief no longer claims to be about.
     if (value) removeFromLaunch(sessionRef(value))
     if (!s) return setLaunchSession(null)
 
@@ -962,80 +1159,19 @@ function SessionPicker({
   }
 
   return (
-    <section className="py-4">
-      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Session</h3>
-      <Menu
-        items={items}
-        value={value ?? NEW_SESSION}
-        onPick={id => pick(id === NEW_SESSION ? null : known.find(s => s.id === id) ?? null)}
-        ariaLabel="Session"
-        full
-      />
-
-      {current && (
-        /*
-         * What used to be here was a sentence and a `claude --resume …` line
-         * with a Copy button on it: a UI whose final act was printing a command
-         * for him to paste into a terminal he had to go and find. That is the
-         * defined failure of this work, so the line is gone and the control that
-         * carried it opens the session instead.
-         *
-         * It sits beside the sentence rather than beside the permission mode,
-         * where the copyable command used to live, because it is about *this
-         * session* — the one named in the menu directly above it — and not about
-         * how the next one should run.
-         */
-        <div className="mt-2 flex flex-col sm:flex-row sm:items-start gap-2">
-          <p className="text-sm text-fg-mute leading-snug grow min-w-0">
-            The brief goes to this session — resumed where it stopped, with everything it already
-            knows. Its directory fills in the repository above, and its last exchanges are attached
-            below so the brief can name them.
-          </p>
-          <ResumeButton sessionId={current.id} />
-        </div>
+    <Menu
+      items={items}
+      value={value ?? NEW_SESSION}
+      onPick={id => pick(id === NEW_SESSION ? null : known.find(s => s.id === id) ?? null)}
+      ariaLabel="Session"
+      trigger={({ open, toggle }) => (
+        <Chip active={open} onClick={toggle} flexible
+          mark={<SquareTerminal size={13} aria-hidden />}
+          title="Which conversation this goes to" ariaLabel="Session">
+          <span className="truncate">{current ? current.title : 'A new conversation'}</span>
+        </Chip>
       )}
-    </section>
-  )
-}
-
-/**
- * Open the session now, without a brief.
- *
- * The other half of the same door: sometimes what he wants is not to write
- * anything, it is to be back inside the session he was in. `openTerminalAndGo`
- * reattaches when it is already running and `--resume`s when it is not, so this
- * is one control for both, and either way it ends on `/terminal/<id>` with a
- * cursor in it rather than on a command he has to carry somewhere.
- *
- * A refusal — the box has no tmux, the session is not on this machine — comes
- * back as the server's own sentence and is printed under the control. It is not
- * swallowed and it is not a status code.
- */
-function ResumeButton({ sessionId }: { sessionId: string }) {
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
-  const go = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      await openTerminalAndGo({ sessionId })
-      resetLaunch()
-    } catch (e) {
-      setErr((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="shrink-0">
-      <Button size="sm" variant="secondary" onClick={go} disabled={busy}>
-        {busy ? <Loader2 size={14} className="animate-spin" /> : <SquareTerminal size={14} />}
-        {busy ? 'Opening' : 'Open the session'}
-      </Button>
-      {err && <p className="text-sm text-bad mt-2 leading-snug">{err}</p>}
-    </div>
+    />
   )
 }
 
@@ -1055,6 +1191,61 @@ function attachSession(s: Session) {
       turns_in_view: s.turns,
     },
   }])
+}
+
+/* ------------------------------ the repository ---------------------------- */
+
+/**
+ * A repository is chosen by a row like any other, so "none" needs an id.
+ *
+ * Every repository is an absolute path, so a leading colon cannot collide with
+ * one — and `null` cannot be a menu value, because the row that says "not about
+ * one repository" has to be able to carry the check.
+ */
+const NO_REPO = ':none'
+
+/**
+ * The repository, as a chip that opens a real menu.
+ *
+ * It has been four controls. A native `<select>`, whose popup painted over the
+ * object list. Then a collapsed row that opened into more rows in document flow,
+ * shoving the commit down the screen at the moment of choosing. Then a full-width
+ * `Menu` under a section heading, which was correct and cost a heading, a row and
+ * 60px of the fold to answer a question most briefs answer for themselves. Now
+ * the same `Menu` on a chip: it overlays rather than displaces, it says which one
+ * is current, and when nobody needs it, it is one word wide.
+ */
+function RepoChip({
+  repos, cwd, setCwd,
+}: { repos: LaunchState['repos']; cwd: string | null; setCwd: (v: string | null) => void }) {
+  const items = useMemo<MenuItem[]>(() => [
+    { id: NO_REPO, label: 'Not about one repository' },
+    ...repos.map(r => ({
+      id: r.path,
+      label: r.name,
+      // Uncommitted work, because that is the fact that decides whether this is
+      // the checkout he means — and a `<select>` could not have carried it.
+      ...(r.dirty > 0 ? { meta: `${r.dirty} dirty` } : {}),
+    })),
+  ], [repos])
+
+  const here = repos.find(r => r.path === cwd)
+
+  return (
+    <Menu
+      items={items}
+      value={cwd ?? NO_REPO}
+      onPick={id => setCwd(id === NO_REPO ? null : id)}
+      ariaLabel="Repository"
+      trigger={({ open, toggle }) => (
+        <Chip active={open} onClick={toggle} flexible
+          mark={<FolderGit2 size={13} aria-hidden />}
+          title="Which repository this is about" ariaLabel="Repository">
+          <span className="truncate">{here ? here.name : 'Repository'}</span>
+        </Chip>
+      )}
+    />
+  )
 }
 
 /* --------------------------------- Slack ---------------------------------- */
@@ -1093,9 +1284,9 @@ function attachSession(s: Session) {
  *
  * The selection is the basket, not local state. A picked reply is an attachment
  * exactly like every other object — it appears in the list above, it is counted
- * in the provenance line, and it can be taken off from either place. That is
- * also what makes "the unselected ones are not in the pack" true by
- * construction rather than by a filter somebody has to remember to write.
+ * on the Context chip, and it can be taken off from either place. That is also
+ * what makes "the unselected ones are not in the pack" true by construction
+ * rather than by a filter somebody has to remember to write.
  */
 function SlackPicker({ group, attached }: { group: string | null; attached: PackItem[] }) {
   const [threads, setThreads] = useState<SlackThread[]>([])
@@ -1190,8 +1381,7 @@ function SlackPicker({ group, attached }: { group: string | null; attached: Pack
  * `open_in_app` is the app link, so nothing has to choose for the session later.
  *
  * On a phone the row stacks — author and time on the first line, words on the
- * second — for the same reason the template rows do: two columns need about
- * 340px and there are 343 to spend.
+ * second — because two columns need about 340px and there are 343 to spend.
  */
 function SlackRow({
   entry, on, onToggle, parent,
@@ -1212,9 +1402,7 @@ function SlackRow({
         {/* Who, and what kind of message this is. On a phone this is the first
             of two lines and the age rides along at its right end; on a laptop
             it is a 160px column and the age goes to the far right, where a
-            column of ages can be compared down. Rendered twice rather than
-            positioned twice — the same trick the skill rows use for a blurb
-            that only exists above `sm`. */}
+            column of ages can be compared down. */}
         <span className="flex items-center gap-2 w-full sm:w-40 sm:shrink-0 min-w-0">
           <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
           <span className={`text-sm truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>
@@ -1235,8 +1423,7 @@ function SlackRow({
         </span>
         {/* Two lines on a phone, one on a laptop. This is the whole of what
             tells one reply from another, and a 45-character clip of a 280
-            character message is not enough to pick with — the same argument
-            the template blurbs won on the section above. */}
+            character message is not enough to pick with. */}
         <span className="text-sm text-fg-dim grow min-w-0 line-clamp-2 sm:line-clamp-1 pl-[22px] sm:pl-0">
           {entry.excerpt || 'No words in this message'}
         </span>
@@ -1309,9 +1496,11 @@ function SlackPasteField({
 
   return (
     <div className="flex items-center gap-2">
-      {/* The same box the skill search uses, and `.hit-native` for the same
-          reason: the input paints 32px and takes a 44px tap, because at its own
-          line height it was an 18px band inside a control you could see. */}
+      {/* `.hit-native` because the input paints 32px and must take a 44px tap:
+          at its own line height it was an 18px band inside a control you could
+          see. This field is behind `+ Context` now, so it is no longer in the
+          path a fresh open scrolls through and cannot summon the keyboard on
+          arrival. */}
       <div className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850
                       grow min-w-0">
         <Link2 size={14} className="text-fg-mute shrink-0" />
@@ -1332,91 +1521,7 @@ function SlackPasteField({
   )
 }
 
-/* ------------------------------ how it should run ------------------------- */
-
-/**
- * The permission mode — which is now a flag rather than a wish.
- *
- * This block used to open by saying what it could not do. `claude.ai/new?q=`
- * carries a prompt and nothing else: there is no parameter for a permission mode
- * and no way to add one, so the control decided what the brief *said* about how
- * it should run, and what the `claude --resume … --permission-mode …` line
- * underneath it carried for him to paste. Both halves of that are gone. The
- * session is started by Wake, on this box, and this is the flag it is started
- * with, so the sentence is one clause and there is nothing to copy.
- *
- * `session` is still a prop because the mode reads differently for a resume: a
- * session that is already running keeps the mode it was started with, and a
- * control that silently claims otherwise is the same class of lie this block
- * just stopped telling.
- */
-function PermissionModeBlock({ mode, session }: { mode: PermissionMode; session: string | null }) {
-  return (
-    <section className="py-4">
-      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">How it should run</h3>
-      <Segmented
-        options={PERMISSION_MODES.map(m => ({ id: m.id, label: m.label }))}
-        value={mode}
-        onChange={setLaunchPermissionMode}
-        ariaLabel="Permission mode"
-      />
-      <p className="text-sm text-fg-mute mt-2 leading-snug">
-        {session
-          ? 'The session starts under this the first time Wake starts it. One that is already running keeps the mode it has.'
-          : 'The session is started with this as its --permission-mode, and the brief says so in words as well.'}
-      </p>
-    </section>
-  )
-}
-
-/**
- * A repository is chosen by a row like any other, so "none" needs an id.
- *
- * Every repository is an absolute path, so a leading colon cannot collide with
- * one — and `null` cannot be a menu value, because the row that says "not about
- * one repository" has to be able to carry the check.
- */
-const NO_REPO = ':none'
-
-/**
- * The repository — the first question, and now a real menu.
- *
- * It has been three controls. A native `<select>`, whose popup painted over the
- * object list and, on a phone, over the sheet. Then a collapsed row that opened
- * into more rows in document flow: no ground, no edge, no elevation, nothing
- * marking the row already chosen, and everything below it — templates, skills,
- * the one button that commits — pushed down the screen at the moment of
- * choosing. Now the shared `Menu`, which overlays rather than displaces and
- * says which one is current.
- */
-function RepoPicker({
-  repos, cwd, setCwd,
-}: { repos: LaunchState['repos']; cwd: string | null; setCwd: (v: string | null) => void }) {
-  const items = useMemo<MenuItem[]>(() => [
-    { id: NO_REPO, label: 'Not about one repository' },
-    ...repos.map(r => ({
-      id: r.path,
-      label: r.name,
-      // Uncommitted work, because that is the fact that decides whether this is
-      // the checkout he means — and a `<select>` could not have carried it.
-      ...(r.dirty > 0 ? { meta: `${r.dirty} dirty` } : {}),
-    })),
-  ], [repos])
-
-  return (
-    <section className="py-4">
-      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Repository</h3>
-      <Menu
-        items={items}
-        value={cwd ?? NO_REPO}
-        onPick={id => setCwd(id === NO_REPO ? null : id)}
-        ariaLabel="Repository"
-        full
-        mono
-      />
-    </section>
-  )
-}
+/* --------------------------------- skills --------------------------------- */
 
 /**
  * The one sentence a skill row can afford.
@@ -1436,59 +1541,60 @@ function blurbOf(s: { description?: string | null; whenToUse?: string | null } |
 /**
  * How many skill rows the section paints before it offers the rest.
  *
- * Six 44px rows is 264px on a laptop — within a pixel or two of what the
- * porthole it replaces was painting — so the desktop list keeps its size and
- * only stops being a scroller.
+ * Six 44px rows is 264px — within a pixel or two of what the porthole it
+ * replaced was painting — so the list keeps its size and only stops being a
+ * scroller.
  */
 const PEEK = 6
 
 /**
  * Which skills the brief names.
  *
- * Named, never inlined — a skill body is tens of kilobytes and the brief has to
- * fit in a URL.
+ * Named, never inlined — a skill body is tens of kilobytes and the session has
+ * the same catalogs Wake indexes.
  *
- * **It used to show nothing until you typed.** `if (!term) return []` meant an
- * empty box rendered a heading, a placeholder reading `Search 28 skills`, and
- * zero skill names — so the answer to "which skills are there?" was "type one
- * and find out". The catalogs are 28 rows; a browsable list is what a list of
- * 28 things is. The search narrows it rather than summoning it.
+ * **The search is a button until it is asked for.** It was a live `<input>`,
+ * always mounted, sitting in the scroll path of the first thing this surface
+ * painted — so on a phone, opening the composer could raise the keyboard before
+ * he had decided anything, and the field it covered was the field he came for.
+ * A button costs one tap and only ever costs it to somebody who wants to type.
+ * It still searches everything a person might half-remember: the slug, the human
+ * title, the catalog letter, the description and the sentence saying when to use
+ * it — searching only `name` meant "customer" found nothing while three skills
+ * said "customer issue" in their own descriptions.
  *
- * **And then it showed them through a porthole.** The list was
- * `max-h-64 overflow-y-auto` — measured on a phone, 256px of window over
- * 2555px of content, which is two and a half rows at a time, inside a sheet
- * body that was itself 665px over 1727px, under a ten-row template list.
- * A scroll inside a scroll inside a sheet, on the surface whose entire job is
- * "read this and tap once".
+ * **The names are the list on a phone.** Twenty-eight rows each carrying a
+ * wrapped sentence is a wall, and it was the second wall on a surface that
+ * already had one. The sentence is behind the ⓘ on the row, which is where it is
+ * wanted: on the one row he cannot place.
  *
- * It is not a `Menu`, and the two menus above it are the argument rather than
- * the counter-argument: both are single-choice, both close on the pick, and
- * neither carries a field. `Menu` rows are `menuitemradio` and its `onClick`
- * closes the panel — a multi-select that shuts after every choice is worse than
- * anything it would replace, and there is nowhere in it to put the search this
- * list is built around. Reaching for it would mean changing the shared
- * primitive that the repository and session pickers depend on, to make it
- * something neither of them wants.
- *
- * So the porthole goes instead of the list. A scroll inside a scroll is fixed
- * by removing the inner one, not by moving it into a popup that has its own.
- * The section shows `PEEK` rows and says how many more there are; pressing that
- * prints the rest inline, exactly as the template list above already prints all
- * of its ten. One scroller on the surface, and the commit strip is sticky, so
- * an expanded list cannot push the one button that commits out of reach.
+ * It is not a `Menu`, and the repository and session chips are the argument
+ * rather than the counter-argument: both are single-choice, both close on the
+ * pick, and neither carries a field. `Menu` rows are `menuitemradio` and its
+ * `onClick` closes the panel — a multi-select that shuts after every choice is
+ * worse than anything it would replace.
  */
 function SkillPicker({
   all, selected, onChange,
 }: { all: LaunchState['skills']; selected: string[]; onChange: (next: string[]) => void }) {
   const [q, setQ] = useState('')
+  const [searching, setSearching] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [info, setInfo] = useState<string | null>(null)
+  const field = useRef<HTMLInputElement>(null)
+
+  /*
+   * The keyboard the tap asked for.
+   *
+   * This is not autofocus, which is the thing this surface refuses: nothing
+   * takes focus when the composer opens. Pressing a control whose entire purpose
+   * is to type into a box and then having to press the box as well is a second
+   * tap for nothing.
+   */
+  useEffect(() => { if (searching) field.current?.focus() }, [searching])
 
   const matches = useMemo(() => {
     const term = q.trim().toLowerCase()
-    // The haystack is everything a person might half-remember: the slug, the
-    // human title, the catalog letter, and the sentence saying when to use it.
-    // Searching only `name` meant "customer" found nothing while three skills
-    // said "customer issue" in their own descriptions.
     if (!term) return all
     return all
       .filter(s => `${s.name} ${s.title ?? ''} ${s.whenToUse ?? ''} ${s.description ?? ''} ${s.catalog}`
@@ -1497,9 +1603,8 @@ function SkillPicker({
 
   // The cap used to be a flat 24 rows behind a 256px window, so it was invisible
   // twice over: you could not see the rows it kept and you could not see that it
-  // had kept any. Six is a browse window rather than a peephole — the same 264px
-  // the porthole painted on a laptop — and what it hides is now on screen as a
-  // count you can press.
+  // had kept any. Six is a browse window rather than a peephole, and what it
+  // hides is on screen as a count you can press.
   const shown = expanded ? matches : matches.slice(0, PEEK)
 
   const toggle = (id: string) =>
@@ -1507,10 +1612,44 @@ function SkillPicker({
 
   const named = (id: string) => all.find(s => s.id === id)
 
-
   return (
     <section className="py-4">
-      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Skills</h3>
+      <div className="flex items-center gap-2 mb-2">
+        <h3 className="text-eyebrow uppercase text-fg-mute">Skills</h3>
+        {/* The control that reveals the field, and the field itself, in the same
+            slot — so revealing it moves nothing below. */}
+        <span className="ml-auto">
+          {searching ? (
+            <span className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850">
+              <Search size={14} className="text-fg-mute shrink-0" aria-hidden />
+              <input
+                ref={field}
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') { setQ(''); setSearching(false) } }}
+                placeholder={`Search ${all.length}`}
+                aria-label="Search skills"
+                className="hit-native [--hit-ink:32px] h-full w-36 sm:w-56 min-w-0 bg-transparent
+                           outline-none text-sm text-fg placeholder:text-fg-mute"
+              />
+              <button
+                type="button"
+                onClick={() => { setQ(''); setSearching(false) }}
+                aria-label="Stop searching skills"
+                title="Stop searching"
+                className="shrink-0 text-fg-mute hover:text-fg-dim transition-colors duration-100"
+              >
+                <X size={14} />
+              </button>
+            </span>
+          ) : (
+            <Button size="md" variant="default" onClick={() => setSearching(true)}
+              title="Search skills" ariaLabel="Search skills">
+              <Search size={14} /> Search
+            </Button>
+          )}
+        </span>
+      </div>
 
       {selected.map(id => (
         <div key={id} className="flex items-center gap-2 h-8 border-b border-rule last:border-0">
@@ -1518,10 +1657,9 @@ function SkillPicker({
           <span className="text-sm text-fg-dim truncate grow min-w-0 font-mono">
             {id.split('/').pop()}
           </span>
-          {/* Gone below `sm`, rather than squeezed into 45% of a 343px row.
-              This blurb's job is choosing, and on a row for something already
-              chosen it is the second thing competing for a width that only
-              holds one — so the phone keeps the identity and drops the pitch. */}
+          {/* Gone below `sm`, rather than squeezed into 45% of a 343px row. This
+              blurb's job is choosing, and on a row for something already chosen
+              it is the second thing competing for a width that only holds one. */}
           <span className="hidden sm:block text-sm text-fg-mute truncate shrink-0 max-w-[55%]">
             {blurbOf(named(id))}
           </span>
@@ -1531,69 +1669,25 @@ function SkillPicker({
         </div>
       ))}
 
-      {/* The field is 32px of box and, on a phone, was 18px of target: the input
-          sat at its own line height inside the box and only that 18px band took
-          a tap, so a thumb aimed at the middle of a control it could see missed
-          it by 3px. `.hit-native` is the answer the product already has for a
-          control that generates no `::after` — it grows the input itself to 44
-          and hands the height straight back as a negative margin, so the box
-          keeps painting 32. `h-full` is what makes the painted 32 the target on
-          a mouse as well, instead of the same 18px band. */}
-      <div className="mt-2 flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850">
-        <Search size={14} className="text-fg-mute shrink-0" />
-        <input
-          value={q}
-          onChange={e => setQ(e.target.value)}
-          placeholder={`Search ${all.length} skills`}
-          // The placeholder is the only name this field has, and it is gone the
-          // moment there is a character in it.
-          aria-label="Search skills"
-          className="hit-native [--hit-ink:32px] h-full flex-1 min-w-0 bg-transparent outline-none
-                     text-sm text-fg placeholder:text-fg-mute"
-        />
-      </div>
-
-      {/* The same row the templates above use, and it stacks on a phone for the
-          same reason: an identity on the left with its check, and the sentence
-          that tells you what it is filling the rest. The slug is the identity —
-          26 of the 28 catalog `title` values are the slug again — so what makes
-          a list of 28 readable is the description beside it, not the name
-          printed twice, and a description cut at 181px is not one. */}
       <div className={NAME_GRID}>
-        {shown.map(s => {
-          const on = selected.includes(s.id)
-          return (
-            <button
-              key={s.id}
-              onClick={() => toggle(s.id)}
-              aria-pressed={on}
-              /* Inline, like the templates and for the same two reasons: it is
-                 a multi-select, and it is searched. A menu closes on the first
-                 pick and has nowhere to put the field. What it does take from
-                 the menu is the answer to "which of these have I already
-                 chosen?" — the row's own lit ground, not a check alone. */
-              className={`${NAME_ROW} text-left border-b border-rule last:border-0
-                         ${rowStateClass({ selected: on })}`}
-            >
-              <span className={NAME_CELL}>
-                <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
-                <span className={`text-sm font-mono truncate ${on ? 'text-fg' : 'text-fg-mute'}`}>
-                  {s.name}
-                </span>
-              </span>
-              <span className="text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{blurbOf(s)}</span>
-            </button>
-          )
-        })}
+        {shown.map(s => (
+          <PickRow
+            key={s.id}
+            label={s.name}
+            mono
+            blurb={blurbOf(s)}
+            on={selected.includes(s.id)}
+            onToggle={() => toggle(s.id)}
+            open={info === s.id}
+            onInfo={() => setInfo(v => (v === s.id ? null : s.id))}
+          />
+        ))}
       </div>
 
-      {/* The rest of the list, as a count rather than as a scrollbar. It says
-          the number because the number is the fact being withheld, and it is
-          the one place on this sheet a count belongs — the section heading is a
-          label, not a readout.
-
-          Bordered rather than ghost, because `Pager` is what this is: the
-          control that reveals the rest of a list. A lone muted label under a
+      {/* The rest of the list, as a count rather than as a scrollbar. It says the
+          number because the number is the fact being withheld, and it is the one
+          place here a count belongs — the section heading is a label, not a
+          readout. Bordered rather than ghost, because a lone muted label under a
           list of muted rows reads as the list's caption. */}
       {matches.length > PEEK && (
         <div className="mt-2">
@@ -1617,79 +1711,119 @@ function SkillPicker({
   )
 }
 
-/* ------------------------------- the brief -------------------------------- */
+/* --------------------------- the brief, as a hatch ------------------------- */
 
 /**
- * The brief, editable, and the one control that commits it.
+ * How it should run, the brief itself, and the way into the session with no
+ * brief at all — the three things that are true of a hand-off and that nobody
+ * needs to see to make one.
  *
- * Everything here answers one question before you press it: *is this what I want
- * to send?* So the text is the largest thing on screen, and the session gets
- * whatever the field currently says — not the draft Wake happened to render
- * first, which is why this step exists at all.
+ * All three used to be on the first screen. The permission mode came with a
+ * paragraph explaining what a `--permission-mode` flag is; the brief came with a
+ * commit button of its own called `Write the brief`, which had to be pressed
+ * before the real commit was reachable. Both are decisions this surface can make
+ * for him — bypass, and pack on Send — and a decision the product can make is
+ * not a step the product should ask for.
+ */
+function RunPanel({
+  mode, session, page, draft, setBrief, onWrite, provenance,
+}: {
+  mode: PermissionMode
+  /** The session being resumed, if one was chosen. It changes what the mode means. */
+  session: string | null
+  page: boolean
+  draft: { packId: string; brief: string } | null
+  setBrief: (text: string) => void
+  onWrite: () => Promise<{ packId: string; brief: string }>
+  provenance: string
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const write = async () => {
+    setBusy(true)
+    setErr(null)
+    try { await onWrite() } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
+  }
+
+  return (
+    <>
+      <section className="py-4">
+        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">How it runs</h3>
+        <Segmented
+          options={PERMISSION_MODES.map(m => ({ id: m.id, label: m.label }))}
+          value={mode}
+          onChange={setLaunchPermissionMode}
+          ariaLabel="Permission mode"
+        />
+        {/* One clause, and only the one that is not obvious from the control: a
+            conversation already running keeps whatever it was started with, and
+            a control that silently claimed otherwise would be lying. */}
+        {session && (
+          <p className="text-sm text-fg-mute mt-2 leading-snug">
+            A session that is already running keeps the mode it started with.
+          </p>
+        )}
+      </section>
+
+      <section className="py-4">
+        <h3 className="text-eyebrow uppercase text-fg-mute mb-2">The packed brief</h3>
+        <p className="text-sm text-fg-mute mb-2 tnum">{provenance}</p>
+
+        {draft
+          ? <Review packId={draft.packId} brief={draft.brief} setBrief={setBrief} page={page} />
+          : (
+            <>
+              <p className="text-sm text-fg-mute mb-2 leading-snug">
+                Send packs this itself. Read it first if you want to see exactly what leaves.
+              </p>
+              <Button size="md" variant="default" onClick={write} disabled={busy}>
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                {busy ? 'Packing' : 'Show the packed brief'}
+              </Button>
+            </>
+          )}
+        {err && <p className="text-sm text-bad mt-2 leading-snug">{err}</p>}
+      </section>
+
+      {session && <OpenSession sessionId={session} />}
+    </>
+  )
+}
+
+/**
+ * The brief, editable, in the shape of the thing it is.
  *
- * **Pressing it starts a process.** `openTerminalAndGo({ packId, brief })` posts
- * to `/api/claude/terminals`, which marks the pack opened, writes the edited
- * text back to the pack file, starts or resumes the session with the brief as
- * its first message, and hands back the route to watch it on. Then the sheet
- * goes there. `launchApi.open()` is deliberately *not* also called: it does the
- * same recording, and calling both would start two sessions.
+ * It was `font-mono` in a fixed `44vh` box, and that pair is most of why this
+ * product read as a terminal: a brief is prose with a few paths in it, and
+ * setting the whole of it in a monospace slot says the reader is expected to
+ * parse rather than to read. It is body text now, in a box that starts tall
+ * enough to hold a paragraph and can be dragged taller.
  *
- * **There is no counter under the field any more.** There used to be `N / 12,000`
- * and a `Trimmed to 12,000` line, and both were true of a `claude.ai/new?q=` URL,
- * which has a length a browser will refuse. A brief handed to a process on this
- * box is passed whole. Leaving a budget on screen would have been a number
- * measuring nothing, on the one surface whose entire job is to be read before it
- * is trusted.
- *
- * A refusal — no tmux on the box, a repository that is not in the registry, a
- * session id that is not on this machine — comes back as the server's own
- * sentence and is printed under the control. It is never swallowed: the sheet
- * stays open, with the brief still in it, so the next press can be a different
- * decision rather than a retype.
+ * Whatever is in this field at the moment he sends is what goes — that is the
+ * whole reason the step exists, and why the state this writes is the state the
+ * commit reads. There is no counter under it: there used to be `N / 12,000`, and
+ * that was true of a URL a browser will refuse past a length. A brief handed to
+ * a process on this box is passed whole, so a budget on screen would be a number
+ * measuring nothing on the one surface whose job is to be read before it is
+ * trusted.
  */
 function Review({
-  packId, initial, session, blocked, provenance, page,
+  packId, brief, setBrief, page,
 }: {
   packId: string
-  initial: string
-  /** The session being resumed, if one was chosen. It changes the verb. */
-  session: string | null
-  /** Why this box cannot start a session at all, in the server's words. */
-  blocked: string | null
-  provenance: string
+  brief: string
+  setBrief: (text: string) => void
   /** Drawn on the phone's page rather than in the sheet. See `LaunchSheet`. */
   page: boolean
 }) {
-  const [brief, setBrief] = useState(initial)
   const [copied, setCopied] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
-
-  /* The edited text, not the draft Wake rendered — the same distinction the
-     commit itself makes. Leaving the composer with a brief half-rewritten and
-     coming back to the version the server first wrote would be the loss this
-     surface exists to prevent, one step further along than the instruction
-     field. See `rememberLaunch`. */
-  useEffect(() => { rememberLaunch({ brief: { packId, text: brief } }) }, [packId, brief])
-
-  const open = async () => {
-    setBusy(true)
-    setErr(null)
-    try {
-      await openTerminalAndGo({ packId, brief })
-      resetLaunch()
-    } catch (e) {
-      setErr((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
 
   /** Dictation lands where the cursor is, not always at the end. */
   const insert = (text: string) => {
     const el = ref.current
-    if (!el) return setBrief(v => (v ? `${v} ${text}` : text))
+    if (!el) return setBrief(brief ? `${brief} ${text}` : text)
     const at = el.selectionStart ?? brief.length
     const end = el.selectionEnd ?? at
     const next = `${brief.slice(0, at)}${brief.slice(0, at).match(/\S$/) ? ' ' : ''}${text}${brief.slice(end)}`
@@ -1704,76 +1838,23 @@ function Review({
   }
 
   return (
-    <div className="pt-4">
-      {/* What this brief is made of. The character count that used to end this
-          line is gone with the URL that needed it. */}
-      <p className="text-sm text-fg-mute mb-2 tnum">{provenance}</p>
-
+    <div data-pack={packId}>
       <div className="relative">
         <textarea
           ref={ref}
           value={brief}
           onChange={e => setBrief(e.target.value)}
           spellCheck={false}
-          /*
-            `text-xs` on the one thing you have to read before sending it. A
-            brief reviewed at 12px in a 760px box is not reviewed.
-
-            And on a phone, one reviewed through 44vh of a sheet is not reviewed
-            either. That number was measured against a `760px` dialog on a
-            laptop; at 390px it was 371px of window inside a scroller that also
-            held eleven template rows above it, which is the "read it through a
-            slot" this whole change is about. On the page it is the screen less
-            the four things that are not the brief — the safe-area top, the path
-            bar, this provenance line and the commit strip, about 200px between
-            them — so the brief gets ~590px of an 844px phone and the reader
-            scrolls the text rather than the surface it is in.
-          */
-          className={`${inputClass} font-mono text-sm leading-relaxed resize-y min-h-60 pr-10
-                      ${page ? 'h-[calc(100dvh-var(--nav-h)-200px)]' : 'h-[44vh]'}`}
+          aria-label="The packed brief"
+          className={`${inputClass} leading-relaxed resize-y pr-10
+                      ${page ? 'min-h-72 h-[46dvh]' : 'min-h-72 h-[40dvh]'}`}
         />
         <div className="absolute right-2 top-2">
           <Mic onText={insert} title="Dictate into the brief" />
         </div>
       </div>
 
-      {/*
-        The commit, pinned on a phone and inline on a laptop.
-
-        In the sheet this row sits where it falls, directly under the field,
-        because the sheet is 760px of laptop and the whole of it is on screen.
-        On the page the field above is deliberately a screen tall, so an inline
-        row would put the one control that commits below the fold of a surface
-        whose scroll he has just been sent to the top of — the same failure the
-        `Write the brief` strip above already answers, and it is answered the
-        same way rather than a second way.
-      */}
-      <div className={`flex items-center gap-2
-                       ${page
-                         ? `sticky bottom-0 -mx-4 mt-4 px-4 py-3 bg-ink-900 border-t border-rule
-                            ${blocked || err ? '' : '-mb-4'}`
-                         : 'mt-4'}`}>
-        {/*
-          A button, and it is now correct that it is one.
-
-          It was an `<a href="https://claude.ai/new?q=…" target="_blank">`, and
-          that was the right shape for what it did: on a phone that URL is a
-          universal link, and only a genuine link navigation hands it to the
-          Claude app — `window.open` after an await lands in the browser
-          instead. But the destination was the chat surface, which is the bug
-          this whole change removes. There is no URL to give a link now: the
-          commit is a POST that starts a process and a navigation to the page
-          that shows it, and both of those are things a button does.
-
-          `lg` and the only amber on the surface, because this is the one press
-          that commits.
-        */}
-        <Button size="lg" variant="primary" onClick={open} disabled={busy || !!blocked}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <SquareTerminal size={14} />}
-          {busy
-            ? (session ? 'Resuming' : 'Starting')
-            : (session ? 'Resume the session' : 'Start the session')}
-        </Button>
+      <div className="flex items-center gap-2 mt-2">
         <Button
           size="sm"
           variant="ghost"
@@ -1786,13 +1867,48 @@ function Review({
           {copied ? 'Copied' : 'Copy'}
         </Button>
       </div>
-
-      {/* Two different sentences, and neither is a status code. `blocked` is
-          what this machine is missing and is known before the press; `err` is
-          what the server refused and arrives after it. Both are printed as they
-          came, because both were written for a person. */}
-      {blocked && <p className="text-sm text-bad mt-3 leading-snug">{blocked}</p>}
-      {err && <p className="text-sm text-bad mt-3 leading-snug">{err}</p>}
     </div>
+  )
+}
+
+/**
+ * Into the session with nothing to say.
+ *
+ * The other half of the same door: sometimes what he wants is not to write
+ * anything, it is to be back inside the conversation he was in.
+ * `openTerminalAndGo` reattaches when Wake is already holding it and resumes
+ * when it is not, so this is one control for both, and either way it ends on the
+ * session with a cursor in it.
+ *
+ * A refusal — the box has no tmux, the session is not on this machine — comes
+ * back as the server's own sentence and is printed under the control. It is not
+ * swallowed and it is not a status code.
+ */
+function OpenSession({ sessionId }: { sessionId: string }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const go = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      await openTerminalAndGo({ sessionId })
+      resetLaunch()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="py-4">
+      <h3 className="text-eyebrow uppercase text-fg-mute mb-2">This session</h3>
+      <Button size="md" variant="secondary" onClick={go} disabled={busy}>
+        {busy ? <Loader2 size={14} className="animate-spin" /> : <SquareTerminal size={14} />}
+        {busy ? 'Opening' : 'Open it without sending anything'}
+      </Button>
+      {err && <p className="text-sm text-bad mt-2 leading-snug">{err}</p>}
+    </section>
   )
 }

@@ -1340,3 +1340,219 @@ this instead:
 > is its next turn.
 
 Which is a claim the product can now keep.
+
+---
+
+## 40. Wake lists the sessions Claude Code is running, and nothing else
+
+**Reverses the archive half of #13, and finishes what #39 started.**
+
+The complaint was one sentence: *"Wake shows archived coding sessions, and when
+I start one from Wake, Claude Code on my phone says it has been archived."*
+
+Both halves were true, and they were the same bug seen from two ends.
+
+### What Wake was actually listing
+
+Transcripts. `listAllSessions` walked `~/.claude/projects/*/*.jsonl` inside a
+thirty-day window and returned every file it found — a hundred and thirty of
+them on this box. A transcript is a *record*: it outlives the process that wrote
+it by weeks and its mtime says only that something was written, which a finished
+session satisfies exactly as well as a running one.
+
+So the list was a graveyard with a handful of live sessions scattered through
+it, and nothing on a row said which was which. He tapped one. Wake handed the id
+to Claude Code. Claude Code — correctly — said the session was archived.
+
+### The `claude_session_archive` table was the wrong answer to the right question
+
+Migration 13 added Wake's own archive table on the stated grounds that "Claude
+Code has no archive, so Wake invents one". The `Active / Archived / All`
+segmented control on the Sessions page filtered on it.
+
+That control is why the bug survived. `Active` only ever hid the rows **Wake**
+had archived; it knew nothing about whether Claude Code still had the session
+open. Two vocabularies for one word, disagreeing, with the losing one on screen.
+
+### What this version actually writes, measured
+
+The instinct was to go and find Claude Code's archive flag and read it. It does
+not have one:
+
+* Zero `archived`-shaped JSON keys across **54,713** transcript records in eleven
+  project directories. The only matches for "archiv" anywhere under `~/.claude`
+  are prose inside message bodies.
+* No sidecar beside a `.jsonl`, no per-session `.json`, nothing in
+  `~/.claude/settings.json`.
+* `~/.claude/sessions/<pid>.json` is a **live-process** registry — pid, session
+  id, cwd, and a messaging socket — not an archive.
+
+Claude Code 2.1.251 publishes the **inverse**, and publishes it as its own
+first-class idea:
+
+```
+claude agents --json          Print active sessions (interactive and background)
+claude agents --json --all    …also include completed background sessions
+claude agents --json --cwd P  …only sessions started under P
+```
+
+"Active" is Claude Code's word, and `--all` exists precisely because the default
+is narrower than everything. Seventeen active on this box against a hundred and
+thirty transcripts; thirteen of the seventeen under `work/truto`.
+
+So the rule inverts. Wake does not look for the dead and hide them. It asks what
+is alive and shows that.
+
+### The list
+
+`listActiveSessions()` reads the same per-process files `claude agents` reads,
+without paying for a subprocess, and only those ids get a transcript opened at
+all — seventeen tails instead of a hundred and thirty, which is why it costs
+23ms.
+
+That equivalence is checked rather than assumed. Run side by side on this box,
+`liveSessions()` and `claude agents --json` return the **same seventeen ids**,
+with nothing in either that is not in the other. So this is not Wake's opinion
+about what is alive that happens to agree with Claude Code's — it is Claude
+Code's answer, read from Claude Code's own files. The window widens to all of history rather than narrowing, because a
+session started six weeks ago and *still open* is the one you must not drop.
+
+Wake's archive table survives with its authority reduced to what it can honestly
+claim. "I am done looking at this one" is a real thing to want about a session
+that is still technically up, so an archived id is removed from the list. It can
+only ever subtract now. It cannot put a dead session back on screen, and it
+cannot disagree with Claude Code about what is alive.
+
+`Active / Archived / All` is gone. Not defaulted — gone. Being on the list means
+active, so the control had nothing left to select between, and a filter he has
+to remember to leave switched on is not a product rule.
+
+### Why "just resume it" is not available, and what Send does instead
+
+The obvious continuation — spawn `claude --resume <id> --print` when he sends —
+does not work for the sessions this list contains, and the failure is explicit
+rather than subtle:
+
+```
+$ claude --resume 6fb66aa9-… --print "…"
+Error: Session 6fb66aa9-… is running as a background session (6fb66aa9).
+Run `claude attach 6fb66aa9` to open it, or `claude stop 6fb66aa9` first to
+resume it here. Add --fork-session to branch off a copy instead.
+```
+
+Claude Code refuses to resume a session another process is holding open, which
+is every session on an active-only list. `--fork-session` would take the offer
+and produce a *different* id, which is the archived-twin problem wearing a new
+hat.
+
+The way in was already here. #39 built Wake its own tmux server and starts
+sessions under it with `--session-id`, and `sendBrief` already pastes into that
+tmux through `load-buffer` / `paste-buffer`. That is Wake typing into a terminal
+**Wake owns** — not Claude Code's control socket, which stays untouched for the
+same reason it always has.
+
+So `POST /sessions/:id/send` has three refusals, and each is a different true
+thing rather than one vague one:
+
+1. **Not running.** The id names a transcript. This is the refusal the whole
+   pass exists for: Wake used to hand exactly this id to `--resume` or to a
+   `claude.ai` link and let Claude Code be the one to break the news. It says so
+   itself now, and offers a new session.
+2. **Running, but not under Wake's tmux.** He has it open in a terminal
+   somewhere. Wake can read that transcript and cannot type into it. The only
+   way in would be the control socket, and that line does not move.
+3. **Wake's, and tmux would not take the paste.**
+
+`POST /sessions/new` takes a repository and never an id, so the composer's
+"A new conversation" cannot resume anything by construction.
+
+### The conversation
+
+`sessionExcerpt` already walked these records and returns one blob for a brief
+to quote. `parseSessionTurns` returns the structure instead — role, text,
+timestamp, and the tools a turn reached for — and the two stay separate rather
+than one pretending to be the other. It drops three things on purpose:
+`isSidechain` records, because a subagent's conversation filed in the same
+transcript renders as five interleaved ones; `tool_result` user records, because
+a tool's output is not something he said and showing it as his own message is
+how a transcript starts reading like a terminal; and assistant turns with no
+prose, whose tools ride on the next turn that has some.
+
+Polling takes `after=<epoch ms>` rather than an index, because the page reads a
+256K tail and an index into a tail is invalidated by the tail moving.
+
+### What #35 got right, and the sentence that is now wrong
+
+#35's facts stand: `claude.ai/new?q=` opens a new conversation, and no URL
+targets an existing one. What is struck is the conclusion drawn twice — that the
+picker therefore supplies context and the product should print a `claude
+--resume <uuid>` line. On an active-only list that line is either impossible
+(the session is held open) or an invitation to open a corpse, and on a phone at
+7am there is still no terminal to paste it into.
+
+"Open in the Claude app" survives as a real `<a>`, because an iOS universal link
+has to be an anchor. It is labelled a **new** conversation, which is the only
+thing it has ever been, and it never carries a session id.
+
+---
+
+## 41. Five statuses are five colours, and tasks are the same five
+
+**Reverses the colour half of #32 and #33.**
+
+`status.tsx` opened with an argument it had clearly thought about:
+
+> Five statuses and four priorities is nine states on a row that already has a
+> source hue and a kind glyph on it. Painting each of them would put nine
+> competing colours on a screen budgeted for three, so the *ring* carries the
+> state and colour is spent only where it says something a shape cannot.
+
+The reasoning is sound and the result was not. Held at arm's length on a phone:
+
+* `not_started` and `wont_do` were painted with the **same token**
+  (`--color-fg-mute`). Not similar — identical. Two of the five states were one
+  picture.
+* `in_progress` took `--color-fg`, which is also the colour of the title
+  immediately beside it, so the commonest state on the desk was the same ink as
+  the words next to it.
+* Five open/filled/dashed/tick/slash rings at 14px, in one grey, resolve to
+  "there is a circle here" at anything past reading distance.
+
+So the count was right and the budget was spent in the wrong place. The nine
+competing colours it feared were never going to happen, because the source hue
+and the kind glyph are not on the same axis as the status and the eye does not
+add them up.
+
+The shape stays — that is what still works without colour, and it is what a
+screen reader gets through `StatusSlot`'s label. Each state additionally takes
+one of five `--color-status-*` tokens, spent twice: the glyph, and a 14% wash
+behind the chip. A wash rather than a filled pill because the row is still
+mostly text and five saturated pills down a column is a paint chart. Every value
+is above this file's own contrast floor in both themes, picked against each
+page rather than converted between them — the dark sky is 2:1 on white, which is
+the failure `--color-accent-ink` already exists to prevent.
+
+`in_progress` is **sky**, not amber. That much of #32 survives intact and is now
+pinned by a test: amber is unread, the badge, and the one primary button, and a
+status every second row wears would drown all three.
+
+### One painter, because there were two
+
+`Work.tsx` kept its own private mute/fg/ok circles and its own `todo|doing|done`
+vocabulary. That is why Work was three states behind the desk: the enum was
+never shared, so it could not drift — it simply never arrived. Tasks now store
+the same five `CardStatus` values, migrated `todo→not_started`,
+`doing→in_progress`, `done→done`, and read the legacy three on the way out so a
+row written by the old build never renders blank. Goals stay binary; a goal has
+no review.
+
+`StatusGlyph` / `StatusChip` in `status.tsx` are the only things allowed to map
+a status to a colour, and a contract test enforces it by refusing any other file
+that reaches for two or more of the tokens. One token alone is fine and is not
+what it is looking for — the Sessions row borrows `status-live` for its live
+dot, which is a session being up rather than a card being in progress.
+
+The swipe drawer's picker was the last place this mattered and the worst one:
+five words in `fg-mute` with the current one in `fg`, offered mid-swipe, one
+thumb, holding a row open. It is painted now, through the same function, so
+there is still exactly one table.

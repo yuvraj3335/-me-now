@@ -328,8 +328,29 @@ describe('the shell reaches everywhere from both places', () => {
     // dismissal at exactly the moment something is broken.
     expect(app, 'the phone bar filters the destination list again')
       .not.toMatch(/TABS\.filter\([^)]*mobile/)
-    for (const f of web) {
-      expect(read(f), `${f}: a hidden overflow menu came back`).not.toMatch(/\bsetMore\b/)
+
+    /*
+     * AMENDED: the ban was on the string `setMore`, everywhere, and it was
+     * catching the wrong thing.
+     *
+     * What this test is actually about is *navigation* — a destination you
+     * cannot reach without first opening something. It said so in its own
+     * comment and then enforced it with a variable name, which is a proxy, and
+     * the proxy went wrong the moment a form grew a legitimate one: the new
+     * task sheet folds its deadline, goal, colour and notes behind a labelled
+     * `More`, so that creating a task is a title and an `Add` and nothing else.
+     * That is progressive disclosure on a 375px screen and it is the opposite
+     * of the failure being guarded against — the five destinations are all
+     * still on the bar, and none of them is behind it.
+     *
+     * So the ban is scoped to the shell, which is the only place a `More` can
+     * swallow a destination. `nothing hides behind a glyph` further down still
+     * covers every file, and that is the rule that keeps a disclosure honest:
+     * it may fold things away, but it must say so in a word.
+     */
+    for (const f of ['src/web/App.tsx', 'src/web/components/primitives.tsx']) {
+      expect(read(f), `${f}: a destination went back behind an overflow`)
+        .not.toMatch(/\bsetMore\b/)
     }
   })
 
@@ -754,6 +775,64 @@ describe('both themes stay complete', () => {
   })
 })
 
+describe('five statuses are five colours', () => {
+  const css = read('src/web/styles.css')
+  const STATUSES = ['idle', 'live', 'review', 'done', 'drop'] as const
+
+  /** The value one token resolves to inside one `{ … }` block. */
+  const valueIn = (marker: string, token: string) => {
+    const at = css.indexOf(marker)
+    if (at === -1) throw new Error(`styles.css no longer contains ${marker}`)
+    const body = css.slice(at, css.indexOf('\n  }', at))
+    return body.match(new RegExp(`${token}\\s*:\\s*([^;]+);`))?.[1]?.trim() ?? null
+  }
+
+  for (const theme of [":root[data-theme='dark'] {", ":root[data-theme='light'] {"]) {
+    test(`each status owns a distinct hue in ${theme.includes('dark') ? 'dark' : 'light'}`, () => {
+      // The failure this pins is the one he reported: `not_started` and
+      // `wont_do` were painted with the same token, so two of the five states
+      // were not merely similar but identical, and `in_progress` wore the same
+      // colour as the title beside it.
+      const values = STATUSES.map(s => {
+        const v = valueIn(theme, `--color-status-${s}`)
+        expect(v, `--color-status-${s} is missing from ${theme}`).toBeTruthy()
+        return v
+      })
+      expect(new Set(values).size, `two statuses share a colour: ${values.join(', ')}`)
+        .toBe(STATUSES.length)
+    })
+  }
+
+  test('in progress is not amber', () => {
+    // Amber is unread, the badge, and the one primary button. A status every
+    // second row wears would drown all three, which is why the sky was chosen.
+    for (const theme of [":root[data-theme='dark'] {", ":root[data-theme='light'] {"]) {
+      const live = valueIn(theme, '--color-status-live')
+      expect(live).not.toBe(valueIn(theme, '--color-accent'))
+      expect(live).not.toBe(valueIn(theme, '--color-accent-ink'))
+      expect(live, 'in_progress is back on --color-fg, which is also the title')
+        .not.toBe(valueIn(theme, '--color-fg'))
+    }
+  })
+
+  test('only one file maps the five', () => {
+    // `Work.tsx` used to keep its own private mute/fg/ok circles, which is how
+    // it drifted three states behind the desk and shipped two statuses wearing
+    // one colour. The tell is a file that reaches for *several* of these
+    // tokens: that is a second status→colour table, and two tables disagree.
+    //
+    // One token on its own is fine and is not what this is looking for — the
+    // Sessions row borrows `status-live` for its live dot, which is a session
+    // being up rather than a card being in progress.
+    for (const f of web) {
+      if (f.endsWith('components/status.tsx')) continue
+      const used = new Set([...codeOf(f).matchAll(/--color-status-([a-z]+)/g)].map(m => m[1]))
+      expect([...used].length, `${f} maps more than one status to a colour — status.tsx does that`)
+        .toBeLessThan(2)
+    }
+  })
+})
+
 describe('a source nobody connected is not a healthy sync', () => {
   // `ok: 1, count: 0` was recorded for a source with no account attached, and
   // the Home page rendered that as "Slack, just now" — a fresh, successful
@@ -1000,7 +1079,7 @@ describe('one surface spends the accent once', () => {
     // behind a scrim does not.
     const work = read('src/web/pages/Work.tsx')
     expect(work, 'the page stopped noticing that a sheet is up')
-      .toMatch(/const sheetOpen = creating \|\| editing !== null \|\| goalEditing !== null/)
+      .toMatch(/const sheetOpen =\s*\n?\s*creating \|\| editing !== null \|\| reading !== null/)
     expect(work, 'the trigger went back to being unconditionally amber')
       .toMatch(/variant=\{sheetOpen \? 'default' : 'primary'\}/)
     // The commit keeps it.
@@ -1438,26 +1517,27 @@ describe('a row can be acted on without being opened', () => {
     }
 
     /*
-     * The Work page's draggable rows are the exception, and it has to stay
-     * deliberate — as does the fact that it applies to those rows only.
+     * AMENDED. The Work page used to be the exception, and it is not one now.
      *
-     * framer owns a `Reorder.Item`'s vertical axis for drag-to-reorder and
-     * writes `pan-x` inline to get it, so writing `pan-y` over that would kill
-     * reordering while still looking like it works. But `pan-x` also hands the
-     * browser the horizontal axis — the one the swipe is made of — so the row
-     * asks for `none`, and the rule needs `!important` to outrank an inline
-     * style.
+     * A task row was a `Reorder.Item`, and framer writes `touch-action: pan-x`
+     * inline on one of those to claim the vertical axis for its drag. `pan-x`
+     * also hands the browser the horizontal axis — the one the swipe is made of
+     * — so the row asked for `none` instead, with an `!important` rule to
+     * outrank the inline style.
      *
-     * A static row — the Done list — is not a `Reorder.Item`. Nothing writes
-     * `pan-x` on it and nothing catches a vertical drag, so `none` there takes
-     * the page's scroll away and hands it to nobody: a thumb dragging up the
-     * Done list moves nothing at all. `none` is conditional on being draggable
-     * for exactly that reason.
+     * Both of those declarations take the page's own scroll away, and that is
+     * the failure he reported from a real phone: a thumb dragging up the task
+     * list moved nothing at all, which is the "frozen app" case `lib/swipe.ts`
+     * puts above every gesture in this product. There is no third value that
+     * gives the page its scroll, framer its drag and the drawer its axis, so
+     * the reorder went. Every row on the page is `pan-y` now — the same split
+     * as everywhere else — and the drawer still opens because `axisFor` waits
+     * for 12px of travel that is 1.5× more sideways than it is vertical.
      */
-    expect(read('src/web/pages/Work.tsx'), 'the task row gave an axis back to the browser')
-      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3, isStatic \? 'pan-y' : 'none'\)/)
-    expect(css, "the task row's touch policy stopped outranking framer's inline one")
-      .toMatch(/\[data-swipe='none'\] \{ touch-action: none !important; \}/)
+    expect(read('src/web/pages/Work.tsx'), 'the task row gave an axis away again')
+      .toMatch(/useSwipe\(`task:\$\{task\.id\}`, 3\)/)
+    expect(codeOf('src/web/pages/Work.tsx'), 'drag-to-reorder came back, and took the page scroll with it')
+      .not.toMatch(/Reorder\./)
   })
 
   test('exactly one row is open, whichever input opened it', () => {
@@ -1509,15 +1589,22 @@ describe('a row can be acted on without being opened', () => {
   })
 
   test('the picker offers what the row can actually be', () => {
-    // Five for a card, three for a task, two for a goal — and all of them from
+    // Five for a card, five for a task, two for a goal — and all of them from
     // the one label table, so the product cannot grow a second vocabulary and a
     // picker cannot offer a value the route refuses.
+    //
+    // AMENDED: a task had three of its own — `todo | doing | done` — and the
+    // seam is closed. It is derived from `STATUS_ORDER` rather than written
+    // out, which is what makes "the same five, in the same order" a fact about
+    // the code rather than a thing two files currently agree on.
     expect(read('src/web/components/CardTable.tsx'), 'the card picker stopped using the shared five')
       .toMatch(/STATUS_ORDER\.map/)
-    const work = read('src/web/pages/Work.tsx')
-    expect(work, 'the task picker invented its own labels').toContain('STATUS_LABEL.not_started')
-    expect(work, 'the task picker offered a state a task cannot be in')
-      .toMatch(/const TASK_CHOICES = \[\s*\n\s*\{ id: 'todo'/)
+    expect(read('src/web/pages/Work.tsx'), 'the task picker went back to a list of its own')
+      .toMatch(/const TASK_CHOICES = STATUS_ORDER\.map/)
+    expect(codeOf('src/web/pages/Work.tsx'), 'the old three-word vocabulary came back')
+      .not.toMatch(/'todo'|'doing'/)
+    expect(read('src/web/pages/Work.tsx'), 'the goal picker invented its own labels')
+      .toContain('STATUS_LABEL.not_started')
   })
 
   test("delete on a card is the dismissal Wake already had", () => {

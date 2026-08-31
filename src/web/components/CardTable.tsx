@@ -42,14 +42,19 @@
  * horizontal axis shows the columns until there are no more to show, and is the
  * drawer's after that. `CardLine` and `useSwipe` argue it where it is decided.
  *
- * Below 1024px it is still a table, and that is the reversal this file's last
- * comment argued against. "Four columns in 390px is a diagram of a table" was
- * true of four columns *squeezed* into 390px; what shipped instead was one
- * column — a glyph, a truncated title, a tick — so a phone showed no status, no
- * deadline, no channel and no person, which are the four facts that decide
- * whether a row is opened at 7am. The phone gets real columns at real widths in
- * a scroller of their own, and everything that does not fit is reached by moving
- * the table rather than by squeezing it. See `PhoneTable`.
+ * Between 640 and 1024 it is still a table, at the narrower widths a laptop
+ * window and a tablet can read those columns at. See `PhoneTable`.
+ *
+ * Below 640 it is not, and that boundary is the one thing in this file measured
+ * on a real phone rather than in a resized window. Four columns at a width they
+ * can be read at need 552px; a 375px screen gives the page column 343. The
+ * table therefore scrolled sideways, and `WHO` was cut off mid-word at the fold
+ * before a finger ever moved — a column reachable only by remembering that the
+ * table moves is not a column. So the four facts survive and the grid does not:
+ * a row-card, title on one line and status, customer and deadline on the next.
+ * See `RowCard` and `CardList`. Nothing on that layout scrolls sideways, which
+ * is the rule `App.tsx` states for the whole page column and this one used to
+ * ask an exception to.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -57,11 +62,11 @@ import { createPortal } from 'react-dom'
 import type { Card, CardStatus } from '../lib/types'
 import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { fromLocalInput, toLocalInput } from '../lib/time'
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
-import { CountBadge, Select, rowStateClass, useRail } from './primitives'
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronDown } from 'lucide-react'
+import { CountBadge, rowStateClass, useRail } from './primitives'
 import { cardKind, contextLine, KindGlyph } from './kinds'
 import { SOURCE_LABEL } from './sources'
-import { PriorityGlyph, isSettled } from './status'
+import { PriorityGlyph, StatusChip, isSettled } from './status'
 import { SwipeDrawer, useSwipe } from './swipe'
 import { dueWords, ROW_META, ROW_SECOND, ROW_TITLE, TABLE_HEAD } from '../lib/typography'
 
@@ -178,6 +183,24 @@ export function plainMarkdown(s: string): string {
 export const TABLE_MIN = 1024
 
 /**
+ * The width at which columns are worth having at all.
+ *
+ * Tailwind's `sm`, and the same 640 the stylesheet draws the tab bar below —
+ * one number, so "this is a phone" means the same thing in the CSS and in the
+ * component that has to decide what to render.
+ *
+ * Under it the desk is a list of row-cards and over it a table, and the reason
+ * is measured rather than aesthetic. The phone table's own columns need
+ * `PHONE_MIN` — 552px — and a 375px screen gives a page column 343, so four
+ * columns at a readable width can only be reached by scrolling the table
+ * sideways. That shipped, and `WHO` was still cut off mid-word at the fold
+ * before a finger ever moved. A row is a thing everywhere else in this product;
+ * below `sm` it is a thing here too. From 640 up the 552 fits inside the page
+ * column with room to spare, nothing scrolls, and the table is the better read.
+ */
+export const COLUMNS_MIN = 640
+
+/**
  * The width at which the detail pane earns its column.
  *
  * At 1024 a 352px pane left the table 424px for its columns. Below 1280 the
@@ -189,10 +212,12 @@ export const PANE_MIN = 1280
 /**
  * The three fixed columns, in the order they appear after Title.
  *
- * Measured on the rendered page, not guessed. `Status` holds a 28px `<select>`
- * whose longest option is `Not started`: 68px of text, 20px of chevron well,
- * 8px of lead padding and the cell's own 16px trailing gap. At 116 that came out
- * `Not start…` on every second row — a truncated status is not a status. `Kind`
+ * Measured on the rendered page, not guessed. `Status` holds the closed
+ * `StatusPicker`, whose longest state is `Not started`: 68px of text, a 13px
+ * glyph and the 6px beside it, 16px of chip padding, then 15px of chevron and
+ * the cell's own 16px trailing gap — 134. It was a 28px `<select>` at 116 and
+ * came out `Not start…` on every second row; a truncated status is not a
+ * status, and a chip clipped mid-word is not a chip. `Kind`
  * holds a 20px glyph slot, `Session` at 13px, and a right-aligned priority mark.
  * `Due` holds `Overdue 12d`, the longest thing `dueWords` produces.
  *
@@ -329,6 +354,235 @@ export function TableCols() {
   )
 }
 
+/* ------------------------------ the status control ------------------------ */
+
+/**
+ * Where the panel goes, measured from the trigger rather than guessed.
+ *
+ * The same arithmetic `Menu` does in `primitives.tsx`, and deliberately so —
+ * see `StatusPicker` for why this cannot simply *be* a `Menu`. It flips above
+ * the trigger when what is below it cannot hold all five options, because a
+ * picker that opens into two visible rows and a scrollbar is worse than one
+ * that opens upward: the five statuses are a set you read at once, and the two
+ * that would fall off the bottom are `Done` and `Won't do`.
+ */
+const PICKER_MIN_W = 176
+const PICKER_GAP = 6
+const PICKER_MARGIN = 8
+
+/** Five 44px rows plus the panel's own padding — the room it actually needs. */
+const PICKER_H = 5 * 44 + 8
+
+type PickerAt = { left: number; width: number; top?: number; bottom?: number }
+
+function anchorFor(el: HTMLElement): PickerAt {
+  const r = el.getBoundingClientRect()
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const below = vh - r.bottom - PICKER_GAP - PICKER_MARGIN
+  const above = r.top - PICKER_GAP - PICKER_MARGIN
+  const width = Math.min(Math.max(r.width, PICKER_MIN_W), vw - PICKER_MARGIN * 2)
+  const left = Math.min(Math.max(r.left, PICKER_MARGIN), vw - width - PICKER_MARGIN)
+
+  return below < PICKER_H && above > below
+    ? { left, width, bottom: vh - r.top + PICKER_GAP }
+    : { left, width, top: r.bottom + PICKER_GAP }
+}
+
+/**
+ * Where work stands, as a control you can read *before* you press it.
+ *
+ * This replaces a native `<select>`, and the failure it ends was reported off a
+ * screenshot of the deployed desk at 375px: a column of identical grey boxes
+ * reading `Not started`, `Not started`, `In progress`. The word was there and
+ * the state was not — nothing on a closed control carried the ring or the hue
+ * that every other surface in this product says a status with, so the one
+ * column a person taps to see where things stand answered only by being read,
+ * row by row, in 13px type, at 7am. Closed, this is a `StatusChip`: the same
+ * glyph and the same wash `status.tsx` paints everywhere else, which is what
+ * makes a status legible at arm's length rather than at reading distance.
+ *
+ * Open, the five options are chips too, at `md`, on 44px rows — that is the
+ * same failure one press deeper if they are not. The colour is how you aim at
+ * `In review` without reading four labels first, and a picker whose options are
+ * plain words hands the whole hue vocabulary back at exactly the moment it is
+ * being used.
+ *
+ * **It is not a `Menu`, and that is a cost paid on purpose.** `Menu` already
+ * solves the portal, the placement, the outside press and the keyboard, and
+ * this repeats all four. What it cannot do is draw a coloured option: its rows
+ * are `{ id, label }` and the label is a string. The alternative was a second
+ * status→colour table living in a picker, which is precisely the drift
+ * `status.tsx` was written to end — `Work.tsx` kept one of those and shipped
+ * three states behind the desk. So the mechanism is duplicated and the
+ * vocabulary is not.
+ *
+ * `fixed`, and portalled. An absolutely positioned panel is clipped by the
+ * nearest scroll container and every caller here is inside one: the phone list,
+ * the desk's page column, the detail pane's own scrolling body.
+ *
+ * The keyboard is taken over completely while it is open, in the **capture**
+ * phase. The desk binds `j`, `k`, `Enter`, `Escape` and `e` to `document`, and
+ * `e` finishes a card with no confirmation — a picker that let those through
+ * would settle the cursor's card while somebody was choosing a status for a
+ * different one. `stopPropagation` in capture runs before every bubble listener
+ * on the same node and does not cancel a default action, so Enter and Space
+ * still press the focused row the way they do on any button.
+ */
+export function StatusPicker({
+  value, onChange, className = '',
+}: {
+  value: CardStatus
+  onChange: (s: CardStatus) => void
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [at, setAt] = useState<PickerAt | null>(null)
+  const anchor = useRef<HTMLSpanElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+
+  /** The five rows, in painted order — the list the arrow keys walk. */
+  const rows = () =>
+    [...(panel.current?.querySelectorAll<HTMLButtonElement>('[data-status-row]') ?? [])]
+
+  // A pick and an Escape put focus back on the trigger; an outside press does
+  // not, because whatever was pressed out there is where the person is going.
+  const close = () => {
+    setOpen(false)
+    anchor.current?.querySelector('button')?.focus()
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const sync = () => { if (anchor.current) setAt(anchorFor(anchor.current)) }
+    sync()
+    window.addEventListener('resize', sync)
+    // Capture: the scroller that moves the trigger is an ancestor, and scroll
+    // does not bubble from an element to the window.
+    window.addEventListener('scroll', sync, true)
+    return () => {
+      window.removeEventListener('resize', sync)
+      window.removeEventListener('scroll', sync, true)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node
+      if (panel.current?.contains(t) || anchor.current?.contains(t)) return
+      setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') return setOpen(false)   // let focus leave; it is done
+      e.stopPropagation()
+      const list = rows()
+      const here = list.findIndex(r => r === document.activeElement)
+      const go = (n: number) => {
+        e.preventDefault()
+        list[Math.min(Math.max(n, 0), list.length - 1)]?.focus()
+      }
+      if (e.key === 'Escape') { e.preventDefault(); close() }
+      else if (e.key === 'ArrowDown') go(here + 1)
+      else if (e.key === 'ArrowUp') go(here - 1)
+      else if (e.key === 'Home') go(0)
+      else if (e.key === 'End') go(list.length - 1)
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [open])
+
+  // The row a card is already on takes focus, not the first one — the answer to
+  // "where is this now" is where the keyboard should start from. A task rather
+  // than an animation frame: a hidden document schedules no frames.
+  useEffect(() => {
+    if (!open) return
+    const id = setTimeout(() => {
+      const list = rows()
+      const target = list.find(r => r.getAttribute('aria-selected') === 'true') ?? list[0]
+      target?.focus()
+    }, 0)
+    return () => clearTimeout(id)
+  }, [open])
+
+  return (
+    <span
+      ref={anchor}
+      className={`inline-flex min-w-0 ${className}`}
+      /* This sits in a row whose own click opens the detail, and choosing a
+         status is not asking to read the card — the same two handlers the
+         native `Select` this replaces had to carry. */
+      onClick={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        /* The word is printed on the chip, but it is printed *inside* a control
+           whose accessible name would otherwise be that word alone — `Not
+           started` says nothing about what pressing it does. */
+        aria-label={`Status — ${STATUS_LABEL[value]}`}
+        title={`Status — ${STATUS_LABEL[value]}`}
+        className="hit relative inline-flex items-center gap-0.5 min-w-0 max-w-full
+                   rounded-full transition-colors duration-100 hover:bg-ink-800"
+      >
+        <StatusChip status={value} />
+        <ChevronDown size={13} aria-hidden
+          className={`shrink-0 text-fg-mute transition-transform duration-100
+            ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && at && createPortal(
+        <div
+          ref={panel}
+          role="listbox"
+          aria-label="Status"
+          style={{ left: at.left, top: at.top, bottom: at.bottom, width: at.width }}
+          /* `z-[55]`, the same rank `Menu` takes: above a `Sheet` because that
+             is one of the surfaces it opens over, below the palette because
+             ⌘K is allowed to cover everything. */
+          className="fixed z-[55] py-1 rounded-panel border border-edge bg-ink-850 raised"
+        >
+          {STATUS_ORDER.map(s => (
+            <button
+              key={s}
+              type="button"
+              data-status-row
+              role="option"
+              aria-selected={s === value}
+              onClick={() => { close(); onChange(s) }}
+              /* A real 44px height rather than `.hit`'s collar: these are stacked
+                 rows, so every collar would overlap its neighbours' and the last
+                 one painted would take the taps. `styles.css` states that rule
+                 for menu rows in so many words. */
+              className={`w-full min-h-11 flex items-center gap-2 px-2 text-left outline-none
+                          transition-colors duration-100 hover:bg-ink-800 focus-visible:bg-ink-800
+                          ${s === value ? 'bg-ink-800' : ''}`}
+            >
+              <StatusChip status={s} size="md" />
+              {/* The tick is not decoration. A wash behind a chip says which
+                  status this row *is*; it does not say which one is currently
+                  set, and at five chips all wearing their own colour the
+                  selected one is not otherwise distinguishable. */}
+              <Check size={14} aria-hidden
+                className={`ml-auto shrink-0 text-accent-ink ${s === value ? '' : 'invisible'}`} />
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
 /* ---------------------------------- rows ---------------------------------- */
 
 const CELL = 'py-3 pr-4 align-middle truncate'
@@ -391,13 +645,7 @@ export function CardRow({
       {/* Less vertical padding than a text cell, because the control inside it
           is 28px and the row is meant to be 44 either way. */}
       <td className="py-2 pr-4 align-middle">
-        <Select
-          value={card.status}
-          options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
-          onChange={s => actions.onStatus(card, s)}
-          ariaLabel="Status"
-          className="w-full"
-        />
+        <StatusPicker value={card.status} onChange={s => actions.onStatus(card, s)} />
       </td>
 
       <td className={CELL}>
@@ -455,11 +703,40 @@ function DueCell({ card, onDue, children }: {
   children?: React.ReactNode
 }) {
   const [editing, setEditing] = useState(false)
+  const box = useRef<HTMLTableCellElement>(null)
   const words = dueWords(card.due_at)
   const overdue = card.due_at !== null && card.due_at < Date.now()
 
   // A different card in the same row position is a different question.
   useEffect(() => setEditing(false), [card.group_key])
+
+  /**
+   * The way out, now that the field does not take focus by itself.
+   *
+   * This used to be `autoFocus` plus `onBlur`, which is one mechanism doing two
+   * jobs: it opened the platform's date UI under the finger the instant the
+   * cell was pressed, and — because a field that never receives focus never
+   * blurs — it was also the only thing that closed the editor again. Dropping
+   * the focus grab without this would have left a cell that opens into an input
+   * and can never be got out of. A press anywhere else closes it, in the
+   * capture phase so the press that opens some *other* cell still lands, and
+   * Escape closes it for the laptop. `onBlur` stays for the reader who tabs
+   * away.
+   */
+  useEffect(() => {
+    if (!editing) return
+    const away = (e: PointerEvent) => {
+      if (box.current?.contains(e.target as Node)) return
+      setEditing(false)
+    }
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditing(false) }
+    document.addEventListener('pointerdown', away, true)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('pointerdown', away, true)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [editing])
 
   if (editing) {
     // Built from local parts. `toISOString().slice(0,10)` is the UTC day, which
@@ -467,11 +744,10 @@ function DueCell({ card, onDue, children }: {
     const day = card.due_at ? toLocalInput(card.due_at).slice(0, 10) : ''
     const clock = card.due_at ? toLocalInput(card.due_at).slice(11) : '18:00'
     return (
-      <td className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
+      <td ref={box} className="py-1 pr-0 align-middle relative" onClick={e => e.stopPropagation()}>
         {children}
         <input
           type="date"
-          autoFocus
           aria-label="Due date"
           value={day}
           onChange={e => onDue(card, fromLocalInput(e.target.value ? `${e.target.value}T${clock}` : ''))}
@@ -520,18 +796,18 @@ function DueCell({ card, onDue, children }: {
  * them, rather than every column being squeezed to 68px so that all four fit
  * and none of them says anything.
  *
- * Status is 144 and not the 132 it shipped at, and the twelve pixels are a
+ * Status is 144 and not the 132 it shipped at, and the twelve pixels were a
  * coarse pointer's. `styles.css` raises every `<select>` to 16px under
  * `@media (pointer: coarse)` — the fix for iOS zooming the page on focus and
- * never zooming back — so the phone renders this control two points larger than
- * any desktop window ever will, at any width. Measured with that rule live:
- * `Not started` is 90.4px against the 86px of text room a 132px column leaves
- * after 16px of cell gap and the select's own 28px of padding and chevron well,
- * so the phone read `Not start…` on every row. This file already spends a
- * paragraph on that exact failure at 116px on the laptop — *a truncated status
- * is not a status* — and it came back on the one device the rule applies to.
- * 144 leaves 98px for a 90.4px word. A wider column costs nothing here: the
- * table scrolls, so the price is 12px of travel rather than 12px off Title.
+ * never zooming back — so a native control rendered here two points larger than
+ * any desktop window ever would: `Not started` measured 90.4px against the 86px
+ * of text room a 132px column left, and the phone read `Not start…` on every
+ * row. The control is a `StatusPicker` now, which is a button rather than a
+ * `<select>` and so is not touched by that rule at all; the closed chip is 134px
+ * including the cell's gap, at every pointer. The column keeps 144 anyway. The
+ * margin is what the last two passes at this number were both short of, and it
+ * costs nothing: this table scrolls, so the price is 10px of travel rather than
+ * 10px off Title.
  */
 export const PHONE_W = { status: 144, where: 136, due: 88 }
 
@@ -798,13 +1074,7 @@ export function CardLine({
       </td>
 
       <td className="py-2 pr-4 align-middle">
-        <Select
-          value={card.status}
-          options={STATUS_ORDER.map(s => ({ id: s, label: STATUS_LABEL[s] }))}
-          onChange={s => actions.onStatus(card, s)}
-          ariaLabel="Status"
-          className="w-full"
-        />
+        <StatusPicker value={card.status} onChange={s => actions.onStatus(card, s)} />
       </td>
 
       {/* `15five — Roopi`, not `#15five-truto`. See `contextLine`. */}
@@ -992,5 +1262,178 @@ function Peek({ card, onClose }: { card: Card; onClose: () => void }) {
       )}
     </div>,
     document.body,
+  )
+}
+
+/* ------------------------------ the phone list ---------------------------- */
+
+/**
+ * One card of the desk, below `sm`, as a row rather than as four columns.
+ *
+ * **What this replaces, and why it had to go.** The phone rendered the same
+ * table the laptop does at its own narrower widths, in a scroller of its own:
+ * `Title · Status · Where · Due` needs 552px and a 375px screen gives the page
+ * column 343, so the answer was to move the table under the finger. Screenshot
+ * at 375: `WHO` cut off mid-word at the right edge, before any finger moved.
+ * Every argument for that layout is still true — status, deadline, customer and
+ * person really are the four facts that decide whether a row is opened at 7am —
+ * and every one of them was reachable only by remembering that the table moves
+ * and then moving it. A column that has to be discovered is not a column.
+ *
+ * So the four facts stay and the grid goes. The title takes the first line at
+ * full width, and the second line carries the status, who it is with, and when
+ * it is wanted. Nothing is clipped by a viewport edge and nothing scrolls
+ * sideways — the page column cannot, `App.tsx` sees to that, and this no longer
+ * asks it to.
+ *
+ * The title clips at two lines rather than one, which is the one deliberate
+ * clip left. `truncate` on a 343px line ends most Slack threads inside their
+ * first clause; two lines is about 90 characters, and the long press behind
+ * this row shows the rest without committing to anything. `titleOf` admits a
+ * collector's own hard cut on the way through.
+ *
+ * The status is the `StatusPicker`, so the phone's only visible status is also
+ * the control that changes it — a chip a thumb lands on and nothing happens is
+ * a trap, and `Done · Status · Delete` behind the swipe is the second route
+ * rather than the only one.
+ *
+ * The swipe is the desk's, unchanged, at its default `pan-y`: there is no
+ * competing horizontal scroller on this layout any more, so the row keeps the
+ * horizontal axis outright and the `data-atend` handover the phone *table*
+ * needs has nothing to arbitrate here.
+ */
+function RowCard({
+  card, selected, focused, actions, onPeek,
+}: {
+  card: Card
+  selected: boolean
+  focused: boolean
+  actions: RowAction
+  /** Show the peek for this row. The card is still a tap away and unaffected. */
+  onPeek: (c: Card) => void
+}) {
+  const ref = useRef<HTMLLIElement | null>(null)
+  const words = dueWords(card.due_at)
+  const overdue = card.due_at !== null && card.due_at < Date.now()
+  const kind = cardKind(card)
+  const where = contextLine(card)
+  const name = titleOf(card)
+  const swipe = useSwipe(card.group_key, 3)
+  const press = useLongPress(() => onPeek(card))
+
+  // The `j`/`k` cursor reaches this layout too, and a selection nobody can see
+  // is worse than none — the same line the table row spends on the same problem.
+  useEffect(() => { if (focused) ref.current?.scrollIntoView({ block: 'nearest' }) }, [focused])
+
+  return (
+    <li
+      ref={n => { ref.current = n; swipe.bind.ref(n) }}
+      onPointerDown={e => { swipe.bind.onPointerDown(e); press.onPointerDown(e) }}
+      onPointerMove={e => { swipe.bind.onPointerMove(e); press.onPointerMove(e) }}
+      onPointerUp={e => { swipe.bind.onPointerUp(e); press.onPointerUp() }}
+      onPointerCancel={e => { swipe.bind.onPointerCancel(e); press.onPointerCancel() }}
+      onClickCapture={e => { if (press.ate(e)) return; swipe.bind.onClickCapture(e) }}
+      data-swipe={swipe.bind['data-swipe']}
+      /* `WebkitTouchCallout` beside the gesture's own style: without it iOS
+         answers a long press on a row of text with its own selection magnifier,
+         over the peek that press was asking for. */
+      style={{ ...swipe.bind.style, WebkitTouchCallout: 'none' }}
+      onClick={() => actions.onOpen(card)}
+      /* `aria-current`, where both tables say `aria-selected`, and the swap is
+         not cosmetic: `aria-selected` is only defined on a handful of roles —
+         row, option, tab, gridcell — and a plain `<li>` is none of them, so on
+         this layout it is an attribute assistive technology drops on the floor.
+         `aria-current` is global and means exactly this: the one item in a set
+         that is currently being shown. */
+      aria-current={selected ? 'true' : undefined}
+      /* `relative`, because the drawer pins itself to `right: 0` of whatever
+         contains it and this row is that container. No `overflow-hidden`: the
+         drawer already clips itself to the width the finger has revealed, and
+         clipping here would eat the status control's 44px collar instead. */
+      className={`relative cursor-pointer border-b border-rule py-2
+        ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
+    >
+      <SwipeDrawer
+        dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+        {...drawerFor(card, actions)}
+      />
+
+      <div className="flex items-start gap-2 min-w-0">
+        {/* Named for the source rather than the kind: the shape is what a
+            sighted reader tells them apart by, and the hue that carries the
+            source is exactly the half a screen reader cannot see. */}
+        <span role="img" aria-label={SOURCE_LABEL[kind.source]} title={SOURCE_LABEL[kind.source]}
+          className="w-5 shrink-0 flex items-center h-6">
+          <KindGlyph kind={kind} size={14} />
+        </span>
+        <span className={`grow min-w-0 ${ROW_TITLE} line-clamp-2
+          ${isSettled(card.status) ? 'line-through text-fg-dim' : ''}`}>
+          {name}
+        </span>
+        <span className="shrink-0 mt-0.5 flex items-center gap-2">
+          <PriorityGlyph priority={card.priority} />
+          <CountBadge count={card.activity.count} plus title={NEW_TITLE} />
+        </span>
+      </div>
+
+      {/* Indented onto the title's own left edge rather than the glyph's, so the
+          two lines of a row read as one block and twenty rows read as one
+          column. The deadline is right-aligned for the same reason the table
+          gives it a column: it is the one fact scanned down the page rather
+          than read across a row. */}
+      <div className="mt-1 pl-7 flex items-center gap-2 min-w-0">
+        <StatusPicker value={card.status} onChange={s => actions.onStatus(card, s)} />
+        {where && <span className={`${ROW_SECOND} truncate min-w-0`}>{where}</span>}
+        <span className={`ml-auto shrink-0 ${overdue ? 'text-sm text-bad tnum'
+          : words ? ROW_META : 'text-sm text-fg-mute'}`}>
+          {words ?? '—'}
+        </span>
+      </div>
+    </li>
+  )
+}
+
+/**
+ * The desk below `sm`: a list of rows, and no scroller of any kind.
+ *
+ * A real `<ul>`, because this is a list and the thing it replaces was a table
+ * pretending a phone could reach its columns. There is no wrapper with an
+ * `overflow` on either axis: the page scrolls vertically the way a page does,
+ * and nothing here is wider than the column it sits in, so there is nothing to
+ * scroll horizontally and nothing to fight the row's own swipe for the axis.
+ *
+ * The long press answers with the same `Peek` the phone table uses — one
+ * component, so a held row says the same thing at every width it can be held
+ * at.
+ */
+export function CardList({
+  rows, selectedKey, cursorKey, actions,
+}: {
+  rows: Card[]
+  selectedKey: string | null
+  /** The row the `j`/`k` cursor is standing on, or null when nobody chose one. */
+  cursorKey: string | null
+  actions: RowAction
+}) {
+  const [peek, setPeek] = useState<Card | null>(null)
+
+  return (
+    <>
+      {/* One edge at the top, which is the table's `<thead>` rule doing the one
+          job it still has here: saying where the list starts. Without it the
+          first row floats under the filter control with nothing between them. */}
+      <ul className="border-t border-edge">
+        {rows.map(c => (
+          <RowCard
+            key={c.group_key} card={c}
+            selected={c.group_key === selectedKey}
+            focused={c.group_key === cursorKey}
+            actions={actions}
+            onPeek={setPeek}
+          />
+        ))}
+      </ul>
+      {peek && <Peek card={peek} onClose={() => setPeek(null)} />}
+    </>
   )
 }

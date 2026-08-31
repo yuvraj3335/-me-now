@@ -595,24 +595,37 @@ describe('the instructions direct the work', () => {
     expect(t.instruction.toLowerCase()).toContain('do not guess an environment')
   })
 
-  test('continue-session never tells a resumed session it was not resumed', () => {
+  test('continue-session never tells a live session it is not itself', () => {
     const t = getTemplate('continue-session')!
     // This text is the first message *inside* the session it describes. The old
     // version opened "You are not resuming that session and you cannot", which
-    // was true of the `claude.ai/new?q=` hand-off and is now false — and false
-    // in the worst place, since a session with its whole transcript above it was
-    // being told in its own words that it had none. DECISIONS.md #39.
+    // was true of the chat-surface hand-off and became false the moment Wake
+    // started the session itself — and false in the worst place, since a session
+    // with its whole transcript above it was being told in its own words that it
+    // had none. DECISIONS.md #39.
     expect(t.instruction).not.toContain('not resuming')
     expect(t.instruction).not.toContain('and you cannot:')
     expect(t.instruction).not.toContain('new conversation')
     expect(t.blurb).not.toContain('fresh conversation')
 
-    // It does not assert the opposite either: picking a session resumes it,
+    // AMENDED. It used to have to say `resumed`, which was the true word while
+    // the composer could hand an id off a transcript. It cannot any more: the
+    // picker offers only conversations that are running right now, and the
+    // commit delivers one more turn into the live one. A session that has
+    // stopped is not a row, so this text can never arrive claiming to continue
+    // one — and saying "resumed" to a process that never stopped is the same
+    // class of small lie the sentence above was removed for.
+    expect(t.instruction, 'the template went back to claiming a resume')
+      .not.toContain('resumed')
+    expect(t.instruction).toContain('still running')
+    expect(t.blurb, 'the blurb still says the conversation has stopped')
+      .not.toContain('where it stopped')
+
+    // It does not assert the opposite either: picking a session sends into it,
     // picking a new conversation quotes it into a fresh one in the same
     // repository, and one sentence cannot know which. So it tells the session to
     // look rather than to believe.
     expect(t.instruction).toContain('Look before you answer')
-    expect(t.instruction).toContain('resumed')
   })
 })
 

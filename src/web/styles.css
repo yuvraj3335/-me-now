@@ -100,6 +100,34 @@
   --color-on-bad: #14141a;
 
   /*
+    The five statuses, as five hues.
+
+    This file used to spend no colour here at all: the ring shape carried the
+    state and `in_progress` took the brightest neutral, on the argument that a
+    colour every second row wears is not a signal. That argument is wrong on a
+    phone. He taps a status to *see* where five things stand, and five grey
+    rings at arm's length in daylight are one grey ring — `not_started` and
+    `wont_do` were literally the same token, so two of the five were not merely
+    hard to tell apart but identical.
+
+    So each status gets a hue, spent twice: on the glyph, and on a 14% wash
+    behind the chip. A wash rather than a saturated pill because the row is
+    still mostly text, and five solid pills down a column is a paint chart.
+
+    None of these is amber. Amber is unread, the badge, and the one primary
+    button, and it stays scarce — `in_progress` takes sky instead, which is the
+    one thing #32's reasoning got right and is preserved here.
+
+    `done` is `ok`'s green and `drop` is a rose held deliberately dimmer than
+    `bad`: "I decided not to" is not an error, and must not read as one.
+  */
+  --color-status-idle:   #8a8a96;
+  --color-status-live:   #6aa6e8;
+  --color-status-review: #b58ee0;
+  --color-status-done:   #6bd39a;
+  --color-status-drop:   #c47a7a;
+
+  /*
     Seven sizes, replacing nineteen.
 
     Wake used to ship 19 distinct font sizes, 123 of ~222 declarations under
@@ -273,6 +301,14 @@
        indistinguishable from a disabled one. */
     --color-on-ok:  #14141a;    /* 12.4:1 on ok */
     --color-on-bad: #14141a;    /*  7.6:1 on bad */
+
+    /* Five statuses, five hues — see the note in `@theme`. All above this
+       file's 5.5:1 floor for a mark that carries meaning on its own. */
+    --color-status-idle:   #8a8a96;  /*  5.8:1 — neutral, an empty ring */
+    --color-status-live:   #6aa6e8;  /*  7.8:1 — sky. Deliberately not amber. */
+    --color-status-review: #b58ee0;  /*  7.5:1 — violet */
+    --color-status-done:   #6bd39a;  /* 10.8:1 — `ok`'s green */
+    --color-status-drop:   #c47a7a;  /*  6.0:1 — rose, dimmer than `bad` #ef9494 */
   }
 
   /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
@@ -321,6 +357,15 @@
     --color-bad:  #b3261e;      /* 6.5:1 */
     --color-on-ok:  #ffffff;    /* 7.4:1 on ok */
     --color-on-bad: #ffffff;    /* 6.7:1 on bad */
+
+    /* The same five hues darkened onto an off-white page. The dark values are
+       2:1 or worse here, which is the failure `--color-accent-ink` exists to
+       prevent, so these are picked against #f7f7f9 rather than converted. */
+    --color-status-idle:   #5c5c69;  /* 6.2:1 */
+    --color-status-live:   #155a9e;  /* 6.6:1 */
+    --color-status-review: #6d3fa0;  /* 6.8:1 */
+    --color-status-done:   #0d6038;  /* 7.1:1 — `ok`'s green */
+    --color-status-drop:   #99423c;  /* 6.1:1 — still dimmer than `bad` #b3261e */
   }
 
   /* No explicit choice: follow the system. Identical to the block above by
@@ -365,6 +410,12 @@
       --color-bad:  #b3261e;
       --color-on-ok:  #ffffff;
       --color-on-bad: #ffffff;
+
+      --color-status-idle:   #5c5c69;
+      --color-status-live:   #155a9e;
+      --color-status-review: #6d3fa0;
+      --color-status-done:   #0d6038;
+      --color-status-drop:   #99423c;
     }
   }
 }
@@ -797,8 +848,15 @@
   intent, not a side effect — the painted box is set by the wrapper and by
   `.hit-native` in either case, so the boxes do not move, only the glyphs inside
   them grow to a size the platform will not zoom to read.
+
+  `[contenteditable]` is here because the rule above named three tags and a card
+  note is none of them. A `<div contenteditable>` at `text-sm` takes focus and
+  zooms exactly like a 13px input does — same cause, same fix — and the note is
+  the field on the Desk he actually types into most. The selector is the
+  attribute rather than `[contenteditable='true']` so the bare form, which is
+  also valid HTML and also editable, is covered.
   ---------------------------------------------------------------------------
 */
 @media (pointer: coarse) {
-  input, textarea, select { font-size: max(16px, 1em); }
+  input, textarea, select, [contenteditable] { font-size: max(16px, 1em); }
 }

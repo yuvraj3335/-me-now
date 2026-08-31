@@ -1,96 +1,77 @@
 /**
- * Every Claude Code session on this box, one repository at a time.
+ * The Claude Code sessions that are running on this box right now.
  *
- * The launch sheet has always had a picker over these, but only as a dropdown
- * inside a hand-off — there was no way to see what is on the machine, which of
- * them is still running, or to get rid of one. This is that list.
+ * **There is one list and being on it means active.** That is the whole shape
+ * of this file, and it is the correction of the thing it used to be. Wake
+ * listed *transcripts* — every `.jsonl` under `~/.claude/projects` inside a
+ * window — with an `Active / Archived / All` control over the top of them. A
+ * transcript outlives the process that wrote it by weeks, so the page showed a
+ * hundred and thirty dead conversations with a handful of live ones scattered
+ * through them; he tapped one at seven in the morning and Claude Code on his
+ * phone told him the session was archived. It was right.
  *
- * Two facts about the data shape it. A session records the directory it ran in
- * and nothing about what contains that directory — so the grouping key is the
- * repository that `cwd` is *under*, out of the workspace registry, and never
+ * Claude Code 2.1.251 writes no archive flag to disk. What it publishes is the
+ * inverse — one file per running process — so "active" is a fact Claude Code
+ * states rather than a filter Wake computes and he has to remember to leave
+ * switched on. `GET /api/claude/sessions` answers with those and nothing else,
+ * which is why the segmented control is gone rather than merely defaulted: a
+ * control offering `All` is a control that can put the graveyard back on the
+ * same surface as the work, and one wrong tap is all it ever took.
+ *
+ * `archived` still exists and now means exactly one thing: hide this from Wake.
+ * It can only ever *remove* a row from this list, so it can no longer disagree
+ * with Claude Code about what is alive. An archived session is simply absent,
+ * which is why `archived` is `false` on every row that arrives here and why
+ * there is no Archived chip to render.
+ *
+ * **A row goes to a page, not to a sheet.** The tile used to open a `PeekSheet`
+ * — the same handful of facts the row already carried, at sheet length — beside
+ * three icon buttons that were 110px of a 375px screen. Tapping a session now
+ * navigates to `/sessions/<id>`, which is the conversation itself: see
+ * `src/web/pages/Session.tsx`. What is left on the row is what tells one session
+ * from another at arm's length, and nothing else.
+ *
+ * Two facts about the data still shape it. A session records the directory it
+ * ran in and nothing about what contains that directory — so the grouping key is
+ * the repository that `cwd` is *under*, out of the workspace registry, and never
  * the directory itself and never the flattened filename it is stored beside.
- * Where a session ran and which repository it is in are different questions,
- * and answering the second with the first is what listed `web`, `plans` and
- * `QA_EVIDENCE` as repositories. And `turns` is counted from the tail the
- * server read, not from the whole transcript, so it is a floor rather than a
- * total.
- *
- * That caveat used to ride every row as the words `turns in view`, which is a
- * phrase nobody has at seven in the morning and which cost the row 92px on the
- * one screen that has none to spare. The count is `12 turns` now — one word,
- * the same word in the list and in the sheet — and the caveat is stated once,
- * in the sheet, where there is room to say it in prose. `turns` and not
- * `prompts` or `messages`, tempting as either is: the server counts every
- * `type: "user"` record in the tail, and a tool result is one of those, so both
- * of the plainer words would name something smaller than what is being counted.
- *
- * Three decisions shape the page itself.
- *
- * **A repository is chosen before anything is listed.** Thirty sessions across
- * five repositories on one screen is a wall of text in which the four that are
- * yours today are indistinguishable from the twenty-six that are not. The
- * server has always been able to answer for one repository (`?repo=`) and was
- * never asked; it is asked now, and the answer for the whole machine is a
- * choice rather than the first paint.
- *
- * **Archive is Wake's own.** Claude Code has no such concept — a transcript on
- * disk is either there or it is not — so the state lives in Wake's database
- * (migration 13) and is joined onto the rows the server returns. It is
- * reversible from the Archived filter. Delete is the opposite of that in every
- * respect: it removes four paths under `~/.claude`, it cannot be undone, and it
- * is refused outright while the session is running.
- *
- * **A live session's delete is pressable and refused in words.** It used to be
- * a disabled trash icon, which meant `disabled:pointer-events-none`, which
- * meant the `title` explaining why could never be read on any device — thirteen
- * of thirty rows looked broken and the reason existed only in the source. The
- * button opens the dialog now and the dialog says, on screen, that the session
- * is running and has to be closed first.
+ * Where a session ran and which repository it is in are different questions, and
+ * answering the second with the first is what listed `web`, `plans` and
+ * `QA_EVIDENCE` as repositories.
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { Archive, ArchiveRestore, ArrowUpRight, Loader2, SquareTerminal, Trash2 } from 'lucide-react'
-import {
-  Button, Empty, Menu, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice, rowStateClass,
-  useRail,
-} from './primitives'
+import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { Button, Empty, Menu, Pager, Sheet, pageCount, pageSlice, rowStateClass, useRail } from './primitives'
 import { useSwipe } from './swipe'
 import { SWIPE_ACTION_W } from '../lib/swipe'
 import { ago } from '../lib/time'
 import { toast } from '../lib/toast'
-import { setParam, useParams } from '../lib/route'
-import { PERMISSION_MODES, launchApi, openLaunch, type Session } from '../lib/launch'
+import { navigate, setParam, useParams } from '../lib/route'
+import { launchApi, type Session } from '../lib/launch'
 import { repoForSession, sessionInRepo } from '../../shared/sessionRepo'
 import { inSessionOrder } from '../../shared/sessionOrder'
-import { openTerminalAndGo } from '../lib/terminal'
-
-/** Typed exactly, or the button stays disabled. */
-const CONFIRM_WORD = 'delete'
 
 /* ------------------------------ what is shown ----------------------------- */
 
-export type SessionView = 'active' | 'archived' | 'all'
-
-const VIEWS: Array<{ id: SessionView; label: string }> = [
-  { id: 'active', label: 'Active' },
-  { id: 'archived', label: 'Archived' },
-  { id: 'all', label: 'All' },
-]
-
 /**
- * Whether a session belongs in the view being shown.
+ * The rows this page will draw, in the order it draws them.
  *
- * Three states and not four: a *deleted* session is not one of them. Delete is
- * an `rmSync` of four real paths, so the next filesystem scan cannot see it —
- * there is no faded row, no disabled control and no tombstone to filter out,
- * and there must never be one. What is on this list is what is on the disk.
+ * One gate, stated once, so there is a single answer to "can an archived
+ * session appear on the default view" and it is a function rather than a
+ * condition buried in a `useMemo`. The server already refuses to return one —
+ * this is the second lock, and it is here because the first one lives in a
+ * process that gets deployed separately from this bundle. A browser holding a
+ * list from before an archive landed must not paint a row the server would no
+ * longer hand it.
+ *
+ * `inSessionOrder` is the product's one comparator for sessions: running first,
+ * then most recently active. Every row here is running, so in practice it
+ * settles to recency — but the rule is stated where the list is built rather
+ * than assumed from the endpoint's current behaviour.
  */
-export const matchesView = (s: { archived?: boolean }, view: SessionView): boolean =>
-  view === 'all' ? true : view === 'archived' ? !!s.archived : !s.archived
-
-/** The address bar's word for the view, defaulted to the one he opens on. */
-export const readView = (v: string | null): SessionView =>
-  v === 'archived' || v === 'all' ? v : 'active'
+export const listedSessions = (rows: readonly Session[]): Session[] =>
+  inSessionOrder(rows.filter(s => !s.archived))
 
 /* --------------------------- which repository ----------------------------- */
 
@@ -161,11 +142,11 @@ export function repoList(rows: readonly Session[], known: readonly string[] = []
  * machine each have to say.
  *
  * The URL wins outright, including when it names a repository this list does
- * not contain: the index the list is built from is capped and windowed, so a
- * bookmark to a quiet repository must not be silently redirected to a busy one.
- * A remembered choice has to still exist, because it is a memory rather than a
- * request. And the fallback is a repository, never `all` — one repository is
- * the question this page answers.
+ * not contain: the index the list is built from is capped, so a bookmark to a
+ * quiet repository must not be silently redirected to a busy one. A remembered
+ * choice has to still exist, because it is a memory rather than a request. And
+ * the fallback is a repository, never `all` — one repository is the question
+ * this page answers, and "pick a repository" is not a first paint.
  */
 export function chooseRepo(
   param: string | null, stored: string | null, repos: readonly RepoChoice[],
@@ -173,34 +154,6 @@ export function chooseRepo(
   if (param) return param
   if (stored && repos.some(r => r.id === stored)) return stored
   return repos[0]?.id ?? ALL_REPOS
-}
-
-/**
- * What a screen with no rows on it says.
- *
- * `Empty`'s default is a dash, which is right for a value that has nothing in
- * it and wrong for a whole page: `Archived` with nothing archived rendered one
- * `—` on an otherwise blank 1440x900 window, which is not an answer to any
- * question a person had. The old reasoning — that the control which set the
- * filter already names it — holds for the *filter* and not for the *state*:
- * knowing that Archived is pressed is not knowing whether this repository has
- * ever had anything archived in it, or whether it has any sessions at all.
- *
- * So three sentences, and each of them is a different fact:
- *   - the repository has no sessions in any view,
- *   - it has some and none of them are archived,
- *   - it has some and all of them are.
- * The machine having nothing on it at all is a fourth, and it keeps the window
- * the index was read over, because "in the last year" is the difference between
- * an empty machine and an old one.
- */
-function nothingShown(view: SessionView, where: string, anyInRepo: boolean): string {
-  if (!anyInRepo) return `No sessions ${where}.`
-  if (view === 'archived') return `Nothing archived ${where}.`
-  if (view === 'active') return `Every session ${where} is archived.`
-  // `all` matches every row, so an empty list under it means an empty
-  // repository, which the first line already answered.
-  return `No sessions ${where}.`
 }
 
 /**
@@ -213,35 +166,42 @@ function nothingShown(view: SessionView, where: string, anyInRepo: boolean): str
  * the newest repository as the answer, which is not an error.
  */
 const REPO_KEY = 'wake.sessions.repo'
-const storedRepo = (): string | null => {
+/**
+ * Exported because the new-session composer needs the same answer.
+ *
+ * `/sessions/new` opening on a repository he has not worked in this month is
+ * the same "pick a repository" void the list refuses to show, arriving one
+ * screen later — and two memories of one preference would be two answers.
+ */
+export const rememberedRepo = (): string | null => {
   try { return localStorage.getItem(REPO_KEY) } catch { return null }
 }
 const rememberRepo = (id: string) => {
   try { localStorage.setItem(REPO_KEY, id) } catch { /* see storedRepo */ }
 }
 
+/** Where a session lives in this app. One place builds it. */
+export const sessionRoute = (id: string) => `/sessions/${id}`
+
 /* ---------------------------------- page ---------------------------------- */
 
 export function SessionsView({ onCount }: { onCount?: (n: number | null) => void }) {
-  const p = useParams(['repo', 'show', 'page'])
-  const view = readView(p.show ?? null)
+  const p = useParams(['repo', 'page'])
   const page = Math.max(1, Number(p.page ?? '1') || 1)
 
   /**
    * Two answers, and they are not the same question.
    *
-   * `index` is every session on the machine, read once. It exists to build the
-   * repository picker — the names, the counts, and which one is newest — and it
-   * is what the list is drawn from until the real answer arrives.
+   * `index` is every running session on the machine, read once. It exists to
+   * build the repository picker — the names, the counts, and which one is
+   * newest — and it is what the list is drawn from until the real answer
+   * arrives.
    *
-   * `scoped` is the server's answer for one repository, from the filter that
-   * has been in `claudecode/router.ts` all along and was never called with a
-   * value. It is not merely `index` narrowed: `listAllSessions` stops as soon
-   * as it has accepted `limit` rows, so an unfiltered read spends its cap on
-   * whichever directories are busiest, while a scoped one spends the whole cap
-   * on the repository being asked about. On a machine with more transcripts
-   * than the cap, that is the difference between seeing a quiet repository's
-   * history and being told it has none.
+   * `scoped` is the server's answer for one repository. It is not merely
+   * `index` narrowed: the scan stops as soon as it has accepted `limit` rows,
+   * so an unfiltered read spends its cap on whichever directories are busiest
+   * while a scoped one spends the whole cap on the repository being asked
+   * about.
    */
   const [index, setIndex] = useState<Session[] | null>(null)
   const [scoped, setScoped] = useState<{ repo: string; rows: Session[] } | null>(null)
@@ -250,17 +210,13 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
    * the directories sessions ran in.
    *
    * Only the registry can tell `truto-app` from `truto-app/packages/web`, and
-   * without it this page made a repository of every directory it saw. It is the
-   * same list the launch sheet's repository picker offers, so the two surfaces
-   * cannot end up with different vocabularies for the word.
-   *
-   * A failure is not an error on this page: the rows are still true, they are
-   * simply grouped by where each one ran rather than by what contains it.
+   * without it this page made a repository of every directory it saw. A failure
+   * is not an error here: the rows are still true, they are simply grouped by
+   * where each one ran rather than by what contains it.
    */
   const [known, setKnown] = useState<string[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [doomed, setDoomed] = useState<Session | null>(null)
-  const [peek, setPeek] = useState<Session | null>(null)
 
   /**
    * What asks the server again, and it is a counter rather than the data.
@@ -268,15 +224,15 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
    * Keying the fetches on `index` itself looks equivalent and is not: archiving
    * a row replaces that array, which would re-issue the scoped request — and
    * that request can reach the server before the archive it was triggered by
-   * does, so the answer would arrive carrying the old flag and overwrite the
-   * row he just moved. Only a real reload — one delete, so far — bumps this.
+   * does, so the answer would arrive carrying the row he just put away. Only a
+   * real reload — an archive settling, a delete — bumps this.
    */
   const [reloads, setReloads] = useState(0)
   const reload = () => setReloads(n => n + 1)
 
   useEffect(() => {
     let alive = true
-    launchApi.sessions({ all: true })
+    launchApi.sessions()
       .then(d => { if (alive) { setIndex(d.sessions); setErr(null) } })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
@@ -293,7 +249,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   const repos = useMemo(() => repoList(index ?? [], known), [index, known])
   // Read once. A pick writes the URL as well as the store, and the URL wins, so
   // a stale read here can never outrank what he just chose.
-  const remembered = useMemo(storedRepo, [])
+  const remembered = useMemo(rememberedRepo, [])
   const repo = chooseRepo(p.repo ?? null, remembered, repos)
 
   useEffect(() => {
@@ -302,7 +258,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     // the index rather than after it.
     if (repo === ALL_REPOS) return
     let alive = true
-    launchApi.sessions({ all: true, repo })
+    launchApi.sessions({ repo })
       .then(d => { if (alive) { setScoped({ repo, rows: d.sessions }); setErr(null) } })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
@@ -321,45 +277,18 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     // `sessionInRepo` and not `repoIdOf(s) === repo`, because this list has to
     // be the same list the scoped answer replaces it with — and the server's
     // filter is exact-or-under. Identity here would drop every subdirectory
-    // session for the second it takes the real answer to arrive, so the tiles
-    // would settle in rather than simply appear.
+    // session for the second it takes the real answer to arrive.
     return all.filter(s => sessionInRepo(s, repo))
   }, [index, scoped, repo])
 
-  /**
-   * What is on this page, in the order the rest of the product uses.
-   *
-   * Live first, then most recently active — `inSessionOrder` in
-   * `src/shared/sessionOrder.ts`, which is the Sessions dialect of the desk's
-   * `activity_at`. The server hands these back by transcript mtime, and an mtime
-   * cannot express "running right now": a session that finished an hour ago
-   * satisfies a recent mtime exactly as well as one that is open on this
-   * machine, so the thing he is in the middle of sat wherever its last write
-   * happened to put it. A copy, never a sort in place — these rows are two
-   * fetches' state, not this render's.
-   */
-  const rows = useMemo(
-    () => inSessionOrder(inRepo.filter(s => matchesView(s, view))),
-    [inRepo, view],
-  )
+  const rows = useMemo(() => listedSessions(inRepo), [inRepo])
 
   /**
    * How many sessions this page is standing over, reported to the header.
    *
-   * Every other page in the product prints its count beside its title — Desk
-   * 99, Mail 25, Work 2 — and this one did not, although the repository control
-   * six pixels below it was printing `truto 38` the whole time. The number
-   * belongs to the list, which lives here, and the title belongs to the page,
-   * which lives in `pages/Sessions.tsx`; a callback is how those two meet.
-   *
    * `null` until the index has arrived, because a header that prints `0` while
    * the first read is in flight is asserting a fact it has not measured — the
    * same rule Mail's `list.answered` and Work's `loaded` already keep.
-   *
-   * `rows.length` and not the repository's own total: this counts what is on
-   * the page, so switching to Archived moves it. The menu's count is the other
-   * question — every session in that repository, whatever view is on — and it
-   * is answered where it is asked.
    */
   useEffect(() => {
     onCount?.(index ? rows.length : null)
@@ -368,28 +297,30 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   }, [rows.length, index, onCount])
 
   /**
-   * Move one row's archived flag in both answers at once.
+   * Take one row off both answers at once.
    *
-   * Archiving is one row in Wake's own database, and re-reading two lists of
-   * transcript tails to learn a fact this browser already knows would cost half
-   * a second and scroll the list under his thumb.
+   * Archiving is one row in Wake's own database and the list it leaves is this
+   * one, so the row goes now rather than after a round trip that would re-read
+   * two lists of transcript tails to learn a fact this browser already knows.
+   * The undo puts it back the same way.
    */
-  const patch = (id: string, archived: boolean) => {
-    const apply = (list: Session[]) => list.map(s => (s.id === id ? { ...s, archived } : s))
+  const drop = (id: string, gone: boolean) => {
+    const apply = (list: Session[]) => list.map(s => (s.id === id ? { ...s, archived: gone } : s))
     setIndex(l => (l ? apply(l) : l))
     setScoped(s => (s ? { ...s, rows: apply(s.rows) } : s))
   }
 
   const archive = async (s: Session, on: boolean) => {
-    patch(s.id, on)
+    drop(s.id, on)
     try {
       await launchApi.archiveSession(s.id, on)
-      // The undo names the one thing it undoes — this session, back to the
-      // state it was in — and not "everything that could be keeping it out of
-      // this list", which is how an undo destroys a decision it never touched.
-      toast(on ? 'Archived.' : 'Unarchived.', { label: 'Undo', run: () => void archive(s, !on) })
+      // The undo names the one thing it undoes — this session, back where it
+      // was — and not "everything that could be keeping it off this list".
+      toast(on ? 'Hidden from Wake.' : 'Back on the list.', {
+        label: 'Undo', run: () => void archive(s, !on),
+      })
     } catch (e) {
-      patch(s.id, !on)
+      drop(s.id, !on)
       toast((e as Error).message)
     }
   }
@@ -420,24 +351,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   }, [shown, known])
 
   /**
-   * The row the sheet is showing, looked up again rather than held.
-   *
-   * `peek` is a snapshot taken when the tile was pressed. Archiving from inside
-   * the sheet updates the list and would leave that snapshot claiming the old
-   * answer — the same frozen-object bug the task sheet shipped, where notes
-   * added to an open task did not appear until it was closed and reopened.
-   */
-  const current = useMemo(
-    () => (peek ? inRepo.find(s => s.id === peek.id) ?? peek : null),
-    [peek, inRepo],
-  )
-
-  /**
    * What the repository control offers.
-   *
-   * The counts are of the index — the same window and cap the server answered
-   * the unfiltered question with — so they describe what this page can show you
-   * rather than claiming to be a total of everything that has ever run here.
    *
    * `All repositories` appears only when there is more than one, since with one
    * it is the same list under a second name. And a repository named in the URL
@@ -467,46 +381,30 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   const body = err
     ? <p className="text-sm text-bad pt-4">{err}</p>
     : !rows.length
-      ? (index?.length
-        ? (
-          <Empty>
-            {nothingShown(
-              view,
-              repo === ALL_REPOS ? 'on this machine' : 'in this repository',
-              inRepo.length > 0,
-            )}
-          </Empty>
-        )
-        : <Empty>Nothing on this machine in the last year.</Empty>)
+      ? (
+        <Empty>
+          {repo === ALL_REPOS
+            ? 'Claude Code is not running anything on this machine.'
+            : 'Nothing running in this repository.'}
+        </Empty>
+      )
       : groups.map(([id, list]) => (
         <section key={id} className="pt-1 pb-3">
-          {/* The heading is the answer to "which repository is this row in",
-              which is only a question when the list spans more than one. With
-              one chosen, the control at the top of the page already says it. */}
+          {/* The heading answers "which repository is this row in", which is
+              only a question when the list spans more than one. With one
+              chosen, the control at the top of the page already says it. */}
           {repo === ALL_REPOS && (
             <h2 className="text-eyebrow uppercase text-fg-mute pb-2">
-              {/* The repository's name, out of the same list the control above
-                  offers — not the newest row's own directory, which for a
-                  `truto-app` group whose newest session ran in
-                  `packages/web` would head the group `web`. */}
               {repos.find(r => r.id === id)?.label || list[0]?.project || id}
             </h2>
           )}
-          {/* Two columns from `md`, not from `sm`.
-
-              At 640 the shell's 200px rail leaves 392px of content, so a
-              two-column grid draws tiles 192px wide — half a phone — and every
-              flexible thing inside one measured zero: the branch line rendered
-              as literally nothing between 640 and 900. The grid is the thing
-              that was wrong there, not the row inside it. */}
           <ul className="grid gap-2 md:grid-cols-2">
             {list.map(s => (
-              <Tile
+              <Row
                 key={s.id}
                 session={s}
-                selected={current?.id === s.id}
-                onPeek={() => setPeek(s)}
-                onArchive={() => void archive(s, !s.archived)}
+                onOpen={() => navigate(sessionRoute(s.id))}
+                onArchive={() => void archive(s, true)}
                 onDelete={() => setDoomed(s)}
               />
             ))}
@@ -519,7 +417,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
       {/*
         Two controls, and they may not wrap.
 
-        A second line of chrome pushes the first tile off the fold on a phone,
+        A second line of chrome pushes the first row off the fold on a phone,
         which is the screen this page is read on. So the row scrolls instead —
         and the vertical padding is load-bearing rather than decorative: a
         scroll container clips at its padding box, and `.hit` hangs a 44px touch
@@ -544,15 +442,18 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
             ariaLabel="Repository"
             placeholder="No repositories"
           />
-          <Segmented
-            options={VIEWS}
-            value={view}
-            onChange={v => {
-              setParam('show', v === 'active' ? null : v)
-              setParam('page', null)
-            }}
-            ariaLabel="Which sessions"
-          />
+          {/* The page's one creation, in the page's one amber, the same shape
+              Work's `+ Task` already is. It navigates rather than committing:
+              what starts a process is Send, on the page it goes to. */}
+          <Button
+            variant="primary"
+            title="Start a new session"
+            ariaLabel="Start a new session"
+            onClick={() => navigate('/sessions/new')}
+          >
+            <Plus size={14} />
+            <span className="hidden sm:inline">New</span>
+          </Button>
         </div>
       </div>
 
@@ -565,14 +466,8 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
         onPage={n => setParam('page', n === 1 ? null : String(n))}
       />
 
-      {/* Both sheets are mounted whatever the list is doing. A surface that
-          appears and disappears from the tree takes its open sheet with it. */}
-      <PeekSheet
-        session={current}
-        onClose={() => setPeek(null)}
-        onArchive={() => { if (current) void archive(current, !current.archived) }}
-        onDelete={() => { if (current) { setDoomed(current); setPeek(null) } }}
-      />
+      {/* Mounted whatever the list is doing. A surface that appears and
+          disappears from the tree takes its open sheet with it. */}
       <DeleteSheet
         session={doomed}
         onClose={() => setDoomed(null)}
@@ -582,126 +477,37 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   )
 }
 
-/* ---------------------------------- tile ---------------------------------- */
+/* ---------------------------------- row ----------------------------------- */
 
 /**
- * Go to the session itself, on this box, in its own repository.
+ * One session, at the width of a thumb.
  *
- * The other control on this row opens the *brief* sheet — it packs the session
- * as context for a conversation about it. This one is the session: Wake resumes
- * the real Claude Code process under tmux and navigates to it, so the thing he
- * was in the middle of is a click away on a laptop and on a phone.
+ * Four facts and no controls: a live dot, the title, the last thing said, and
+ * how long ago. Everything else that used to ride this row has gone somewhere
+ * it can be read. The branch and the turn count went to the session page's own
+ * header, where there is room for them; `Open`, `Open in Claude`, `Archive` and
+ * `Delete` were 110px of a 375px screen — measured, the title column got 133px
+ * against a 438px string, so four different sessions rendered as `As you can
+ * see the…`, `fix(mfa): make the login…` and `You're working a cross-…`. Two of
+ * those four controls are behind the swipe now and the other two are on the
+ * page the row opens.
  *
- * `openTerminalAndGo` from `src/web/lib/terminal.ts`, which is the same helper
- * the launch sheet ends in. One path to starting a process, not two: the rules
- * about which directories may be named and which sessions may be resumed live
- * on the server behind that one route, and a second client-side way in would be
- * a second place for them to be got wrong.
- *
- * A refusal arrives as the server's own sentence, so it goes straight into a
- * toast rather than being reworded into something less specific.
+ * The dot is `--color-status-live`, which is sky and deliberately not amber:
+ * amber in this product means "something is waiting for you", and a session
+ * running quietly in the background is not that. Every row on this list is
+ * live, so the dot is not a discriminator between rows — it is the standing
+ * statement that what you are looking at is a process rather than a file, which
+ * is the exact thing the old page got wrong.
  */
-async function openSession(s: Session): Promise<void> {
-  try {
-    await openTerminalAndGo({ sessionId: s.id })
-  } catch (e) {
-    toast((e as Error).message)
-  }
-}
-
-/**
- * Hand this session to Claude, with everything the brief needs to resume it.
- *
- * One function rather than two call sites: the tile and the detail sheet offer
- * the same act, and a brief that packs different facts depending on which
- * button was pressed is two features wearing one name.
- */
-const openInClaude = (s: Session) => openLaunch(
-  [{
-    kind: 'session',
-    ref: `session:${s.id}`,
-    title: s.title,
-    excerpt: s.lastPrompt,
-    why: 'work already underway on my machine',
-    meta: {
-      session_id: s.id,
-      cwd: s.cwd,
-      branch: s.branch ?? null,
-      // `turns_in_view` and not `turns`, here and only here. The reader of this
-      // key is a model rather than a person: the screen states the caveat once,
-      // in the sheet, where a person can read it, and a brief has no sheet — so
-      // the caveat rides the key name, which is the one place a model will see
-      // it before treating the number as a total.
-      turns_in_view: s.turns,
-    },
-  }],
-  { templates: ['continue-session'], repoHint: s.cwd, session: s.id, title: s.title },
-)
-
-/**
- * One session, enclosed.
- *
- * It was three lines of unbounded text per session — title, last prompt, then
- * branch / turns / age — down a single column, thirty of them, with nothing
- * separating one session from the next but a hairline. The enclosure is what
- * makes a session a thing rather than a paragraph, and it is a 1px edge on the
- * page's own ground because that is what elevation is here.
- *
- * Two lines inside it, not three. The last prompt is a whole sentence of
- * somebody's half-finished thought and it belongs to the one session you are
- * considering, not to the twenty you are scanning past — it lives in the sheet
- * the tile opens. The branch stays, because "which of my four sessions in this
- * repository" is exactly what it answers.
- *
- * Only the branch gives up width, and it gives up the *front* of itself.
- *
- * Joined into one truncating string, a shared branch prefix ate the whole line
- * on a phone: six consecutive rows rendered `fix/sync-job-v4-paginati…` and
- * nothing else. Splitting the line so that only the branch truncates fixed the
- * other two facts and not that one — measured again on a 375px screen, the
- * branch held 42px against a 256px string, so
- * `fix/webhook-patch-cross-environment-idor` rendered `fix/…` and two different
- * sessions in one repository were `fix/syn…` and `fix/syn…`, each with its own
- * Delete.
- *
- * Two changes, because one was not enough. The count leaves the line until
- * `xl`, which is 110px of a 213px column handed back to the branch — measured
- * at 375, the branch goes from 55px to 176px against that same 256px string.
- * (The deployed build reported 42px; the difference is one word of the title
- * above it, and the conclusion is the same either way.) And what is left
- * truncates from the left: `direction: rtl` on an otherwise
- * left-aligned box moves the ellipsis to the start and keeps the *tail*, which
- * is the distinguishing half of a branch name, where the front is the half
- * every branch in a repository shares.
- *
- * The `<bdi dir="ltr">` is not decoration and it is not optional. An RTL box
- * resolves its content as an RTL paragraph, which leaves any *edge* character
- * with no strong direction of its own at the paragraph's level rather than the
- * text's — so `feat/foo-` renders `-feat/foo` and, much worse, a branch named
- * for its ticket renders `2034-fix-thing` as `fix-thing-2034`. Both were
- * reproduced in a browser before this shipped. An isolate with an explicit
- * direction makes the branch its own LTR paragraph inside the RTL box, which
- * fixes both while leaving the clip at the left where it was put; verified on
- * the same five strings. The text itself never moves: it reads forwards, it
- * copies forwards, and only which end survives the clip has changed.
- */
-function Tile({
-  session: s, selected, onPeek, onArchive, onDelete,
+function Row({
+  session: s, onOpen, onArchive, onDelete,
 }: {
   session: Session
-  selected: boolean
-  onPeek: () => void
+  onOpen: () => void
   onArchive: () => void
   onDelete: () => void
 }) {
   const swipe = useSwipe(`session:${s.id}`, 2)
-  /**
-   * Starting a session is a round trip — tmux has to come up and the process has
-   * to survive its first second — so the control says so and refuses a second
-   * press. Without it an impatient double-tap is two `POST /terminals`, and the
-   * second one races the first into `getTerminal`.
-   */
-  const [opening, setOpening] = useState(false)
 
   return (
     <li
@@ -713,144 +519,33 @@ function Tile({
       onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
       style={swipe.bind.style}
-      // `overflow-hidden` is what makes the drawer stop at the tile's rounded
-      // corner. The tile paints no ground of its own, so the one state class
+      // `overflow-hidden` is what makes the drawer stop at the row's rounded
+      // corner. The row paints no ground of its own, so the one state class
       // owns the fill and there is no second background utility to outrank.
-      className={`relative overflow-hidden rounded-panel border border-edge
-                  ${rowStateClass({ selected })}`}
+      className={`relative overflow-hidden rounded-panel border border-edge ${rowStateClass()}`}
     >
-      <div className="flex items-start gap-2 p-3">
-        <button onClick={onPeek} className="min-w-0 grow text-left">
-          <span className="flex items-baseline gap-2 min-w-0">
-            <span className="text-base text-fg truncate min-w-0" title={s.title}>{s.title}</span>
-            {s.live && <span className="text-sm text-ok shrink-0">live</span>}
-            {s.archived && <span className="text-sm text-fg-mute shrink-0">Archived</span>}
-          </span>
-          <span className="mt-0.5 flex items-baseline gap-2 min-w-0 text-sm text-fg-mute">
-            {s.branch && (
-              <>
-                {/* `text-left` is not redundant beside `direction: rtl` — it is
-                    what keeps a branch that fits flush with the title above it
-                    instead of ragged against the far edge. */}
-                <span className="truncate min-w-0 [direction:rtl] text-left" title={s.branch}>
-                  <bdi dir="ltr">{s.branch}</bdi>
-                </span>
-                <span className="shrink-0" aria-hidden>—</span>
-              </>
-            )}
-            {/* The count is the first thing off the line, and it stays off it
-                until `xl`: it is a floor read off the tail of the transcript,
-                where the branch is exact, and it is the wider of the two. */}
-            <span className="hidden xl:inline shrink-0 tnum">{s.turns} turns</span>
-            <span className="hidden xl:inline shrink-0" aria-hidden>—</span>
-            <span className="shrink-0 tnum">{ago(s.lastTs)}</span>
-          </span>
-        </button>
-
-        <span className="flex items-center gap-1 shrink-0">
-          {/*
-            The word costs 110px, and on a 375px phone that 110px comes out of
-            the title. Measured: the title column got 133px against a 438px
-            string, so four different sessions rendered as `As you can see the…`,
-            `fix(mfa): make the login…`, `You're working a cross-…`. The tile is
-            the thing being read; the action is one of three on it. So the label
-            collapses to the mark every "this leaves Wake" control in the
-            product already carries, and the name lives on `title` and
-            `aria-label` — which is where a control with no room for a word
-            keeps its name.
-
-            It collapses at `xl` and not at `sm`, because the phone is not the
-            narrow case. A tile in the two-column grid is narrower than a phone
-            until about 1150, and the same 110px comes out of the same two lines
-            there. Branch width against a 256px branch name, measured in a
-            browser with the 200px rail in place, before this pass and after it:
-
-              375 → 55, then 176      1024 → 14, then 217
-              640 →  0, then 225      1280 → 142, then 186
-              768 →  0, then  89      1440 → 222, then 256 (the whole name)
-              900 →  0, then 155
-
-            Three of those widths were rendering the branch at zero pixels.
-          */}
-          {/*
-            Two Opens, and they are two different things.
-
-            This one is the session: it resumes the real process and takes him
-            to it. The one beside it packs the session into a brief and opens the
-            sheet, which is a conversation *about* this work rather than the work
-            itself. Both keep their words at `xl` and collapse to their own mark
-            below it — a terminal and an arrow-out — for the reason the comment
-            directly above this one measures out.
-
-            It is offered on every row, not only the live ones. `s.live` says
-            whether a process is already up, and the difference that makes is
-            whether the server attaches to it or starts it — which is the
-            server's business. Hiding the control on a session that is merely
-            not running right now would make the commonest case, coming back to
-            yesterday's work, the one case with no button.
-          */}
-          <Button
-            size="sm"
-            title={s.live ? 'Open the running session' : 'Resume this session on this machine'}
-            ariaLabel="Open"
-            disabled={opening}
-            onClick={() => {
-              setOpening(true)
-              void openSession(s).finally(() => setOpening(false))
-            }}
-          >
-            {opening ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <>
-                <span className="hidden xl:inline">Open</span>
-                <SquareTerminal size={14} className="xl:hidden" />
-              </>
-            )}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            title="Open in Claude"
-            ariaLabel="Open in Claude"
-            onClick={() => openInClaude(s)}
-          >
-            <span className="hidden xl:inline">Open in Claude</span>
-            <ArrowUpRight size={14} className="xl:hidden" />
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            title={s.archived ? 'Unarchive' : 'Archive'}
-            ariaLabel={s.archived ? 'Unarchive' : 'Archive'}
-            onClick={onArchive}
-          >
-            {s.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-          </Button>
-          {/*
-            Never disabled, on any row.
-
-            `disabled:pointer-events-none` is what made the old greyed trash
-            unexplainable: a title attribute on a control that cannot be
-            pointed at is a reason nobody can reach, and on a phone it is not
-            even a reason, it is a broken-looking icon. The dialog says why
-            instead, in words, and the server refuses at two further layers.
-
-            Ghost, not `danger`. This button opens a dialog; the dialog's
-            button is what destroys, and that one is `danger`. Thirty filled red
-            squares down a list is a page shouting at you about something none
-            of them has actually done yet.
-          */}
-          <Button size="sm" variant="ghost" title="Delete" ariaLabel="Delete" onClick={onDelete}>
-            <Trash2 size={14} />
-          </Button>
+      <button onClick={onOpen} className="w-full min-w-0 flex items-start gap-3 p-3 text-left">
+        {/* Baseline-aligned by hand rather than by `items-baseline`, because a
+            2px circle has no baseline of its own and a flex box gives it the
+            top of its line box instead — which parked the dot two pixels above
+            the cap height of the title beside it. */}
+        <span className="mt-1.5 w-2 h-2 rounded-full shrink-0 bg-status-live" aria-hidden />
+        <span className="min-w-0 grow">
+          <span className="block text-base text-fg truncate" title={s.title}>{s.title}</span>
+          {/* The last thing said, clipped to one line. It is a whole sentence
+              of somebody's half-finished thought, and one line of it is what
+              tells this session from the other three in the same repository —
+              which is the only job this row has. */}
+          {s.lastPrompt && (
+            <span className="block mt-0.5 text-sm text-fg-mute truncate">{s.lastPrompt}</span>
+          )}
         </span>
-      </div>
+        <span className="shrink-0 text-sm text-fg-mute tnum">{ago(s.lastTs)}</span>
+      </button>
 
       <SessionDrawer
         dx={swipe.dx}
         width={swipe.width}
-        archived={!!s.archived}
         onArchive={onArchive}
         onDelete={onDelete}
         onClose={swipe.close}
@@ -860,24 +555,29 @@ function Tile({
 }
 
 /**
- * The two actions behind a tile, revealed by the same gesture the desk uses.
+ * The two actions behind a row, revealed by the same gesture the desk uses.
  *
  * `useSwipe` is the desk's own hook — one gesture implementation in the
  * product, with the axis rules, the trackpad path and the single-open-row store
  * that comes with it. The panel is drawn here rather than through `SwipeDrawer`
  * because that component's three actions are `Done`, `Status` and `Delete`, and
  * a session has neither of the first two: it is not work you finish and it has
- * no status. Two solid, labelled boxes, and nothing rendered at all while the
- * drawer is shut — not at `opacity: 0` and not at `width: 0` with live buttons
- * inside it, which on a touch screen is a control that is permanently invisible
- * and permanently tappable.
+ * no status.
+ *
+ * `Hide` and not `Archive`, because that is all the word can honestly mean now.
+ * Claude Code has no archive, the row is a running process, and what this
+ * writes is one row in Wake's database saying "keep this off my list". Calling
+ * that Archive invited the reading that it did something to the session.
+ *
+ * Nothing is rendered at all while the drawer is shut — not at `opacity: 0` and
+ * not at `width: 0` with live buttons inside it, which on a touch screen is a
+ * control that is permanently invisible and permanently tappable.
  */
 function SessionDrawer({
-  dx, width, archived, onArchive, onDelete, onClose,
+  dx, width, onArchive, onDelete, onClose,
 }: {
   dx: number
   width: number
-  archived: boolean
   onArchive: () => void
   onDelete: () => void
   onClose: () => void
@@ -901,7 +601,7 @@ function SessionDrawer({
           className="shrink-0 flex items-center justify-center text-sm font-medium
                      bg-ink-700 text-fg transition-[filter] duration-100 hover:brightness-110"
         >
-          {archived ? 'Unarchive' : 'Archive'}
+          Hide
         </button>
         <button
           data-swipe-action
@@ -917,169 +617,46 @@ function SessionDrawer({
   )
 }
 
-/* --------------------------------- sheets --------------------------------- */
+/* -------------------------------- deleting -------------------------------- */
+
+/** How long an armed delete stays armed before it forgets it was asked. */
+const ARMED_MS = 4_000
 
 /**
- * One session, at the length a sentence needs.
+ * The delete dialog, which names what goes and asks twice.
  *
- * This is where the last prompt lives. It is the most useful thing a transcript
- * carries and the least suited to a list — a paragraph of his own half-finished
- * thought, repeated thirty times down a column, is what made this page a wall
- * of text. Here there is exactly one of them and room to read it.
+ * **Nothing is typed here any more.** It used to require the word `delete` in a
+ * text field, which is the confirmation pattern for a web console you visit on
+ * a laptop once a quarter. This is a phone, at seven in the morning, one
+ * thumb: typing six characters to remove a session means raising a keyboard
+ * that covers the dialog explaining what is about to be removed. The keyboard
+ * was the cost and it bought nothing — a person who can type `delete` is not a
+ * person who has read the four paths, and the paths are the actual protection.
  *
- * Nothing is fetched. Every fact on this sheet is already on the row the list
- * was drawn from, so opening it costs nothing and cannot fail.
- */
-function PeekSheet({
-  session: s, onClose, onArchive, onDelete,
-}: {
-  session: Session | null
-  onClose: () => void
-  onArchive: () => void
-  onDelete: () => void
-}) {
-  return (
-    <Sheet
-      open={!!s}
-      onClose={onClose}
-      title={s?.title}
-      /*
-        Three words, and the destructive one is not the exception.
-
-        Delete was a bare trash glyph between two labelled buttons, so the only
-        control on the surface whose name had to be guessed was the only one
-        that cannot be undone. It carries the word now, and the mark with it.
-
-        `ml-auto` puts it at the far edge rather than a thumb's width from
-        Archive, and `flex-wrap` is what keeps three labelled `lg` buttons from
-        running off a 343px phone: they take a second line instead of a clipped
-        one.
-      */
-      footer={s && (
-        <div className="flex flex-wrap items-center gap-2">
-          {/* The commit, at the one size reserved for a commit. */}
-          <Button size="lg" onClick={() => { onClose(); openInClaude(s) }}>
-            Open in Claude
-          </Button>
-          <Button size="lg" variant="default" onClick={onArchive}>
-            {s.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-            {s.archived ? 'Unarchive' : 'Archive'}
-          </Button>
-          <Button size="lg" variant="ghost" className="ml-auto" onClick={onDelete}>
-            <Trash2 size={14} /> Delete
-          </Button>
-        </div>
-      )}
-    >
-      {s && (
-        <div>
-          {s.lastPrompt && (
-            <p className="text-base text-fg-dim leading-snug whitespace-pre-wrap">{s.lastPrompt}</p>
-          )}
-
-          <div className="mt-4">
-            <Fact label="Repository" mono>{s.cwd}</Fact>
-            {s.branch && <Fact label="Branch" mono>{s.branch}</Fact>}
-            {/* The one place the count's caveat is spelled out, which is why
-                this row is allowed to wrap and the rest are not. Every other
-                surface says `12 turns` and means exactly this. */}
-            <Fact label="Turns" wrap>
-              {s.turns}
-              <span className="text-fg-mute">
-                {' '}— counted in the tail of the transcript Wake reads, not in the whole session
-              </span>
-            </Fact>
-            <Fact label="Last active">{ago(s.lastTs)}</Fact>
-            {s.live && <Fact label="Running">on this machine right now</Fact>}
-            {s.archived && <Fact label="Archived">in Wake, not on disk</Fact>}
-            {/* Only what the last recorded turn actually said. A session that
-                never wrote one of these gets no row rather than a guess. */}
-            {s.permissionMode && (
-              <Fact label="Mode" mono={!modeWord(s.permissionMode)}>
-                {modeWord(s.permissionMode) ?? s.permissionMode}
-              </Fact>
-            )}
-            {s.version && <Fact label="Claude Code" mono>{s.version}</Fact>}
-            {s.pr && (
-              <Fact label="Pull request">
-                <a href={s.pr.url} target="_blank" rel="noreferrer"
-                  className="text-accent-ink hover:underline">
-                  {s.pr.repo}#{s.pr.number}
-                </a>
-              </Fact>
-            )}
-          </div>
-        </div>
-      )}
-    </Sheet>
-  )
-}
-
-/**
- * The launch sheet's word for a permission mode, or nothing.
+ * Two taps instead, and the second one is a different button rather than the
+ * same one: `Delete permanently` arms, `Tap again to delete` fires, and it
+ * disarms itself after four seconds so a sheet left open in a pocket cannot be
+ * completed by an accident later. That is the property the typing was standing
+ * in for — deliberateness — expressed as a gesture a thumb can make.
  *
- * `Mode  bypassPermissions` printed the raw `--permission-mode` enum at a
- * reader who, four clicks away in the brief sheet, is offered the same two
- * values as `Bypass permissions` and `Accept edits` in a segmented control.
- * One product, one word — so the words come from that control's own list
- * rather than from a second copy of it here.
- *
- * `plan` and `default` are the two Claude Code modes the brief never offers and
- * a transcript can still record, so they are named here and nowhere else.
- * Anything beyond those four is returned unrecognised, and the caller prints
- * the enum verbatim in monospace: inventing a title-cased phrase for a mode
- * this build has never heard of would be a guess wearing prose.
- */
-const EXTRA_MODES: Record<string, string> = { plan: 'Plan', default: 'Ask before acting' }
-const modeWord = (m: string): string | null =>
-  PERMISSION_MODES.find(x => x.id === m)?.label ?? EXTRA_MODES[m] ?? null
-
-/**
- * A labelled fact, on the row grid the rest of the product reads at.
- *
- * `wrap` is for the one fact on this sheet that is a sentence rather than a
- * value. Truncation is right for a path and a branch — they are long because
- * they are precise — and wrong for an explanation, which is worth nothing at
- * all if its second half is an ellipsis.
- */
-function Fact({
-  label, mono, wrap, children,
-}: { label: string; mono?: boolean; wrap?: boolean; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-3 py-2 border-b border-rule last:border-0">
-      <span className="text-sm text-fg-mute w-28 shrink-0">{label}</span>
-      <span className={`text-sm text-fg-dim min-w-0 ${wrap ? 'leading-snug' : 'truncate'}
-                        ${mono ? 'font-mono' : ''}`}>
-        {children}
-      </span>
-    </div>
-  )
-}
-
-/**
- * The delete dialog, which names what goes.
- *
- * The token is minted by the server against this exact session id and spent by
- * the delete, so approving one session and deleting another is not reachable —
- * the same rule the mail composer works under. The paths come back from that
- * same call, so the list shown is the list the server will act on rather than
- * something the client reconstructed.
+ * The server's confirmation token is untouched. It is minted against this exact
+ * session id and spent by the delete, so approving one session and deleting
+ * another is not reachable, and the paths shown are the paths the server will
+ * act on rather than something the client reconstructed.
  *
  * A running session takes the other branch entirely. Nothing is minted, nothing
- * is typed, and the reason is a paragraph on screen instead of a `title` on a
+ * is armed, and the reason is a paragraph on screen instead of a `title` on a
  * disabled icon that no device could ever show. The server refuses this twice
- * more on its own — the confirm route answers 409 and `deleteSession` refuses
- * again — so what changed here is only who gets told.
+ * more on its own, so what changed here is only who gets told.
  *
- * Both buttons live in the sheet's pinned footer. They used to be the last
- * thing in the scrolled body, which on a phone with the confirm field focused
- * and the keyboard up put the only two ways out of this dialog below the fold,
- * with nothing on screen to suggest scrolling.
+ * Both buttons live in the sheet's pinned footer, which is a flex sibling of
+ * the scrollport rather than the last thing in it: the two ways out of this
+ * dialog may not be below the fold.
  */
-function DeleteSheet({
+export function DeleteSheet({
   session, onClose, onDone,
 }: { session: Session | null; onClose: () => void; onDone: () => void }) {
-  const [confirm, setConfirm] = useState('')
+  const [armed, setArmed] = useState(false)
   const [ready, setReady] = useState<{ token: string; paths: string[] } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1087,7 +664,7 @@ function DeleteSheet({
   const blocked = !!session?.live
 
   useEffect(() => {
-    setConfirm('')
+    setArmed(false)
     setReady(null)
     setErr(null)
     // No token for a session that cannot be deleted. The confirm route would
@@ -1101,6 +678,15 @@ function DeleteSheet({
     return () => { live = false }
   }, [session?.id, session?.live])
 
+  // Armed is a state with a deadline. Without one, a dialog opened and left
+  // alone is a destructive button sitting one stray tap away for as long as the
+  // phone is unlocked.
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), ARMED_MS)
+    return () => clearTimeout(t)
+  }, [armed])
+
   const run = async () => {
     if (!session || !ready) return
     setBusy(true)
@@ -1110,6 +696,7 @@ function DeleteSheet({
       onDone()
     } catch (e) {
       setErr((e as Error).message)
+      setArmed(false)
     } finally {
       setBusy(false)
     }
@@ -1125,11 +712,11 @@ function DeleteSheet({
           <Button
             variant="danger"
             size="lg"
-            disabled={busy || blocked || !ready || confirm.trim().toLowerCase() !== CONFIRM_WORD}
-            onClick={run}
+            disabled={busy || blocked || !ready}
+            onClick={() => (armed ? void run() : setArmed(true))}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-            Delete
+            {armed ? 'Tap again to delete' : 'Delete permanently'}
           </Button>
           <Button variant="ghost" size="lg" onClick={onClose}>Cancel</Button>
         </div>
@@ -1150,8 +737,8 @@ function DeleteSheet({
             <>
               <p className="text-sm text-fg-mute mt-2 leading-snug">
                 This removes files under your Claude Code home, not inside Wake. It cannot be
-                undone, and one of them is the edit-undo history for real source files. To put a
-                session away without destroying it, archive it instead.
+                undone, and one of them is the edit-undo history for real source files. To take a
+                session off this list without destroying it, swipe the row and hide it instead.
               </p>
 
               <h3 className="text-eyebrow uppercase text-fg-mute mt-4 mb-2">What goes</h3>
@@ -1162,18 +749,6 @@ function DeleteSheet({
                   </p>
                 ))
                 : <p className="text-sm text-fg-mute h-8 flex items-center">—</p>}
-
-              <h3 className="text-eyebrow uppercase text-fg-mute mt-4 mb-2">
-                Type {CONFIRM_WORD} to confirm
-              </h3>
-              <input
-                value={confirm}
-                onChange={e => setConfirm(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-                aria-label={`Type ${CONFIRM_WORD} to confirm`}
-                className={inputClass}
-              />
             </>
           )}
 

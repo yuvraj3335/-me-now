@@ -39,6 +39,15 @@ const SESSION_WINDOW_DAYS = 7
 const MIN_TURNS = 2
 /** "However far back this machine goes" — used when a session is named by id. */
 const ALL_HISTORY_DAYS = 3650
+/**
+ * The tail the conversation page reads.
+ *
+ * Bigger than the list's because this one renders content, smaller than the
+ * excerpt's 512K because it is parsed into structure on the way and a phone is
+ * scrolling the result. 256K is roughly the last hundred exchanges on this
+ * machine's transcripts, which is more than anyone scrolls back through.
+ */
+const TURNS_TAIL_BYTES = 256 * 1024
 
 function readTail(path: string, bytes: number): string {
   const size = statSync(path).size
@@ -394,6 +403,170 @@ export function listAllSessions(
     if (out.length >= limit) break
   }
   return out
+}
+
+/**
+ * The sessions Claude Code is running **right now**, newest first.
+ *
+ * This is the Sessions list, and it is a different question from the one
+ * `listAllSessions` answers. That one walks transcripts, and a transcript is a
+ * *record* — it survives the process that wrote it by weeks. Listing those was
+ * the bug: Wake showed thirty dead conversations, he tapped one, and Claude
+ * Code on his phone said the session was archived. It was right. Wake had
+ * handed it a corpse.
+ *
+ * So the list is built from the other end. `liveSessions()` reads the
+ * per-process files Claude Code keeps while a session is actually up, and only
+ * those ids get a transcript read at all. The set is small by construction —
+ * seventeen on this box against a hundred and thirty transcripts — which is
+ * also why the window is all of history rather than thirty days: a session
+ * started six weeks ago and still open is exactly the one you must not drop.
+ *
+ * There is no archive flag to consult, and this is not a guess. Claude Code
+ * 2.1.251 writes none: fifty-four thousand transcript records on this box carry
+ * no `archived` key, and there is no sidecar next to the JSONL. What it does
+ * publish is the inverse, and it is authoritative — `claude agents --json`
+ * prints *active* sessions and needs `--all` to include finished ones. This
+ * function is that same answer read from the same files, without the subprocess.
+ */
+export function listActiveSessions(opts: { repo?: string; limit?: number } = {}): SessionRow[] {
+  const { repo, limit = 100 } = opts
+  const wanted = repo?.trim() || null
+  const live = liveSessions()
+  if (live.size === 0) return []
+
+  // One readdir for the whole set rather than one per id: `sessionFiles` is the
+  // expensive half of this and it does not get cheaper by being called 17 times.
+  const byId = new Map(sessionFiles(ALL_HISTORY_DAYS).map(f => [f.id, f]))
+
+  const out: SessionRow[] = []
+  for (const [id, l] of live) {
+    const file = byId.get(id)
+    // Live with no transcript yet — a session started seconds ago. It is real
+    // and it is his, so it is listed from what the process file already knows
+    // rather than withheld until the first turn lands.
+    if (!file) {
+      if (isWakeRun({ cwd: l.cwd })) continue
+      const row: SessionRow = {
+        id, title: l.name || basename(l.cwd) || 'New session', cwd: l.cwd,
+        project: basename(l.cwd) || l.cwd, lastPrompt: null, turns: 0,
+        lastTs: l.startedAt, path: '', pr: null, branch: null,
+        version: null, entrypoint: null, permissionMode: null,
+      }
+      if (!wanted || sessionInRepo(row, wanted)) out.push(row)
+      continue
+    }
+    const info = parseSession(file.path, file.id, file.project, file.mtime, LIST_TAIL_BYTES)
+    if (isWakeRun({ cwd: info.cwd })) continue
+    const row = rowOf(file, info)
+    if (wanted && !sessionInRepo(row, wanted)) continue
+    out.push(row)
+  }
+
+  out.sort((a, b) => b.lastTs - a.lastTs)
+  return out.slice(0, limit)
+}
+
+/**
+ * Whether Claude Code will still let you work in this session.
+ *
+ * The one gate every path that *starts* something goes through — the launcher's
+ * picker, the pack, the session page's composer. `false` means the id may not
+ * be resumed, packed, or named in a link, because the thing on the other end of
+ * it is a transcript rather than a conversation.
+ */
+export const isSessionActive = (id: string): boolean => liveSessions().has(id)
+
+/* --------------------------------- turns ---------------------------------- */
+
+export type SessionTurn = {
+  role: 'user' | 'assistant'
+  text: string
+  ts: number
+  /** Tools the assistant reached for in this turn, for the collapsed chip. */
+  tools: string[]
+}
+
+/**
+ * One session's transcript as a conversation.
+ *
+ * `sessionExcerpt` already walked these records, but it returns one blob of
+ * text for a brief to quote. A page that renders turns needs them apart — who
+ * said it, when, and what the tool calls were — so this returns the structure
+ * and `sessionExcerpt` keeps the string. Two readers of one file, neither
+ * pretending to be the other.
+ *
+ * What is deliberately dropped:
+ *
+ * * **Sidechains.** `isSidechain` marks a subagent's own conversation, which is
+ *   filed in the same transcript. Rendering those inline turns one conversation
+ *   into five interleaved ones.
+ * * **`tool_result` user records.** Claude Code files a tool's *output* as a
+ *   user turn. It is not something he said, and showing it as his own message
+ *   is how a transcript starts reading like a terminal.
+ * * **Empty assistant turns.** A turn that was only a tool call has no prose;
+ *   its tools ride on the next turn that does rather than drawing a blank bubble.
+ *
+ * The tail is read rather than the file: transcripts reach several megabytes and
+ * this is on the path of a phone opening a page. `after` is an epoch
+ * millisecond, so polling asks for what it has not seen without holding an index
+ * that a tail read would invalidate.
+ */
+export function parseSessionTurns(
+  id: string, opts: { after?: number; limit?: number; tailBytes?: number } = {},
+): { found: boolean; cwd?: string; turns: SessionTurn[] } {
+  const { after = 0, limit = 200, tailBytes = TURNS_TAIL_BYTES } = opts
+  const hit = sessionFiles(ALL_HISTORY_DAYS).find(f => f.id === id)
+  if (!hit) return { found: false, turns: [] }
+
+  let text: string
+  try { text = readTail(hit.path, tailBytes) } catch { return { found: false, turns: [] } }
+
+  const turns: SessionTurn[] = []
+  let cwd: string | undefined
+  let pending: string[] = []
+
+  for (const line of text.split('\n')) {
+    if (line.length < 12 || line.charCodeAt(0) !== 123 /* { */) continue
+    if (!line.includes('"user"') && !line.includes('"assistant"')) continue
+
+    let d: any
+    try { d = JSON.parse(line) } catch { continue }
+    if (d.type !== 'user' && d.type !== 'assistant') continue
+    if (d.isSidechain) continue
+    if (d.cwd) cwd = d.cwd
+
+    const content = d.message?.content
+    let body = ''
+    let isToolResult = false
+    if (typeof content === 'string') {
+      body = content
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== 'object') continue
+        if (block.type === 'text' && typeof block.text === 'string') body += block.text
+        else if (block.type === 'tool_use' && block.name) pending.push(String(block.name))
+        else if (block.type === 'tool_result') isToolResult = true
+      }
+    }
+    if (isToolResult && !body.trim()) continue
+
+    body = (d.type === 'user' ? cleanPrompt(body) : body)?.trim() ?? ''
+    if (!body) continue
+
+    const ts = Date.parse(d.timestamp ?? '') || hit.mtime
+    if (ts <= after) { pending = []; continue }
+
+    turns.push({
+      role: d.type,
+      text: body,
+      ts,
+      tools: d.type === 'assistant' ? pending : [],
+    })
+    pending = []
+  }
+
+  return { found: true, cwd, turns: turns.slice(-limit) }
 }
 
 /**

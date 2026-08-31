@@ -1,17 +1,22 @@
 /**
- * Where work stands, and how much it matters, as marks rather than colours.
+ * Where work stands, and how much it matters — a shape *and* a hue.
  *
- * Five statuses and four priorities is nine states on a row that already has a
- * source hue and a kind glyph on it. Painting each of them would put nine
- * competing colours on a screen budgeted for three, so the *ring* carries the
- * state — open circle, filled dot, dashed, tick, slash — and colour is spent
- * only where it says something a shape cannot.
+ * This file used to argue that the ring alone should carry the status and that
+ * colour was too expensive to spend on it. Held on a phone that argument does
+ * not survive first contact: `not_started` and `wont_do` were painted with the
+ * same token, so two of the five states were not hard to tell apart, they were
+ * the same picture. `in_progress` took `--color-fg`, which is also the colour
+ * of the title next to it. Five statuses rendered as, in practice, two.
  *
- * The one deliberate omission: `in_progress` is NOT amber. It is the commonest
- * state on the desk, and a colour every second row wears is not a signal. It
- * takes the brightest neutral instead, so it reads as "live" without competing
- * with the three real accents (the pinned row, the phone badge, the one primary
- * button). Amber stays scarce on purpose.
+ * So the shape stays — open circle, filled dot, dashed, tick, slash, which is
+ * what still works for anyone who cannot use the hue — and each state now also
+ * gets one of the five `--color-status-*` tokens. `StatusGlyph` and
+ * `StatusChip` are the only two things in the product allowed to paint them;
+ * `Work.tsx` in particular used to keep its own private set of circles, which
+ * is how it drifted three states behind this file.
+ *
+ * `in_progress` is sky, not amber. Amber is unread, the badge, and the one
+ * primary button, and a status every second row wears would drown all three.
  *
  * Normal priority renders nothing at all. A mark the eye has to identify and
  * then dismiss on every single row is not information, it is work.
@@ -27,12 +32,27 @@ import { STATUS_LABEL } from '../lib/types'
 type Mark = { Icon: LucideIcon; color: string }
 
 const STATUS_MARK: Record<CardStatus, Mark> = {
-  not_started: { Icon: Circle,           color: 'var(--color-fg-mute)' },
-  in_progress: { Icon: CircleDot,        color: 'var(--color-fg)' },
-  in_review:   { Icon: CircleDotDashed,  color: 'var(--color-warn)' },
-  done:        { Icon: CircleCheck,      color: 'var(--color-ok)' },
-  wont_do:     { Icon: CircleSlash,      color: 'var(--color-fg-mute)' },
+  not_started: { Icon: Circle,           color: 'var(--color-status-idle)' },
+  in_progress: { Icon: CircleDot,        color: 'var(--color-status-live)' },
+  in_review:   { Icon: CircleDotDashed,  color: 'var(--color-status-review)' },
+  done:        { Icon: CircleCheck,      color: 'var(--color-status-done)' },
+  wont_do:     { Icon: CircleSlash,      color: 'var(--color-status-drop)' },
 }
+
+/** The hue one status owns, for the rare caller that needs it raw. */
+export const statusColor = (status: CardStatus) => STATUS_MARK[status].color
+
+/**
+ * The wash behind a chip: the status' own hue at 14%, over whatever surface the
+ * chip happens to sit on.
+ *
+ * `oklab` rather than `srgb` because mixing a saturated violet toward
+ * transparent in sRGB greys it out on the way, and the whole point of the chip
+ * is that the hue survives at low alpha. 14% is the highest value at which the
+ * five washes still read as *behind* the text rather than as five buttons.
+ */
+export const statusWash = (status: CardStatus) =>
+  `color-mix(in oklab, ${STATUS_MARK[status].color} 14%, transparent)`
 
 /**
  * The two statuses whose rows read as struck through wherever a title is drawn
@@ -61,6 +81,33 @@ export function StatusSlot({ status }: { status: CardStatus }) {
     <span role="img" aria-label={STATUS_LABEL[status]} title={STATUS_LABEL[status]}
       className="w-5 shrink-0 flex items-center">
       <StatusGlyph status={status} />
+    </span>
+  )
+}
+
+/**
+ * The status as a thing you can read across a room: glyph, word, and the hue
+ * washed behind both.
+ *
+ * This is what a closed Status control shows, what a row shows on the phone,
+ * and what the swipe drawer's five choices are drawn with — one component, so
+ * the five colours cannot mean one thing in a list and another in a picker.
+ *
+ * `size="sm"` is the row chip and `md` is the one in a detail header or a
+ * picker, where 44px of height is a tap target rather than decoration.
+ */
+export function StatusChip({
+  status, size = 'sm', className = '',
+}: { status: CardStatus; size?: 'sm' | 'md'; className?: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full whitespace-nowrap ${
+        size === 'md' ? 'px-2.5 py-1.5 text-base' : 'px-2 py-0.5 text-sm'
+      } ${className}`}
+      style={{ background: statusWash(status), color: STATUS_MARK[status].color }}
+    >
+      <StatusGlyph status={status} size={size === 'md' ? 15 : 13} />
+      {STATUS_LABEL[status]}
     </span>
   )
 }

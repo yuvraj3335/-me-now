@@ -491,6 +491,46 @@ export function Menu<T extends string>({
  * page's own sticky headers under the rails, and it is what makes the rule
  * above enforceable rather than a convention every new overlay has to remember.
  */
+/**
+ * How much of the viewport the software keyboard is currently covering.
+ *
+ * `dvh` already handles the browser's own chrome — that is what the note on the
+ * panel below is about — but it does not handle this. On iOS the keyboard does
+ * not resize the layout viewport at all: `100dvh` stays exactly as tall as it
+ * was, the page simply gets scrolled under a keyboard drawn on top of it. So a
+ * bottom-anchored sheet keeps its footer at the bottom of a viewport that is no
+ * longer visible, and the one control that commits ends up behind the keys —
+ * which on this product is `Add`, `Send`, and `Delete permanently`.
+ *
+ * `visualViewport` is the only API that reports it. The inset is the gap
+ * between the layout viewport and the visual one, less however far the page has
+ * been scrolled to accommodate it; clamped at zero because pinch-zoom moves the
+ * same numbers around and must not push the sheet anywhere.
+ */
+function useKeyboardInset(active: boolean): number {
+  const [inset, setInset] = useState(0)
+
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (!active || !vv) return
+    const measure = () =>
+      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)))
+    measure()
+    vv.addEventListener('resize', measure)
+    vv.addEventListener('scroll', measure)
+    return () => {
+      vv.removeEventListener('resize', measure)
+      vv.removeEventListener('scroll', measure)
+    }
+  }, [active])
+
+  // Nothing is left open across a keyboard dismissal, and a stale inset would
+  // hold the next sheet up off the floor for no reason.
+  useEffect(() => { if (!active) setInset(0) }, [active])
+
+  return inset
+}
+
 export function Sheet({
   open, onClose, title, children, footer, wide,
 }: {
@@ -505,6 +545,7 @@ export function Sheet({
 }) {
   const still = useStill()
   useOverlay(open)
+  const keyboard = useKeyboardInset(open)
 
   // Escape closes every overlay in the product.
   useEffect(() => {
@@ -543,6 +584,17 @@ export function Sheet({
             className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} bg-ink-850
                        border border-edge sm:rounded-panel rounded-t-panel
                        max-h-[88dvh] flex flex-col pad-bottom`}
+            /*
+              The keyboard is lifted out of the panel's way rather than scrolled
+              around. `marginBottom` moves the whole bottom-anchored panel up by
+              exactly what the keys cover, and the matching `maxHeight` stops it
+              growing back down into them — without that second half an 88dvh
+              sheet simply keeps its height and pushes its own header off the
+              top of the screen instead.
+            */
+            style={keyboard > 0
+              ? { marginBottom: keyboard, maxHeight: `calc(88dvh - ${keyboard}px)` }
+              : undefined}
             // Not animated in when frames are not being produced. `y: '100%'`
             // is a real transform the moment it is applied, so a slide-up that
             // never runs leaves the panel a full panel-height below the fold —

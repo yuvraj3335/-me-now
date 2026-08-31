@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DATA_DIR } from './env'
 import { plainBody, plainText } from './mail/sanitize'
+import { CARD_STATUSES, type CardStatus } from './sources/types'
 
 const DB_PATH = `${DATA_DIR}/wake.sqlite`
 mkdirSync(dirname(DB_PATH), { recursive: true })
@@ -98,7 +99,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   id                TEXT PRIMARY KEY,
   title             TEXT NOT NULL,
   detail            TEXT,
-  status            TEXT NOT NULL DEFAULT 'todo',  -- todo | doing | done
+  -- not_started | in_progress | in_review | done | wont_do -- the same five
+  -- words a card's status uses, and for the same reason: one vocabulary, or the
+  -- two surfaces drift. This column held todo | doing | done until migration 14
+  -- rewrote it, and taskStatus() below still maps those three on the way out,
+  -- because a row written by something that has not moved yet must not render
+  -- as a blank.
+  status            TEXT NOT NULL DEFAULT 'not_started',
   goal_id           TEXT REFERENCES goals(id) ON DELETE SET NULL,
   source_card_group TEXT,                          -- provenance, not a dependency
   due_at            INTEGER,
@@ -853,7 +860,91 @@ CREATE TABLE IF NOT EXISTS claude_session_archive (
 );
 `,
   },
+  {
+    id: 14,
+    name: 'task-status-five',
+    /*
+     * A task and a card now mean the same five things by "status".
+     *
+     * They did not. A card stored the five `CardStatus` values; a task stored
+     * `todo | doing | done`, and the Work page kept its own circles to draw
+     * them — which is how one product came to have two vocabularies for one
+     * idea, and how Work ended up three states behind the desk. `In review` had
+     * nowhere to live on his own list, and `Won't do` was only ever a delete.
+     *
+     * The mapping is a rename, not a judgement, which is what makes it safe to
+     * run once and never look back:
+     *
+     *   todo  -> not_started
+     *   doing -> in_progress
+     *   done  -> done          (already the word it will keep)
+     *
+     * Nothing is invented on the way through. No task becomes `in_review` or
+     * `wont_do` here, because both are claims only he can make, and a migration
+     * that guessed at either would put a row into a section he never sent it to.
+     *
+     * The reverse map stays live in `taskStatus` afterwards rather than being
+     * deleted with this migration. `tools/seed-demo.ts` still writes `todo` and
+     * `doing` straight into SQLite, and a row this rewrite has already run past
+     * would render with no chip and no word at all — a blank where a status
+     * should be reads as a broken page, not as data nobody recognises.
+     */
+    run() {
+      migrateTaskStatuses()
+    },
+  },
 ]
+
+/**
+ * The three words a task's status used to be, and the five it became.
+ *
+ * Exported because reading has to keep honouring it: migration 14 rewrote every
+ * row that existed the day it ran, and `tools/seed-demo.ts` writes the old words
+ * directly to the table on every reseed, so a legacy value can appear again on
+ * any machine at any time.
+ */
+export const LEGACY_TASK_STATUS: Record<string, CardStatus> = {
+  todo: 'not_started',
+  doing: 'in_progress',
+  done: 'done',
+}
+
+/** Every word a client may send as a task status — the five, plus the old three. */
+export const isTaskStatus = (raw: unknown): raw is string =>
+  typeof raw === 'string'
+  && (CARD_STATUSES.includes(raw as CardStatus) || raw in LEGACY_TASK_STATUS)
+
+/**
+ * A task's status as the product says it, whatever the column happens to hold.
+ *
+ * Every row leaves through here, so the browser only ever sees the five. Text
+ * nobody recognises becomes `not_started` rather than being passed through: the
+ * status is drawn on every single row, and an unmapped value renders as a chip
+ * with no glyph and no word in it — which reads as a broken page rather than as
+ * a row Wake cannot classify.
+ */
+export function taskStatus(raw: unknown): CardStatus {
+  if (typeof raw !== 'string') return 'not_started'
+  if (CARD_STATUSES.includes(raw as CardStatus)) return raw as CardStatus
+  return LEGACY_TASK_STATUS[raw] ?? 'not_started'
+}
+
+/**
+ * Rewrite every legacy task status in place, and say how many rows moved.
+ *
+ * Exported so a test can drive it with rows rather than through the migration
+ * runner, which only ever runs once per database — the same reason
+ * `rekeySlackThreadGroups` is. Re-running it is a no-op: the old words match
+ * nothing the second time.
+ */
+export function migrateTaskStatuses(): number {
+  let moved = 0
+  for (const [was, becomes] of Object.entries(LEGACY_TASK_STATUS)) {
+    if (was === becomes) continue
+    moved += db.query(`UPDATE tasks SET status = ? WHERE status = ?`).run(becomes, was).changes
+  }
+  return moved
+}
 
 /**
  * Move every message-keyed Slack group onto the thread it belongs to.

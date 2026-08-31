@@ -1,20 +1,32 @@
 /**
- * The session menu on "Open in Claude" belongs to the repository above it.
+ * The session menu on the composer belongs to the repository above it — and,
+ * since this pass, to the set of conversations that are actually running.
  *
- * The live symptom this pins: with `truto` chosen, the menu offered all thirty
- * sessions on the machine — TRUTO, TMP, TRUTO-SKILLS, TRUTO-APP and
- * TRUTO-MONITORING — because the picker was never given the repository at all.
- * The filter is the whole of what the control does and none of it can be seen
- * to be right by looking at the component, so it is a function and this is what
- * holds it: a repository named `truto` must not answer with `truto-app`, which
- * is what both loose spellings of the test — `includes`, and a bare path prefix
- * — silently do.
+ * Two live symptoms are pinned here, and they are different bugs.
  *
- * The rule itself is no longer recomputed here. It is `sessionInRepo` in
+ * The first: with `truto` chosen, the menu offered all thirty sessions on the
+ * machine — TRUTO, TMP, TRUTO-SKILLS, TRUTO-APP and TRUTO-MONITORING — because
+ * the picker was never given the repository at all. The filter is the whole of
+ * what the control does and none of it can be seen to be right by looking at the
+ * component, so it is a function and this is what holds it: a repository named
+ * `truto` must not answer with `truto-app`, which is what both loose spellings
+ * of the test — `includes`, and a bare path prefix — silently do.
+ *
+ * The second, and the reason this file changed shape: **a row that is not a live
+ * conversation must not be offered.** `/state` and `/sessions` read Claude
+ * Code's own per-process files now, so being in the list *is* being alive. The
+ * escape hatch this function used to have — a `chosen` session waved past every
+ * filter so the trigger could name the session a brief was already about — was
+ * exactly a way to print a dead id as a live choice, and every use of that id
+ * downstream starts something. It is gone, and the tests that pinned it are
+ * replaced by the ones that pin its absence. That is not lost coverage: the same
+ * scenarios are still here, asserting the opposite outcome, which is the outcome
+ * `SessionChip` then acts on by dropping the session from the brief.
+ *
+ * The repository rule itself is not recomputed here. It is `sessionInRepo` in
  * `src/shared/sessionRepo.ts`, and the server's `?repo=` filter is that same
  * function — so this file tests the predicate where it lives and the menu that
- * uses it, and `test/sessions.test.ts` holds the two sides to it. Recomputing a
- * shared rule on one side is how the two got to disagree in the first place.
+ * uses it, and `test/sessions.test.ts` holds the two sides to it.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -39,6 +51,10 @@ const session = (over: Partial<Session> & { id: string; cwd: string }): Session 
   lastTs: (clock -= 1000),
   path: `${over.cwd}/.jsonl`,
   pr: null,
+  // Every row the server sends is a running process now. The fixture says so,
+  // because a fixture that could not be built by the real reader is a fixture
+  // that tests nothing.
+  live: true,
   ...over,
 })
 
@@ -97,8 +113,9 @@ describe('the rows the menu offers', () => {
   ]
 
   test('a new conversation is always the first row and always available', () => {
+    // It is also the only row that is not a session: picking it starts one.
     for (const repo of [null, TRUTO, '/Users/y/work/nothing-here']) {
-      expect(sessionChoices(rows, repo, null)[0]).toEqual({
+      expect(sessionChoices(rows, repo)[0]).toEqual({
         id: ':new', label: 'A new conversation',
       })
     }
@@ -108,28 +125,30 @@ describe('the rows the menu offers', () => {
     // Grouped by the directory each one recorded, which is `truto/cli` for `c`
     // rather than `truto` — the heading names where it ran, not what contains
     // it. So the groups come out in the order their newest session did.
-    const ids = sessionChoices(rows, null, null).map(i => i.id)
+    const ids = sessionChoices(rows, null).map(i => i.id)
     expect(ids).toEqual([':new', 'a', 'b', 'c', 'd'])
   })
 
   test('with one chosen, only that repository is', () => {
-    const ids = sessionChoices(rows, TRUTO, null).map(i => i.id)
+    const ids = sessionChoices(rows, TRUTO).map(i => i.id)
     expect(ids, 'a sibling repository leaked into the list').toEqual([':new', 'a', 'c'])
   })
 
-  test('a repository with nothing in it offers exactly one row', () => {
-    expect(sessionChoices(rows, '/Users/y/work/quiet', null)).toHaveLength(1)
+  test('a repository with nothing running in it offers exactly one row', () => {
+    // Which is the row that starts one. A repository whose work has all finished
+    // is a repository you begin a conversation in, not one you resume.
+    expect(sessionChoices(rows, '/Users/y/work/quiet')).toHaveLength(1)
   })
 
   test('the two reads overlap, and a session is still one row', () => {
     const twice = [...rows, ...rows]
-    expect(sessionChoices(twice, TRUTO, null).map(i => i.id)).toEqual([':new', 'a', 'c'])
+    expect(sessionChoices(twice, TRUTO).map(i => i.id)).toEqual([':new', 'a', 'c'])
   })
 
   test('newest first, whichever read a row arrived from', () => {
     const old = session({ id: 'old', cwd: TRUTO, lastTs: 1 })
     const fresh = session({ id: 'fresh', cwd: TRUTO, lastTs: Date.now() })
-    expect(sessionChoices([old, fresh], TRUTO, null).map(i => i.id))
+    expect(sessionChoices([old, fresh], TRUTO).map(i => i.id))
       .toEqual([':new', 'fresh', 'old'])
   })
 })
@@ -142,7 +161,7 @@ describe('each row carries its directory and the one fact beside its name', () =
       session({ id: 'a', cwd: TRUTO, lastTs: 500 }),
       session({ id: 'b', cwd: APP, lastTs: 400 }),
       session({ id: 'c', cwd: TRUTO, lastTs: 300 }),
-    ], null, null)
+    ], null)
     expect(items.map(i => i.group)).toEqual([undefined, 'truto', 'truto', 'truto-app'])
   })
 
@@ -155,7 +174,7 @@ describe('each row carries its directory and the one fact beside its name', () =
       session({ id: 'a', cwd: TRUTO, lastTs: 500 }),
       session({ id: 'b', cwd: `${TRUTO}/.claude/worktrees/quiet-hertz`, lastTs: 400 }),
       session({ id: 'c', cwd: `${TRUTO}/QA_EVIDENCE`, lastTs: 300 }),
-    ], TRUTO, null, [TRUTO])
+    ], TRUTO, [TRUTO])
     expect(items.map(i => i.group)).toEqual([undefined, 'truto', 'truto', 'truto'])
     expect(items.map(i => i.id), 'grouping reordered a list that was newest-first')
       .toEqual([':new', 'a', 'b', 'c'])
@@ -165,17 +184,24 @@ describe('each row carries its directory and the one fact beside its name', () =
     // `/private/tmp/wake-ws/scratch` is a real one. Nothing contains it, so the
     // honest heading is the directory itself rather than a repository it is
     // not in.
-    const items = sessionChoices([session({ id: 'a', cwd: '/private/tmp/scratch' })], null, null, [TRUTO])
+    const items = sessionChoices([session({ id: 'a', cwd: '/private/tmp/scratch' })], null, [TRUTO])
     expect(items.at(-1)?.group).toBe('scratch')
   })
 
-  test('a running session says so, and the rest say when they last ran', () => {
+  test('the fact beside the name is when it last said anything', () => {
+    // It used to be `live` for a running session and an age for the rest. Every
+    // row is running now, so `live` on all of them is a column of one repeated
+    // word — and what actually tells two sessions in one repository apart is
+    // which of them moved most recently, because their titles are frequently the
+    // same commit message twice.
     const items = sessionChoices([
-      session({ id: 'a', cwd: TRUTO, live: true }),
-      session({ id: 'b', cwd: TRUTO, lastTs: Date.now() - 3 * 3600_000 }),
-    ], TRUTO, null)
-    expect(items.find(i => i.id === 'a')?.meta).toBe('live')
+      session({ id: 'a', cwd: TRUTO, lastTs: Date.now() - 3 * 3600_000 }),
+      session({ id: 'b', cwd: TRUTO, lastTs: Date.now() - 40 * 3600_000 }),
+    ], TRUTO)
+    expect(items.find(i => i.id === 'a')?.meta).toBeTruthy()
     expect(items.find(i => i.id === 'b')?.meta).toBeTruthy()
+    expect(items.find(i => i.id === 'a')?.meta, 'two ages three hours apart read the same')
+      .not.toBe(items.find(i => i.id === 'b')?.meta)
   })
 })
 
@@ -186,53 +212,49 @@ describe('a session he has put away is not the default context for new work', ()
   ]
 
   test('an archived session is not offered', () => {
-    // Archive is Wake's own word for "done with this". Thirteen of the thirty
-    // on this machine could carry it, and a menu that offers them anyway is a
-    // menu that has ignored the only filing decision he made.
-    expect(sessionChoices(rows, TRUTO, null).map(i => i.id)).toEqual([':new', 'a'])
-    expect(sessionChoices(rows, null, null).map(i => i.id)).toEqual([':new', 'a'])
+    // Archive is Wake's own word for "done with this", and it is the one opinion
+    // Wake keeps about a session Claude Code still has open. A menu that offers
+    // it anyway has ignored the only filing decision he made.
+    expect(sessionChoices(rows, TRUTO).map(i => i.id)).toEqual([':new', 'a'])
+    expect(sessionChoices(rows, null).map(i => i.id)).toEqual([':new', 'a'])
   })
 
-  test('but the one this brief is about is, archived or not', () => {
-    // The way back to it: open it from the Sessions page's Archived view and it
-    // arrives here as the chosen session. Out of the way, not out of reach —
-    // and without this the trigger prints a dash over a brief that names it.
-    const ids = sessionChoices(rows, TRUTO, { id: 'z', title: null }).map(i => i.id)
-    expect(ids).toEqual([':new', 'a', 'z'])
+  test('and it is not let back in by being the one this brief is about', () => {
+    // This is the reversal. There used to be a `chosen` argument that waved a
+    // session past every filter so the trigger could keep naming it. Under an
+    // active-only list that is a hole rather than a courtesy: the way a dead id
+    // reaches `--resume` is by being the id a stale brief still carries. The
+    // composer drops the session instead, and the next press starts a new
+    // conversation — which is the true option.
+    expect(sessionChoices(rows, TRUTO).map(i => i.id)).not.toContain('z')
   })
 
   test('a row from before the flag existed is not archived', () => {
     const legacy = [session({ id: 'a', cwd: TRUTO })]
-    expect(sessionChoices(legacy, TRUTO, null).map(i => i.id)).toEqual([':new', 'a'])
+    expect(sessionChoices(legacy, TRUTO).map(i => i.id)).toEqual([':new', 'a'])
   })
 })
 
-describe('the session the brief is already about is always offered', () => {
+describe('a session that is not running is not a row', () => {
   const rows = [session({ id: 'a', cwd: TRUTO }), session({ id: 'b', cwd: APP })]
 
-  test('even when it ran in another repository', () => {
-    // Otherwise the trigger prints a dash over a brief that names it, and the
-    // only way to see what is attached is to remove it.
-    const ids = sessionChoices(rows, TRUTO, { id: 'b', title: null }).map(i => i.id)
-    expect(ids).toContain('b')
+  test('an id this machine is not running is simply absent', () => {
+    // The list *is* the answer to "what is alive". A brief opened from a card
+    // written last week can name a session that has since ended, and there is
+    // nowhere in this menu for it: no ghost row, no disabled row, no row with an
+    // age on it. `SessionChip` reads that absence and takes the session off the
+    // brief, so the commit becomes `Start a session` rather than a resume.
+    const ids = sessionChoices(rows, TRUTO).map(i => i.id)
+    expect(ids, 'a session nobody is running was offered as a destination')
+      .toEqual([':new', 'a'])
+    expect(ids).not.toContain('the-one-from-april')
   })
 
-  test('and even when this window has never seen it', () => {
-    // A session picked from the Sessions page can be a year old; `/state` reads
-    // thirty days. The basket kept its title, so the row can still be named.
-    const items = sessionChoices(rows, TRUTO, { id: 'z', title: 'the one from April' })
-    expect(items.map(i => i.id)).toEqual([':new', 'a', 'z'])
-    expect(items.at(-1)?.label).toBe('the one from April')
-  })
-
-  test('a chosen session with no title anywhere still gets a row', () => {
-    const items = sessionChoices(rows, TRUTO, { id: 'z', title: null })
-    expect(items.at(-1)?.id).toBe('z')
-    expect(items.at(-1)?.label).toBeTruthy()
-  })
-
-  test('and it is not offered twice when it is in the list already', () => {
-    const ids = sessionChoices(rows, TRUTO, { id: 'a', title: 'session a' }).map(i => i.id)
-    expect(ids).toEqual([':new', 'a'])
+  test('a live session in another repository is still filtered by repository', () => {
+    // Not because it is dead — it is not — but because this menu is scoped, and
+    // the composer answers the mismatch by moving the repository to where that
+    // session actually runs rather than by widening the list.
+    expect(sessionChoices(rows, TRUTO).map(i => i.id)).not.toContain('b')
+    expect(sessionChoices(rows, APP).map(i => i.id)).toEqual([':new', 'b'])
   })
 })

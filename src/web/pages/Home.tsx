@@ -26,20 +26,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, Download, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Loader2, SlidersHorizontal } from 'lucide-react'
 import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
 import type { Card as CardT, CardPriority, CardStatus, SourceName } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { timeOfDay } from '../lib/time'
 import {
-  CardRow, PANE_MIN, PhoneTable, TABLE_MIN, TableCols, TableHead, maxPaneFor,
-  titleOf, useViewport, type DueSort, type RowAction,
+  CardList, CardRow, COLUMNS_MIN, PANE_MIN, PhoneTable, TABLE_MIN, TableCols, TableHead,
+  maxPaneFor, titleOf, useViewport, type DueSort, type RowAction,
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { Sync, useResultLine } from '../components/sync'
 import { TaskSheet } from '../components/TaskSheet'
 import {
-  Button, PAGE_SIZE, PageTitle, Pager, Select, inputClass, pageCount, pageSlice, useRail,
+  Button, CountBadge, Field, PAGE_SIZE, PageTitle, Pager, Select, Sheet, inputClass,
+  pageCount, pageSlice, useRail,
 } from '../components/primitives'
 import { SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, contextLine, SourceMark, whereOf } from '../components/kinds'
@@ -305,6 +306,15 @@ export function Home() {
   )
   const shown = selectedKey === '' ? null : (selected ?? rows[0] ?? null)
   const isTable = width >= TABLE_MIN
+  /**
+   * Whether this viewport can hold columns at all.
+   *
+   * Three layouts rather than two, and the third is the phone's. `CardTable`
+   * carries the measurement: four columns at a readable width need 552px and a
+   * 375px screen gives the page column 343, so below `sm` a row is a card and
+   * above it a row is a row. See `COLUMNS_MIN`.
+   */
+  const hasColumns = width >= COLUMNS_MIN
   const hasPane = width >= PANE_MIN
 
   /* ------------------------------- the pane ------------------------------- */
@@ -537,7 +547,21 @@ export function Home() {
    * deliberately the same shape as it.
    */
   const list = (
-    <div className="min-w-0 grow pad-x pb-24 lg:pb-8">
+    <div
+      /*
+       * The last row clears the tab bar, by measuring it rather than by
+       * guessing at it.
+       *
+       * This was `pb-24 lg:pb-8` — 96px under a 53px bar, which is 43px of hole
+       * on a laptop-sized phone and not enough on a device with a home
+       * indicator. `--nav-h` is the strip the bar actually owns at this width,
+       * declared once in `styles.css` and already carrying `env(safe-area-inset-
+       * bottom)`; above `sm` the bar is not drawn and the same expression
+       * collapses to the indicator plus this page's own 24px of air.
+       */
+      style={{ paddingBottom: 'calc(var(--nav-h) + 24px)' }}
+      className="min-w-0 grow pad-x"
+    >
       <Header count={rows.length} source={filter} />
       <SourceTabs value={filter} state={state} />
       <FilterRow query={query} due={due} pri={pri} status={status} />
@@ -569,15 +593,29 @@ export function Home() {
           <Pager page={page} pages={pages} total={rows.length}
             onPage={n => setParam('page', n === 1 ? null : String(n))} />
         </>
-      ) : (
+      ) : hasColumns ? (
         <>
-          {/* Four columns here too, at the widths a phone can read them at, in
-              a scroller of the table's own — Kind gives up its place to Where,
+          {/* Four columns here too, at the widths a narrow laptop window and a
+              tablet can read them at — Kind gives up its place to Where,
               because a glyph already says which kind and nothing said which
               customer. The `j`/`k` cursor reaches this layout now as well; it
               did not before, so a narrow laptop had a keyboard cursor with
               nothing on screen to show where it was standing. */}
           <PhoneTable
+            rows={pageRows}
+            selectedKey={selectedKey}
+            cursorKey={cursor === null ? null : rows[cursor]?.group_key ?? null}
+            actions={rowActions}
+          />
+          <Pager page={page} pages={pages} total={rows.length}
+            onPage={n => setParam('page', n === 1 ? null : String(n))} />
+        </>
+      ) : (
+        <>
+          {/* And on the phone a row is a card: the title on its own line, then
+              status, customer and deadline on the next. The same four facts the
+              table draws, at a width that does not have to be scrolled to. */}
+          <CardList
             rows={pageRows}
             selectedKey={selectedKey}
             cursorKey={cursor === null ? null : rows[cursor]?.group_key ?? null}
@@ -945,58 +983,209 @@ function Blank({
   )
 }
 
+/** Everything that is narrowing this list besides the tab, counted. */
+const filterCount = (query: string, due: DueFilter, pri: string, status: string) =>
+  [query.trim() !== '', due !== 'any', pri !== 'any', status !== 'any'].filter(Boolean).length
+
+/** Everything the filter row owns, and the page with it. Cleared together. */
+const FILTER_PARAMS = ['q', 'due', 'pri', 'status', 'page']
+
 /**
- * Search, and the three closed sets.
+ * How much of the screen the keyboard is currently covering.
  *
- * One row under the tabs. Everything here narrows what you see and none of it
- * changes what exists — which is why Fetch sits up on the tab row instead,
- * behind a spacer, where it cannot be mistaken for a fourth filter.
+ * iOS does not shrink the layout viewport when the keyboard comes up — it
+ * shrinks the *visual* one and leaves the page the height it had — so a sheet
+ * anchored to the bottom edge keeps its footer exactly where the keyboard now
+ * is, and the one control on the surface that commits is under it with nothing
+ * on screen to say so. `dvh` does not help: it is measured against the layout
+ * viewport too, which is why the panel's own max-height fixes the URL bar
+ * and not this.
  *
- * Each control writes one URL parameter and resets the page, because page 4 of
- * a list you just re-filtered is a page that may not exist.
+ * `visualViewport` is the only thing that can answer it. The number is the gap
+ * between the two viewports' bottoms, which is the keyboard plus any accessory
+ * bar, and it comes back to zero the moment the field is left. It is spent as
+ * bottom padding inside the footer, so the panel — which is bottom-anchored and
+ * free to grow upward — lifts the commit strip to sit exactly on top of the
+ * keyboard rather than behind it.
  *
- * It wraps rather than scrolls on a phone. Four controls need about 450px and
- * have 358; squeezed onto one line the three closed sets each rendered as `A…`,
- * which is three anonymous dropdowns, and scrolled sideways two of them are
- * simply not there. Search takes the first line and the three sets take the
- * second, which is exactly 346px of the 358 available.
+ * Only measured while something is actually open. Two listeners on a viewport
+ * that nothing is asking about is a listener firing on every scroll of every
+ * page for nobody.
+ */
+function useKeyboardInset(active: boolean): number {
+  const [inset, setInset] = useState(0)
+
+  useEffect(() => {
+    const vv = typeof window === 'undefined' ? null : window.visualViewport
+    if (!active || !vv) return
+    const read = () =>
+      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)))
+    read()
+    vv.addEventListener('resize', read)
+    vv.addEventListener('scroll', read)
+    return () => {
+      vv.removeEventListener('resize', read)
+      vv.removeEventListener('scroll', read)
+      setInset(0)
+    }
+  }, [active])
+
+  return inset
+}
+
+/**
+ * Search, and the three closed sets — one row on a laptop, one control on a
+ * phone.
+ *
+ * Everything here narrows what you see and none of it changes what exists,
+ * which is why Fetch sits up on the tab row instead, behind a spacer, where it
+ * cannot be mistaken for a fourth filter. Each control writes one URL parameter
+ * and resets the page, because page 4 of a list you just re-filtered is a page
+ * that may not exist.
+ *
+ * **The phone gets a button instead of the row, and that is the whole change.**
+ * Four controls need about 450px and a 375px screen gives 343, so this wrapped:
+ * a full-width `Search`, and `Any date · Any priority · Any status` underneath
+ * it. Two rows of chrome, ~88px, above a list on an 812px screen — and the
+ * three sets on the second row are three anonymous dropdowns until one is
+ * opened, because a closed set whose value is `Any date` is a control saying it
+ * is doing nothing. So below `sm` all four collapse into one 44px control that
+ * says how many of them are set, and pressing it opens the same four in a sheet
+ * with room to label them. The row above the list is 44px instead of 88, and
+ * what it costs is one press to reach a filter that, unset, was only telling
+ * you it was unset.
+ *
+ * From `sm` up it is exactly the row it has always been. There is no laptop
+ * problem here — the four fit on one line with room over — and a laptop that
+ * grew a modal to reach its own filters would be paying for the phone's fix.
  */
 function FilterRow({
   query, due, pri, status,
 }: { query: string; due: DueFilter; pri: string; status: string }) {
+  const [open, setOpen] = useState(false)
   const set = (k: string, v: string | null) => { setParam(k, v); setParam('page', null) }
+  const count = filterCount(query, due, pri, status)
+  const keyboard = useKeyboardInset(open)
+
+  /* The three closed sets, built once and drawn twice — the sheet and the row
+     are two arrangements of one set of controls, and a second copy of these
+     option lists is how the two come to offer different answers. `full` is the
+     sheet's: a labelled control in a form spans its column, and the same
+     control in a filter row is as wide as its longest option. */
+  const sets = (full: boolean): Array<[string, React.ReactNode]> => {
+    const w = full ? 'w-full' : ''
+    return [
+      ['Due', (
+        <Select key="due" className={w}
+          value={due}
+          options={DUE_OPTIONS}
+          onChange={v => set('due', v === 'any' ? null : v)}
+          ariaLabel="Filter by due date"
+        />
+      )],
+      ['Priority', (
+        <Select key="pri" className={w}
+          value={pri}
+          options={[{ id: 'any', label: 'Any priority' },
+            ...PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))]}
+          onChange={v => set('pri', v === 'any' ? null : v)}
+          ariaLabel="Filter by priority"
+        />
+      )],
+      ['Status', (
+        <Select key="status" className={w}
+          value={status}
+          options={[{ id: 'any', label: 'Any status' },
+            ...STATUS_ORDER.map(s => ({ id: s as string, label: STATUS_LABEL[s] }))]}
+          onChange={v => set('status', v === 'any' ? null : v)}
+          ariaLabel="Filter by status"
+        />
+      )],
+    ]
+  }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 py-2">
-      <input
-        type="search"
-        value={query}
-        onChange={e => set('q', e.target.value || null)}
-        placeholder="Search"
-        aria-label="Search every column"
-        className={`${inputClass} h-8 py-0 w-full sm:w-64`}
-      />
-      <Select
-        value={due}
-        options={DUE_OPTIONS}
-        onChange={v => set('due', v === 'any' ? null : v)}
-        ariaLabel="Filter by due date"
-      />
-      <Select
-        value={pri}
-        options={[{ id: 'any', label: 'Any priority' },
-          ...PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))]}
-        onChange={v => set('pri', v === 'any' ? null : v)}
-        ariaLabel="Filter by priority"
-      />
-      <Select
-        value={status}
-        options={[{ id: 'any', label: 'Any status' },
-          ...STATUS_ORDER.map(s => ({ id: s as string, label: STATUS_LABEL[s] }))]}
-        onChange={v => set('status', v === 'any' ? null : v)}
-        ariaLabel="Filter by status"
-      />
-    </div>
+    <>
+      {/* The phone's whole filter row. `secondary` once something is set, so
+          the control says it is doing something without hover and without
+          being read — the count beside it says how much. */}
+      <div className="sm:hidden py-2">
+        <Button
+          size="md"
+          variant={count ? 'secondary' : 'default'}
+          onClick={() => setOpen(true)}
+          ariaLabel={count ? `Filters — ${count} set` : 'Filters'}
+        >
+          <SlidersHorizontal size={14} aria-hidden /> Filters
+          <CountBadge count={count} />
+        </Button>
+      </div>
+
+      <div className="hidden sm:flex flex-wrap items-center gap-2 py-2">
+        <input
+          type="search"
+          value={query}
+          onChange={e => set('q', e.target.value || null)}
+          placeholder="Search"
+          aria-label="Search every column"
+          className={`${inputClass} h-8 py-0 w-full sm:w-64`}
+        />
+        {sets(false).map(([, control]) => control)}
+      </div>
+
+      <Sheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Filters"
+        footer={
+          /*
+            The footer is the phone's, in both directions: `pad-bottom` on the
+            panel already carries the home indicator, and this carries the
+            keyboard — the search field is the first thing in the sheet, so the
+            commit strip is behind an iOS keyboard the moment anybody types.
+            See `useKeyboardInset`.
+          */
+          <div style={{ paddingBottom: keyboard }} className="flex items-center gap-2">
+            <Button size="lg" variant="default" disabled={!count} onClick={() => {
+              for (const k of FILTER_PARAMS) setParam(k, null)
+            }}>
+              Clear filters
+            </Button>
+            {/* Nothing in this sheet commits — every control writes its
+                parameter as it is pressed and the list behind is already
+                filtered — so this is a way out rather than a confirmation, and
+                it is not the accent. It exists because the panel's own cross is
+                in the far corner from a thumb. */}
+            <Button size="lg" variant="secondary" className="grow" onClick={() => setOpen(false)}>
+              Close
+            </Button>
+          </div>
+        }
+      >
+        {/* No `autoFocus`. A sheet that opens with the keyboard already up has
+            covered the three controls underneath the field before they have
+            been seen, and the reader who came here for `Overdue` never asked
+            to type. */}
+        <Field label="Search">
+          <input
+            type="search"
+            value={query}
+            onChange={e => set('q', e.target.value || null)}
+            placeholder="Search"
+            aria-label="Search every column"
+            className={`${inputClass} h-11 py-0`}
+          />
+        </Field>
+        {/* Labelled here and not on the row above, and that is the sheet
+            earning its existence rather than a decoration: on the row the value
+            *is* the label — `Any date` says what it is and that it is unset in
+            two words — and in a form a control with a label above it can drop
+            the prefix and just answer. */}
+        {sets(true).map(([label, control]) => (
+          <Field key={label} label={label}>{control}</Field>
+        ))}
+      </Sheet>
+    </>
   )
 }
 

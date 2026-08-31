@@ -30,26 +30,44 @@
  * 2:35pm`, or `2:35pm` when it is today, or `late — Thu 3 Sep, 2:35pm` once it
  * has passed. The storage was always right; the display only ever showed `in
  * 4d`, which is not a commitment, it is a distance.
+ *
+ * **A task has the same five statuses a card has, painted by the same file.**
+ * This page used to keep a private set of circles — a mute ring, an `fg` dot
+ * and an `ok` tick — for a three-word vocabulary of its own, which is precisely
+ * how it drifted three states behind the desk while both surfaces claimed to
+ * show "status". The circles are gone; `status.tsx` is the only thing in the
+ * product allowed to paint one, and the list is cut into the sections those
+ * five statuses name.
+ *
+ * **Drag-to-reorder is gone, and the page scrolls again.** A `Reorder.Item`
+ * writes `touch-action: pan-x` inline to claim the vertical axis for its drag,
+ * and every task row answered that with `none` to get the horizontal axis back
+ * for the swipe. Both of those take the page's own scroll away: a thumb dragging
+ * up the list moved nothing, which is the "frozen app" failure `lib/swipe.ts`
+ * puts above every gesture in this product. There is no way to hold a manual
+ * order and a one-thumb scroll on the same row, so the order goes: the list is
+ * grouped by status now, which is the ordering a phone at 7am actually reads.
  */
 
-import { AnimatePresence, Reorder, motion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useStill } from '../lib/motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Bell, BellRing, ChevronDown, Circle, CircleCheck, CircleDot, Plus, SquareTerminal, Trash2, X,
+  Bell, BellRing, ChevronDown, Mic, Plus, SquareTerminal, Trash2, X,
 } from 'lucide-react'
 import { actions, optimistic, reload, useStore } from '../lib/api'
-import type { Goal, Task } from '../lib/types'
-import { STATUS_LABEL } from '../lib/types'
+import type { CardStatus, Goal, Task } from '../lib/types'
+import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
+import { StatusChip, StatusGlyph, StatusSlot, isSettled } from '../components/status'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
 import { SwipeDrawer, useSwipe } from '../components/swipe'
 import { PANE_MIN, useViewport } from '../components/CardTable'
 import { toast } from '../lib/toast'
 import {
   Button, DateTimePicker, Field, PageTitle, Pager, Segmented, Select, Sheet,
-  inputClass, pageCount, pageSlice, rowStateClass, spring,
+  inputClass, pageCount, pageSlice, rowStateClass,
 } from '../components/primitives'
-import { TaskSheet, NOTE_COLORS, noteColorName } from '../components/TaskSheet'
+import { TaskSheet, TaskRead, NOTE_COLORS, noteColorName } from '../components/TaskSheet'
 import { Recorder, VoicePlayer } from '../components/voice'
 import { voiceApi, type VoiceNote } from '../lib/voice'
 import { SOURCE_LABEL } from '../components/sources'
@@ -59,32 +77,55 @@ import { setParam, useParam } from '../lib/route'
 type Tab = 'tasks' | 'goals'
 
 /**
- * The three a task can be in, under the desk's own words.
+ * The five, in the order work moves through them.
  *
- * Tasks were not migrated to the card's five, and this is the seam. A task is
- * his own work with a lifecycle this page already draws; a card is somebody
- * else's system, and its status is a note he keeps about it. `In review` and
- * `Won't do` have no home here — the first because a task of his own does not
- * wait on a reviewer inside Wake, and the second because a task decided against
- * is one that leaves, which is what `Delete` is for. The three that do map take
- * the labels the desk prints, so the product has one vocabulary rather than two
- * that happen to agree today.
- *
- * `as const` so the ids are the union `Task['status']` rather than `string`: the
- * pane's `Select` is generic over its own value, and a picker typed `string`
- * could offer a status the route refuses.
+ * Taken from `STATUS_ORDER` rather than written out, so this page cannot offer
+ * a status the route refuses or spell one differently from the desk. A task
+ * used to have three of its own — `todo | doing | done` — and the argument for
+ * that seam was that a task of his own does not wait on a reviewer and that a
+ * task decided against is one that leaves. Both halves were wrong in use: work
+ * of his own sits waiting on a review as often as anything else does, and
+ * deleting the thing you decided not to do destroys the record that you decided.
+ * `Won't do` keeps it, in a section that is folded away.
  */
-const TASK_CHOICES = [
-  { id: 'todo',  label: STATUS_LABEL.not_started },
-  { id: 'doing', label: STATUS_LABEL.in_progress },
-  { id: 'done',  label: STATUS_LABEL.done },
-] as const
+const TASK_CHOICES = STATUS_ORDER.map(id => ({ id, label: STATUS_LABEL[id] }))
 
-/** A goal is finished or it is not; there is no middle for it to be in. */
+/**
+ * The three sections a live task can be in, in the order the phone lists them.
+ *
+ * In progress first because it is what he is actually holding; `Not started`
+ * last because it is the biggest and the least urgent. `done` and `wont_do` are
+ * not here — they are the two folded sections at the foot of the page.
+ */
+const LIVE_GROUPS = ['in_progress', 'in_review', 'not_started'] as const satisfies readonly CardStatus[]
+
+/**
+ * A goal is finished or it is not; there is no middle for it to be in.
+ *
+ * It still speaks in the shared words, so `Not started` means the same thing on
+ * a goal as on a task and on a card — the ids are two of the five rather than a
+ * private pair that happens to read the same.
+ */
+type GoalState = 'not_started' | 'done'
 const GOAL_CHOICES = [
-  { id: 'todo', label: STATUS_LABEL.not_started },
+  { id: 'not_started', label: STATUS_LABEL.not_started },
   { id: 'done', label: STATUS_LABEL.done },
-] as const
+] as const satisfies ReadonlyArray<{ id: GoalState; label: string }>
+
+/**
+ * What a task was before it was ticked, so unticking can put it back.
+ *
+ * The glyph is a two-way switch — Done, and back to wherever it came from —
+ * rather than a five-way cycle, because a cycle on the one control a thumb hits
+ * without aiming means every mis-tap lands on a state he has to notice and
+ * undo. Nothing on the server records the status a task held before this one,
+ * and adding a column to hold it would make an undo of a tick outlive the
+ * session it happened in, which is not what an undo is for. So it is a map that
+ * lives as long as the tab does, and a tick whose origin has been forgotten
+ * unticks to `Not started` — the honest default, and the one it names out loud
+ * in the toast that follows.
+ */
+const beforeDone = new Map<string, CardStatus>()
 
 /**
  * Put back a deleted task, field for field.
@@ -177,10 +218,32 @@ export function Work() {
    * not.
    */
   const [editingId, setEditingId] = useState<string | null>(null)
+  /**
+   * The row the phone is *reading*, which is not the row it is editing.
+   *
+   * Below the pane width a tap on a title used to open the whole editor — a
+   * title field, a goal picker, two calendars, a palette and the notes — to
+   * answer "what was this again". The read sheet is what that tap opens now;
+   * `Edit` inside it is what opens the form.
+   */
+  const [readingId, setReadingId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [goalEditingId, setGoalEditingId] = useState<string | 'new' | null>(null)
   const [showDone, setShowDone] = useState(false)
+  const [showDropped, setShowDropped] = useState(false)
+  /**
+   * Which of the rail's two sections the phone has open over the list.
+   *
+   * On a phone the rail is not a column beside the list, it is 400 pixels
+   * wedged under it — so the reminders that went off and the recorder are a
+   * badge in the header and a sheet each. At the pane width they are what they
+   * always were, in the rail, where there is room for them.
+   */
+  const [railSheet, setRailSheet] = useState<'fired' | 'voice' | null>(null)
   const donePage = Math.max(1, Number(useParam('page')) || 1)
+  /** The settled lists page independently: one parameter each, or `Show`ing the
+   *  second one would land it on whatever page the first was left at. */
+  const droppedPage = Math.max(1, Number(useParam('wpage')) || 1)
 
   const width = useViewport()
   /**
@@ -204,14 +267,16 @@ export function Work() {
 
   /** Live, so a reload lands inside the open sheet instead of beside it. */
   const editing = editingId === null ? null : tasks.find(t => t.id === editingId) ?? null
+  const reading = readingId === null ? null : tasks.find(t => t.id === readingId) ?? null
   const goalEditing: Goal | 'new' | null =
     goalEditingId === 'new' ? 'new'
     : goalEditingId === null ? null
     : goals.find(g => g.id === goalEditingId) ?? null
 
-  /** Any of the three sheets this page owns. While one is up it holds the
-   *  surface, and with it the single primary. */
-  const sheetOpen = creating || editing !== null || goalEditing !== null
+  /** Any of the sheets this page owns. While one is up it holds the surface,
+   *  and with it the single primary. */
+  const sheetOpen =
+    creating || editing !== null || reading !== null || goalEditing !== null || railSheet !== null
 
   /**
    * The task the edit sheet is animating with, which outlives the task it is
@@ -224,6 +289,9 @@ export function Work() {
    */
   const lastEdited = useRef<Task | null>(null)
   useEffect(() => { if (editing) lastEdited.current = editing }, [editing])
+  /** The same, for the read sheet: it leaves looking like the row it was. */
+  const lastRead = useRef<Task | null>(null)
+  useEffect(() => { if (reading) lastRead.current = reading }, [reading])
 
   /**
    * The notes live here rather than inside their own section, because they share
@@ -251,10 +319,37 @@ export function Work() {
     [state?.cards],
   )
 
-  const doing = useMemo(() => tasks.filter(t => t.status === 'doing'), [tasks])
-  const todo = useMemo(() => tasks.filter(t => t.status === 'todo'), [tasks])
+  /**
+   * The list, cut into the sections it is drawn in.
+   *
+   * One pass rather than a `filter` per section: the store's order is the
+   * server's — `sort, created_at DESC` — and pushing in that order is what keeps
+   * a row in the same place within its section that it had on the flat list.
+   * A task carrying a status this build does not know cannot land anywhere, so
+   * `get` is allowed to miss; the server maps every row to one of the five on
+   * its way out, which is what makes that unreachable rather than merely rare.
+   */
+  const live = useMemo(() => {
+    const by = new Map<CardStatus, Task[]>(LIVE_GROUPS.map(s => [s, [] as Task[]]))
+    for (const t of tasks) by.get(t.status)?.push(t)
+    return by
+  }, [tasks])
+
+  /** Most recently finished first: the Done list is a record, read from the top. */
   const done = useMemo(
     () => tasks.filter(t => t.status === 'done').sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0)),
+    [tasks],
+  )
+  /**
+   * And the ones he decided against, newest first.
+   *
+   * By `updated_at`, not `completed_at`: a `wont_do` has no completion time —
+   * the route clears it on every move that is not `done` — so ordering these by
+   * that column would sort them all as zero and leave the list in creation
+   * order, with the one he just dropped at the bottom.
+   */
+  const dropped = useMemo(
+    () => tasks.filter(t => t.status === 'wont_do').sort((a, b) => b.updated_at - a.updated_at),
     [tasks],
   )
 
@@ -302,45 +397,50 @@ export function Work() {
   const paneShown = hasPane && !!(paneTask || paneGoal)
 
   const closePane = () => setParam('open', null)
-  const openRow = (t: Task) => (hasPane ? setParam('open', paneKey('task', t.id)) : setEditingId(t.id))
+  const openRow = (t: Task) => (hasPane ? setParam('open', paneKey('task', t.id)) : setReadingId(t.id))
   const openGoalRow = (g: Goal) => (hasPane ? setParam('open', paneKey('goal', g.id)) : setGoalEditingId(g.id))
 
   /* ------------------------------- the writes ------------------------------ */
 
-  const cycle = async (t: Task) => {
-    const next = t.status === 'todo' ? 'doing' : t.status === 'doing' ? 'done' : 'todo'
-    optimistic(s => {
-      const x = s.tasks.find(i => i.id === t.id)
-      if (x) x.status = next as Task['status']
-      return s
-    })
-    await actions.updateTask(t.id, { status: next })
-    void reload()
-  }
-
   /**
-   * The swipe's Status, on a task.
+   * Every status a task takes, whoever asked for it.
    *
    * Undone by putting back the status it replaced rather than by a general
    * "restore", because a task has no undo record on the server and does not need
    * one: there is exactly one field in play and its previous value is in hand at
    * the moment it changes.
    */
-  const setTaskStatus = async (t: Task, status: Task['status']) => {
+  const setTaskStatus = async (t: Task, status: CardStatus) => {
     if (status === t.status) return
     const was = t.status
+    // Where it came from, so the tick can be unticked back to it rather than to
+    // a default. Recorded here rather than in `toggleDone` so the swipe's own
+    // `Done` — which is the same move by a different gesture — remembers too.
+    if (status === 'done') beforeDone.set(t.id, was)
     optimistic(s => {
       const x = s.tasks.find(i => i.id === t.id)
       if (x) x.status = status
       return s
     })
     await actions.updateTask(t.id, { status })
-    toast(`${TASK_CHOICES.find(c => c.id === status)?.label ?? 'Changed'}.`, {
+    toast(`${STATUS_LABEL[status]}.`, {
       label: 'Undo',
       run: async () => { await actions.updateTask(t.id, { status: was }); await reload() },
     })
     void reload()
   }
+
+  /**
+   * The glyph, which is a switch and not a cycle.
+   *
+   * Done, or back to whatever it was before it was done — `Not started` when
+   * this tab has forgotten. The other three are reachable from the swipe's
+   * Status picker and from the read sheet, both of which show the five at once;
+   * a control that steps through five states one press at a time makes the
+   * fourth one four presses away and every mis-tap a state to undo.
+   */
+  const toggleDone = (t: Task) =>
+    setTaskStatus(t, t.status === 'done' ? beforeDone.get(t.id) ?? 'not_started' : 'done')
 
   /** Delete, and a way back — see `recreateTask` for what a way back costs. */
   const removeTask = async (t: Task) => {
@@ -389,24 +489,14 @@ export function Work() {
     })
   }
 
-  /** Persist the new order as sort keys after a drag. */
-  const commitOrder = async (list: Task[]) => {
-    optimistic(s => {
-      const order = new Map(list.map((t, i) => [t.id, i]))
-      s.tasks = s.tasks.map(t => (order.has(t.id) ? { ...t, sort: order.get(t.id)! } : t))
-      return s
-    })
-    await Promise.all(list.map((t, i) => actions.updateTask(t.id, { sort: i })))
-  }
-
-  const rowProps = (t: Task) => ({
+  const rowProps = (t: Task): TaskRowProps => ({
     task: t, reminders, goals,
     // The live card when there still is one, so the link is current; the frozen
     // copy when the poller has swept it, so the line does not vanish with the
     // pull request it was about.
     origin: cardByGroup.get(t.source_card_group ?? ''),
     selected: openKey === paneKey('task', t.id),
-    onCycle: cycle, onOpen: openRow,
+    onToggle: toggleDone, onOpen: openRow,
     onStatus: setTaskStatus, onDelete: removeTask,
   })
 
@@ -424,15 +514,21 @@ export function Work() {
    * that reads it out.
    */
   const open = tab === 'tasks'
-    ? todo.length + doing.length
+    ? tasks.filter(t => !isSettled(t.status)).length
     : goals.filter(g => !g.completed_at).length
   const openNoun = `${tab === 'tasks' ? 'task' : 'goal'}${open === 1 ? '' : 's'} not done`
 
   return (
     /* The shell's own grid: a padded list column, then a pane on the same width
        token with the same left hairline the desk's detail and Mail's list use.
-       Below the pane width the two simply stack, which is what they did anyway. */
-    <div className="xl:flex xl:items-stretch xl:min-h-dvh">
+       Below the pane width the two simply stack, which is what they did anyway.
+
+       The foot of the page clears the tab bar. `--nav-h` is the strip the bar
+       owns — 53px plus the home indicator on a phone, nothing at all above
+       `sm` — so without the reserve the last row of the list sits under it and
+       can be neither read nor swiped. At `xl` the bar is a rail and it is 0. */
+    <div className="xl:flex xl:items-stretch xl:min-h-dvh
+                    pb-[var(--nav-h)] xl:pb-0">
       <div className="min-w-0 grow pad-x pb-8">
         {/*
           The header is rendered unconditionally, at every state of the page,
@@ -453,7 +549,32 @@ export function Work() {
               {open}<span className="sr-only"> {openNoun}</span>
             </span>
           )}
-          <span className="ml-auto flex items-center gap-4">
+          <span className="ml-auto flex items-center gap-2 sm:gap-4">
+            {/*
+              The rail, as two badges, on the width that has no rail.
+
+              A reminder that went off and the recorder were a section each,
+              stacked under the list on a phone — so the first thing under the
+              row he was reading was a block about something else, and both of
+              them were 800px down the page from the header that would have told
+              him they were there. A badge says the number where he is looking
+              and opens the thing itself on a press; nothing is lost except the
+              distance.
+            */}
+            {!hasPane && fired.length > 0 && (
+              <Button size="md" variant="default" onClick={() => setRailSheet('fired')}
+                title="Reminders that went off"
+                ariaLabel={`${fired.length} reminder${fired.length === 1 ? '' : 's'} went off`}>
+                <BellRing size={14} /> <span className="tnum">{fired.length}</span>
+              </Button>
+            )}
+            {!hasPane && (
+              <Button size="md" variant="default" onClick={() => setRailSheet('voice')}
+                title="Voice notes" ariaLabel="Voice notes">
+                <Mic size={14} />
+                {!!notes?.length && <span className="tnum">{notes.length}</span>}
+              </Button>
+            )}
             {/*
               A pill pair, not two words.
 
@@ -490,51 +611,41 @@ export function Work() {
 
         {tab === 'tasks' ? (
           <>
-            {doing.length > 0 && (
-              <Group label="In progress">
-                <Reorder.Group axis="y" values={doing} onReorder={commitOrder}>
-                  {doing.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
-                </Reorder.Group>
-              </Group>
-            )}
+            {/* One section per live status, in `LIVE_GROUPS` order, and a
+                section with nothing in it is not rendered at all — a heading
+                over an empty list is a section reporting its own absence. */}
+            {LIVE_GROUPS.map(status => {
+              const rows = live.get(status) ?? []
+              return rows.length === 0 ? null : (
+                <Group key={status} label={STATUS_LABEL[status]}>
+                  {rows.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
+                </Group>
+              )
+            })}
 
-            {todo.length > 0 && (
-              <Group label="Not started">
-                <Reorder.Group axis="y" values={todo} onReorder={commitOrder}>
-                  {todo.map(t => <TaskRow key={t.id} {...rowProps(t)} />)}
-                </Reorder.Group>
-              </Group>
-            )}
-
-            {loaded && !todo.length && !doing.length && !done.length && (
-              <Blank what="tasks" onAdd={() => setCreating(true)} />
-            )}
+            {loaded && !tasks.length && <Blank what="tasks" onAdd={() => setCreating(true)} />}
 
             {/*
-              Done is the only list here that pages.
+              The two settled lists are folded away, and they page.
 
-              It is also the only one that grows without limit — it used to be
-              cut at a hard `slice(0, 40)`, which is not a page, it is a silent
-              floor under everything finished more than a few weeks ago. The two
-              live lists above are drag-ordered and `commitOrder` writes their
-              sort keys from the array index it is handed, so slicing them into
-              pages would rewrite page two's order as if it were page one's.
-              They are bounded by what he is actually working on anyway.
+              They are the only lists here that grow without limit — Done used
+              to be cut at a hard `slice(0, 40)`, which is not a page, it is a
+              silent floor under everything finished more than a few weeks ago.
+              Folded because neither is work: they are the record of it, and a
+              phone opening on 200 finished rows is a phone he has to scroll
+              past to reach today. The count is on the heading, so the fold
+              never hides how much is behind it.
             */}
-            {done.length > 0 && (
-              <Group label={`Done — ${done.length}`}>
-                <Button size="sm" variant="ghost" onClick={() => setShowDone(v => !v)}>
-                  {showDone ? 'Hide' : 'Show'}
-                </Button>
-                {showDone && (
-                  <>
-                    {pageSlice(done, donePage).map(t => <TaskRow key={t.id} {...rowProps(t)} static />)}
-                    <Pager page={donePage} pages={pageCount(done.length)} total={done.length}
-                      onPage={n => setParam('page', n === 1 ? null : String(n))} />
-                  </>
-                )}
-              </Group>
-            )}
+            <Settled
+              label={`${STATUS_LABEL.done} — ${done.length}`} rows={done} row={rowProps}
+              shown={showDone} onShow={() => setShowDone(v => !v)}
+              page={donePage} onPage={n => setParam('page', n === 1 ? null : String(n))}
+            />
+            <Settled
+              label={`${STATUS_LABEL.wont_do} — ${dropped.length}`} rows={dropped} row={rowProps}
+              shown={showDropped} onShow={() => setShowDropped(v => !v)}
+              page={droppedPage} onPage={n => setParam('wpage', n === 1 ? null : String(n))}
+            />
           </>
         ) : (
           <GoalList goals={goals} tasks={tasks} loaded={loaded} openKey={openKey}
@@ -557,11 +668,18 @@ export function Work() {
         so a row opened at y=1500 put its detail at the top of a document the
         reader was nowhere near — the pane was rendered, correct, and off
         screen. It holds the viewport and scrolls inside itself instead, which
-        is what the desk's own pane does. Below `xl` it is not a column at all,
-        it is the section under the list, and a sticky full-height section there
-        would pin the recorder over the page.
+        is what the desk's own pane does.
+
+        Below `xl` it holds nothing at all now. It used to be the section under
+        the list — a row's detail, then the reminders that went off, then the
+        recorder, four hundred pixels of column stacked under the last task on a
+        phone. The detail is a sheet at that width and the other two are the
+        header's badges, so what is left here is an empty slot that keeps the
+        tree the same shape at both widths, which is the rule this page is built
+        on. Its `pb-24` went with the content: the page's own `--nav-h` is what
+        clears the tab bar now, and two reserves would count the bar twice.
       */}
-      <aside className="pad-x xl:pt-4 pb-24 xl:pb-8 xl:w-90 2xl:w-100 xl:shrink-0
+      <aside className="pad-x xl:pt-4 pb-8 xl:w-90 2xl:w-100 xl:shrink-0
                         xl:border-l xl:border-edge
                         xl:sticky xl:top-0 xl:h-dvh xl:overflow-y-auto xl:overscroll-contain">
         {hasPane && paneTask && (
@@ -587,14 +705,36 @@ export function Work() {
             onStatus={setGoalDone} onDelete={g => { closePane(); void removeGoal(g) }}
           />
         )}
-        <Fired rows={fired} lead={!paneShown} />
-        <VoiceNotes notes={notes} onNotes={setNotes} lead={!paneShown && !fired.length} />
+        {/* Only where there is a column to put them in. Below `xl` these two
+            are the header's badges and the sheets at the foot of this file, and
+            rendering them here as well would put a second `Recorder` — a live
+            `MediaRecorder` and a running clock — in the tree behind the one he
+            is actually speaking into. */}
+        {hasPane && <Fired rows={fired} lead={!paneShown} />}
+        {hasPane && <VoiceNotes notes={notes} onNotes={setNotes} lead={!paneShown && !fired.length} />}
       </aside>
 
       <TaskSheet open={creating} onClose={() => setCreating(false)} />
       <TaskSheet open={!!editing} onClose={() => setEditingId(null)}
         task={editing ?? lastEdited.current} />
+      <TaskRead
+        open={!!reading}
+        task={reading ?? lastRead.current}
+        goals={goals} reminders={reminders}
+        origin={cardByGroup.get((reading ?? lastRead.current)?.source_card_group ?? '')}
+        onClose={() => setReadingId(null)}
+        /* Reading and editing are one surface at a time: the form replaces the
+           sheet it was opened from rather than stacking on top of it, or the
+           back gesture has two sheets to walk out of. */
+        onEdit={t => { setReadingId(null); setEditingId(t.id) }}
+        onStatus={setTaskStatus}
+        onDelete={t => { setReadingId(null); void removeTask(t) }}
+      />
       <GoalSheet goal={goalEditing} onClose={() => setGoalEditingId(null)} />
+      <RailSheet
+        which={railSheet} onClose={() => setRailSheet(null)}
+        fired={fired} notes={notes} onNotes={setNotes}
+      />
     </div>
   )
 }
@@ -629,6 +769,41 @@ function Group({ label, children }: { label: string; children: React.ReactNode }
       <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{label}</h2>
       {children}
     </section>
+  )
+}
+
+/**
+ * A finished list, folded, with its size on the heading.
+ *
+ * `Done` and `Won't do` are the same shape and were nearly written twice; the
+ * only thing that differs between them is which query parameter holds the page,
+ * and that is a prop. An empty one renders nothing at all — not the heading,
+ * not the `Show` — because a fold over zero rows is a control that reveals a
+ * blank.
+ */
+function Settled({
+  label, rows, row, shown, onShow, page, onPage,
+}: {
+  label: string
+  rows: Task[]
+  /** The row's props, resolved by the page that owns the writes. */
+  row: (t: Task) => TaskRowProps
+  shown: boolean
+  onShow: () => void
+  page: number
+  onPage: (n: number) => void
+}) {
+  if (!rows.length) return null
+  return (
+    <Group label={label}>
+      <Button size="sm" variant="ghost" onClick={onShow}>{shown ? 'Hide' : 'Show'}</Button>
+      {shown && (
+        <>
+          {pageSlice(rows, page).map(t => <TaskRow key={t.id} {...row(t)} />)}
+          <Pager page={page} pages={pageCount(rows.length)} total={rows.length} onPage={onPage} />
+        </>
+      )}
+    </Group>
   )
 }
 
@@ -734,7 +909,7 @@ function TaskDetail({
   origin?: { title: string; url: string; sources: Array<{ source: keyof typeof SOURCE_LABEL }> }
   onClose: () => void
   onEdit: () => void
-  onStatus: (t: Task, s: Task['status']) => void
+  onStatus: (t: Task, s: CardStatus) => void
   onDelete: (t: Task) => void
 }) {
   const still = useStill()
@@ -746,7 +921,9 @@ function TaskDetail({
   const goal = goals.find(g => g.id === task.goal_id)
   const reminder = reminders.find(
     r => r.target_kind === 'task' && r.target_id === task.id && !r.fired_at && !r.dismissed_at)
-  const overdue = task.due_at && task.due_at < Date.now() && task.status !== 'done'
+  // Settled, not just done: a deadline on a task he decided against is not late,
+  // it is irrelevant, and painting it red asks him to act on a closed row.
+  const overdue = task.due_at && task.due_at < Date.now() && !isSettled(task.status)
 
   const source = (origin?.sources[0]?.source ?? task.origin_source) as keyof typeof SOURCE_LABEL | undefined
   const url = origin?.url ?? task.origin_url ?? undefined
@@ -761,7 +938,7 @@ function TaskDetail({
 
   return (
     <section className="mb-8 xl:mb-6">
-      <PaneHead title={task.title} done={task.status === 'done'} gone={gone} onClose={onClose} />
+      <PaneHead title={task.title} done={isSettled(task.status)} gone={gone} onClose={onClose} />
 
       {gone ? (
         // No controls at all on a frame that is being held: every one of them
@@ -772,12 +949,17 @@ function TaskDetail({
       ) : (
         <>
           <div className="mt-3">
+            {/* The glyph beside the control, the way the card's own detail
+                pane carries it: the `Select` says the word, and the mark is
+                what the eye finds when it comes back to the column. */}
             <PaneRow label="Status">
-              <Select<Task['status']>
+              <StatusGlyph status={task.status} />
+              <Select<CardStatus>
                 value={task.status}
                 options={TASK_CHOICES}
                 onChange={s => onStatus(task, s)}
                 ariaLabel="Status"
+                className="ml-2"
               />
             </PaneRow>
             {/*
@@ -969,11 +1151,13 @@ function GoalDetail({
 
           <div className="mt-3">
             <PaneRow label="Status">
-              <Select<'todo' | 'done'>
-                value={finished ? 'done' : 'todo'}
+              <StatusGlyph status={finished ? 'done' : 'not_started'} />
+              <Select<GoalState>
+                value={finished ? 'done' : 'not_started'}
                 options={GOAL_CHOICES}
                 onChange={s => onStatus(g, s === 'done')}
                 ariaLabel="Status"
+                className="ml-2"
               />
             </PaneRow>
             <PaneRow label="Target">
@@ -995,12 +1179,11 @@ function GoalDetail({
                 <button key={t.id} onClick={() => onOpenTask(t)}
                   className={`w-full text-left flex items-center gap-2 min-h-11 py-2 ${rowStateClass()}
                               border-b border-rule last:border-0`}>
-                  {t.status === 'done'
-                    ? <CircleCheck size={14} className="text-ok shrink-0" />
-                    : t.status === 'doing'
-                      ? <CircleDot size={14} className="text-fg shrink-0" />
-                      : <Circle size={14} className="text-fg-mute shrink-0" />}
-                  <span className={`text-base truncate ${t.status === 'done' ? 'text-fg-mute line-through' : ''}`}>
+                  {/* The shared slot, not three circles of this file's own.
+                      The fixed width is what keeps five titles on one x down
+                      the column when the glyphs beside them differ. */}
+                  <StatusSlot status={t.status} />
+                  <span className={`text-base truncate ${isSettled(t.status) ? 'text-fg-mute line-through' : ''}`}>
                     {t.title}
                   </span>
                 </button>
@@ -1022,38 +1205,39 @@ function GoalDetail({
 
 /* --------------------------------- the rows -------------------------------- */
 
-function TaskRow({
-  task, goals, reminders, origin, selected, onCycle, onOpen, onStatus, onDelete, static: isStatic,
-}: {
+export type TaskRowProps = {
   task: Task; goals: Goal[]; reminders: any[]
   origin?: { title: string; url: string; sources: Array<{ source: keyof typeof SOURCE_LABEL }> }
   /** This is the row the pane is showing. */
   selected: boolean
-  onCycle: (t: Task) => void; onOpen: (t: Task) => void
-  onStatus: (t: Task, s: Task['status']) => void
+  /** The glyph: Done, or back to where it came from. Not a five-way cycle. */
+  onToggle: (t: Task) => void
+  onOpen: (t: Task) => void
+  onStatus: (t: Task, s: CardStatus) => void
   onDelete: (t: Task) => void
-  static?: boolean
-}) {
+}
+
+function TaskRow({
+  task, goals, reminders, origin, selected, onToggle, onOpen, onStatus, onDelete,
+}: TaskRowProps) {
   /*
-   * `'none'` on a draggable row, `'pan-y'` on a static one, and the difference
-   * is who owns the vertical axis.
+   * `pan-y`, on every task row, which is the split every other row in the
+   * product uses: vertical is the page's, horizontal is the drawer's.
    *
-   * `Reorder.Item` writes `touch-action: pan-x` inline, which is how a vertical
-   * drag reaches its reorder handler instead of scrolling the page. `pan-x` also
-   * hands the browser the horizontal axis — the one this gesture is made of — so
-   * a thumb swipe on a draggable task row could be taken over as a pan and
-   * cancelled halfway through. `none` gives the row's whole gesture to the app,
-   * which is what framer's own drag wants anyway, and costs nothing there:
-   * vertical scrolling on those rows already belonged to framer.
-   *
-   * A static row is not a `Reorder.Item`. Nothing writes `pan-x` on it and
-   * nothing catches a vertical drag, so `none` would take the page's scroll away
-   * and hand it to no one — a thumb dragging up the Done list would move
-   * nothing, which is the "frozen app" failure `lib/swipe.ts` puts above this
-   * whole gesture. `pan-y` is the same split every other row in the product uses:
-   * vertical is the page's, horizontal is the drawer's.
+   * It was `none` on a draggable row, because `Reorder.Item` writes
+   * `touch-action: pan-x` inline to claim the vertical axis for its drag and
+   * `pan-x` hands the browser the horizontal one — the axis this gesture is
+   * made of. Both of those answers take the page's own scroll away: with either
+   * declaration in force a thumb dragging up the list moved nothing at all,
+   * which is the "frozen app" failure `lib/swipe.ts` puts above every gesture
+   * here. Neither can be overruled from this file, and `pan-y` cannot outrank an
+   * inline declaration, so the reorder is what went — see the note at the top of
+   * this file. Nothing writes an inline `touch-action` on this row now, the
+   * stylesheet's `[data-swipe='pan-y']` rule applies, and the drawer still opens
+   * because `axisFor` only calls a gesture horizontal after 12px of travel that
+   * is 1.5× more sideways than it is vertical.
    */
-  const swipe = useSwipe(`task:${task.id}`, 3, isStatic ? 'pan-y' : 'none')
+  const swipe = useSwipe(`task:${task.id}`, 3)
   const drawer = (
     <SwipeDrawer
       dx={swipe.dx}
@@ -1063,14 +1247,18 @@ function TaskRow({
       onDelete={() => onDelete(task)}
       status={{
         current: task.status,
+        // All five, including the `Won't do` that used to be reachable only by
+        // deleting the row it was written on.
         options: TASK_CHOICES,
-        onPick: id => onStatus(task, id as Task['status']),
+        onPick: id => onStatus(task, id as CardStatus),
       }}
     />
   )
   const goal = goals.find(g => g.id === task.goal_id)
   const reminder = reminders.find(r => r.target_kind === 'task' && r.target_id === task.id && !r.fired_at && !r.dismissed_at)
-  const overdue = task.due_at && task.due_at < Date.now() && task.status !== 'done'
+  // Settled, not just done: a deadline on a task he decided against is not late,
+  // it is irrelevant, and painting it red asks him to act on a closed row.
+  const overdue = task.due_at && task.due_at < Date.now() && !isSettled(task.status)
 
   const source = (origin?.sources[0]?.source ?? task.origin_source) as keyof typeof SOURCE_LABEL | undefined
   const provenance = source
@@ -1081,35 +1269,35 @@ function TaskRow({
       }
     : null
 
-  const Icon = task.status === 'done' ? CircleCheck : task.status === 'doing' ? CircleDot : Circle
-
   const body = (
     <div className="flex items-start gap-3 py-2 min-h-11">
       {/*
-        The page's primary verb, at the page's smallest target — until this.
+        The status, painted by the one file allowed to paint one, and the row's
+        primary verb at the same time.
 
-        The glyph is 14px and the button's box was exactly the glyph: 14×16, no
+        This was a private `Circle` / `CircleDot` / `CircleCheck` in `fg-mute`,
+        `fg` and `ok`: three marks for five states, two of which the desk had
+        been drawing differently for a release. The chip carries the glyph, the
+        word and the hue washed behind both, so the row says where it stands
+        without the reader having to have learned a ring.
+
+        `hit relative` is the 44px collar. The glyph alone was 14×16 with no
         `position`, so `.hit` had nothing to hang a collar on and the row's
-        `items-start` pinned all 224px² of it to the top-left corner. Probing
-        21px out from its centre in all four directions missed every time, on
-        the one control that takes a task off the list. `hit relative` is the
-        same 44px collar every other small control in the product gets — the
-        glyph does not move, and nothing else on the row is within reach of the
-        collar except the first three pixels of the title, which opens the row
-        the checkbox is already on.
+        `items-start` pinned all 224px² of it into the top-left corner —
+        measured, on the one control that takes a task off the list. Nothing
+        else on the row is within reach of the collar except the first few
+        pixels of the title, which opens the row this chip is already on.
       */}
       <button
-        onClick={e => { e.stopPropagation(); onCycle(task) }}
-        className="hit relative pt-0.5 shrink-0 transition-colors duration-100"
-        aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'}`}
+        onClick={e => { e.stopPropagation(); onToggle(task) }}
+        className="hit relative shrink-0"
+        aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'} — ${task.title}`}
       >
-        <Icon size={14} className={
-          task.status === 'done' ? 'text-ok' : task.status === 'doing' ? 'text-fg' : 'text-fg-mute hover:text-fg-dim'
-        } />
+        <StatusChip status={task.status} />
       </button>
 
       <div className="min-w-0 grow cursor-pointer" onClick={() => onOpen(task)}>
-        <div className={`text-base ${task.status === 'done' ? 'text-fg-mute line-through' : 'text-fg'}`}>
+        <div className={`text-base ${isSettled(task.status) ? 'text-fg-mute line-through' : 'text-fg'}`}>
           {task.title}
         </div>
 
@@ -1147,20 +1335,11 @@ function TaskRow({
         )}
       </div>
 
-      {/* The third arrow of the chain, which did not exist: `openLaunch` had three
-          call sites and none of them was a task. The brief carries the task's
-          title as the instruction seed, its stickies as `note` slots, and its
-          frozen provenance as the reason it exists. */}
-      <span className="shrink-0" onClick={e => e.stopPropagation()}>
-        <Button size="sm" variant="ghost" title="Open in Claude" ariaLabel="Open in Claude"
-          onClick={() => openLaunch(taskContext(task, goal), {
-            template: 'blank',
-            title: task.title,
-            repoHint: taskRepoHint(task.origin_meta),
-          })}>
-          <SquareTerminal size={14} />
-        </Button>
-      </span>
+      {/* No terminal glyph here any more. A row is a status, a title and its
+          meta; `Open in Claude` is one press further in — on the pane at the
+          desk width and in the read sheet on a phone — because it is an action
+          on a task he has decided to work on, not a thing to offer on all two
+          hundred of them. */}
 
       {task.color && (
         <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: task.color }} />
@@ -1173,31 +1352,12 @@ function TaskRow({
   // cursor. Hover is emitted only when nothing else is set.
   const rowClass = `relative border-b border-rule last:border-0 ${rowStateClass({ selected })}`
 
-  if (isStatic) {
-    return (
-      <div
-        ref={swipe.bind.ref}
-        onPointerDown={swipe.bind.onPointerDown}
-        onPointerMove={swipe.bind.onPointerMove}
-        onPointerUp={swipe.bind.onPointerUp}
-        onPointerCancel={swipe.bind.onPointerCancel}
-        onClickCapture={swipe.bind.onClickCapture}
-        data-swipe={swipe.bind['data-swipe']}
-        style={swipe.bind.style}
-        className={rowClass}
-      >
-        {body}
-        {drawer}
-      </div>
-    )
-  }
-
+  // One shape for every row on the page. There were two — a `Reorder.Item` for
+  // the live lists and a plain block for the finished one — and the two
+  // disagreed about which axis the browser owned, which is how the Done list
+  // scrolled under a thumb while the list above it did not.
   return (
-    <Reorder.Item
-      value={task}
-      id={task.id}
-      transition={spring}
-      whileDrag={{ scale: 1.01, backgroundColor: 'var(--color-ink-850)', zIndex: 10 }}
+    <div
       ref={swipe.bind.ref}
       onPointerDown={swipe.bind.onPointerDown}
       onPointerMove={swipe.bind.onPointerMove}
@@ -1205,18 +1365,16 @@ function TaskRow({
       onPointerCancel={swipe.bind.onPointerCancel}
       onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
-      // Reorder.Item spreads whatever style it is given before adding its own
-      // `x`/`y`/`zIndex`, so the gesture's `user-select: none` survives here —
-      // and without it a mouse drag across a draggable task highlighted the
-      // title and detail blue under the open drawer, and left them highlighted
-      // after the button came up. The `removeAllRanges()` at engage only clears
-      // what the first twelve pixels selected.
+      // `user-select: none` while the drawer is moving. The `removeAllRanges()`
+      // at engage only clears what the first twelve pixels selected; without
+      // this the rest of a mouse drag highlights the row's title and meta blue
+      // under the open drawer, and leaves them highlighted afterwards.
       style={swipe.bind.style}
       className={rowClass}
     >
       {body}
       {drawer}
-    </Reorder.Item>
+    </div>
   )
 }
 
@@ -1310,7 +1468,9 @@ function GoalRow({
         onDone={() => onStatus(g, true)}
         onDelete={() => onDelete(g)}
         status={{
-          current: finished ? 'done' : 'todo',
+          // Two options, in the shared words, so the picker on a goal row is
+          // painted by the same table as the one on a task row two lists over.
+          current: finished ? 'done' : 'not_started',
           options: GOAL_CHOICES,
           onPick: id => onStatus(g, id === 'done'),
         }}
@@ -1362,8 +1522,17 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
           </Button>
         </div>
       }>
+      {/*
+        No `autoFocus`, here or anywhere else on this page.
+
+        On iOS a focused field raises the keyboard the instant the sheet
+        appears: half the surface is gone before it has finished sliding up, the
+        commit in the footer is under the keyboard, and the animation stutters
+        while the viewport is remeasured. The keyboard comes up when he taps the
+        field, which is the moment he actually asked for it.
+      */}
       <Field label="Goal">
-        <input className={inputClass} value={title} autoFocus
+        <input className={inputClass} value={title}
           onChange={e => setTitle(e.target.value)} placeholder="What are you moving toward?" />
       </Field>
       <Field label="Detail">
@@ -1420,17 +1589,15 @@ function GoalSheet({ goal, onClose }: { goal: Goal | null | 'new'; onClose: () =
  * vanished. This is the somewhere it is visible: beside the tasks the reminders
  * were about.
  */
-function Fired({
-  rows, lead,
-}: {
-  rows: Array<{ id: string; title: string; body?: string | null; created_at: number }>
-  /** This is the first thing in the rail — see `railTail`. */
-  lead: boolean
-}) {
-  if (!rows.length) return null
+type FiredRow = { id: string; title: string; body?: string | null; created_at: number }
+
+/**
+ * The rows themselves, so the rail and the phone's sheet show one list rather
+ * than two that were written twice and drifted.
+ */
+function FiredRows({ rows }: { rows: FiredRow[] }) {
   return (
-    <section className={`mb-6 ${railTail(lead)}`}>
-      <h2 className="text-eyebrow uppercase text-fg-mute mb-1">Went off</h2>
+    <>
       {rows.map(n => (
         <div key={n.id} className="flex items-start gap-2 py-2 border-b border-rule last:border-0">
           <BellRing size={14} className="text-fg-mute mt-0.5 shrink-0" />
@@ -1445,7 +1612,54 @@ function Fired({
           </Button>
         </div>
       ))}
+    </>
+  )
+}
+
+function Fired({
+  rows, lead,
+}: {
+  rows: FiredRow[]
+  /** This is the first thing in the rail — see `railTail`. */
+  lead: boolean
+}) {
+  if (!rows.length) return null
+  return (
+    <section className={`mb-6 ${railTail(lead)}`}>
+      <h2 className="text-eyebrow uppercase text-fg-mute mb-1">Went off</h2>
+      <FiredRows rows={rows} />
     </section>
+  )
+}
+
+/**
+ * The rail's two sections on a phone, one at a time, over the list.
+ *
+ * A sheet rather than a block at the foot of the page: below `xl` the rail is
+ * not a column, it is four hundred pixels of somebody else's business under the
+ * row he was reading. The badge in the header says the number; this is what the
+ * badge opens.
+ *
+ * The recorder is inside it, which means closing the sheet ends a recording in
+ * progress. That is the one place a `MediaRecorder` may be torn down — he did
+ * it, deliberately, with the cross — and it is why the rail keeps its own copy
+ * at the pane width instead of both surfaces sharing one.
+ */
+function RailSheet({
+  which, onClose, fired, notes, onNotes,
+}: {
+  which: 'fired' | 'voice' | null
+  onClose: () => void
+  fired: FiredRow[]
+  notes: VoiceNote[] | null
+  onNotes: (fn: (prev: VoiceNote[] | null) => VoiceNote[]) => void
+}) {
+  return (
+    <Sheet open={which !== null} onClose={onClose}
+      title={which === 'fired' ? 'Went off' : 'Voice notes'}>
+      {which === 'fired' && <FiredRows rows={fired} />}
+      {which === 'voice' && <VoiceBody notes={notes} onNotes={onNotes} />}
+    </Sheet>
   )
 }
 
@@ -1455,6 +1669,36 @@ function Fired({
  * They live on this page because a note is a note; the only difference is that
  * this one was easier to make while walking.
  */
+function VoiceBody({
+  notes, onNotes,
+}: {
+  notes: VoiceNote[] | null
+  onNotes: (fn: (prev: VoiceNote[] | null) => VoiceNote[]) => void
+}) {
+  const rows = notes ?? []
+  return (
+    <>
+      <Recorder onSaved={n => onNotes(prev => [n, ...(prev ?? [])])} />
+
+      {/* No dash under an empty list. Zero notes is the mic and nothing else —
+          the second em dash on this page was the other half of a two-column
+          void. */}
+      <div className="mt-2">
+        {rows.map(n => (
+          <VoicePlayer
+            key={n.id}
+            note={n}
+            onDelete={async () => {
+              await voiceApi.remove(n.id)
+              onNotes(prev => (prev ?? []).filter(x => x.id !== n.id))
+            }}
+          />
+        ))}
+      </div>
+    </>
+  )
+}
+
 function VoiceNotes({
   notes, onNotes, lead,
 }: {
@@ -1473,23 +1717,7 @@ function VoiceNotes({
         {rows.length > 0 && <span className="text-eyebrow uppercase tnum text-fg-mute">{rows.length}</span>}
       </div>
 
-      <Recorder onSaved={n => onNotes(prev => [n, ...(prev ?? [])])} />
-
-      {/* No dash under an empty list. Zero notes is the mic and nothing else —
-          the second em dash on this page was the other half of a two-column
-          void. */}
-      <div className="mt-2">
-        {rows.map(n => (
-          <VoicePlayer
-            key={n.id}
-            note={n}
-            onDelete={async () => {
-              await voiceApi.remove(n.id)
-              onNotes(prev => (prev ?? []).filter(x => x.id !== n.id))
-            }}
-          />
-        ))}
-      </div>
+      <VoiceBody notes={notes} onNotes={onNotes} />
     </section>
   )
 }

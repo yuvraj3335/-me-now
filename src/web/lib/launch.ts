@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from 'react'
+import { handoffFor, type HandoffConfig } from '../../shared/handoff'
 
 /**
  * `task` is Wake's own object rather than somebody else's.
@@ -69,10 +70,31 @@ export type Template = {
 /**
  * Where a brief goes, how it is prefilled, and how much of one fits.
  *
- * The whole config, not a summary: the browser builds the link itself as you
- * edit the brief, using the same `handoffFor` the server does.
+ * The whole config, not a summary: the browser builds the link itself, using the
+ * same arithmetic the server runs. Two implementations of "how much fits" would
+ * drift, and the failure mode is the worst kind — the composer says it all fits
+ * and the link quietly carries less.
  */
-export type HandoffTarget = import('../../shared/handoff').HandoffConfig
+export type HandoffTarget = HandoffConfig
+
+/**
+ * The hatch: a new conversation in the Claude app, carrying this text.
+ *
+ * The composer's primary control sends into a Claude Code session running on
+ * this box, which is the thing worth having. This is what is left when the box
+ * is not reachable — a phone, away from the desk, with a thread worth pasting
+ * somewhere that can read it. It is a **new conversation** every time: no URL
+ * reaches an existing one, so this can never carry a session id, and the control
+ * that renders it says so in as many words.
+ *
+ * The destination is the server's own hand-off config rather than a literal
+ * written into a component, so a deployment that moves `WAKE_HANDOFF_URL` is
+ * followed rather than contradicted — and the trim note comes along for free,
+ * which is the difference between a session that knows it received half a thread
+ * and one that answers the wrong question confidently.
+ */
+export const claudeAppUrl = (cfg: HandoffTarget, text: string): string =>
+  handoffFor(text, cfg).url
 
 /** What the server recorded when a brief was handed over. */
 export type Handoff = {
@@ -250,6 +272,19 @@ export const launchApi = {
     // there is one place that decides what a pack item is on the wire.
     body: JSON.stringify({ ...b, items: b.items.map(({ group, ...item }) => item) }),
   }),
+  /**
+   * One more turn in a conversation already underway.
+   *
+   * The route refuses, in a sentence, a session that has stopped and a session
+   * running in a terminal Wake did not start. That refusal is the point: the id
+   * used to be handed to `--resume`, and Claude Code was left to be the one that
+   * announced the conversation was archived — on a phone, after the tap.
+   */
+  send: (id: string, text: string) =>
+    req<{ ok: true }>(`/sessions/${encodeURIComponent(id)}/send`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
   sessions: (opts: { all?: boolean; repo?: string; window?: number; limit?: number } = {}) => {
     const q = new URLSearchParams()
     if (opts.all) q.set('all', '1')
