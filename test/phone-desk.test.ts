@@ -12,11 +12,18 @@
  * all.
  *
  * **The table's own contracts moved up a band rather than being deleted.** A
- * phone is under `COLUMNS_MIN` now and gets row-cards, and everything from 640
+ * phone is under `COLUMNS_MIN` now and gets row-cards, and everything from 800
  * to 1024 — a narrow laptop window, a tablet, a phone turned sideways — still
  * gets `PhoneTable` and still has to obey every rule below about reaching its
  * columns. What is pinned there is unchanged; what it is pinned *for* is a
- * viewport where four columns nearly fit rather than one where they cannot.
+ * viewport where four columns actually fit rather than one where they cannot.
+ *
+ * That band used to start at 640 and the difference was not cosmetic. The table
+ * needs 552 and the shell keeps 248 of every viewport for the rail and the page
+ * pad, so 640 through 799 was handed a table wider than the column holding it —
+ * 160px over at the bottom of the band, 32 over on an iPad held upright. The
+ * boundary is arithmetic now rather than a borrowed Tailwind breakpoint, and
+ * the test below reads it out of the source rather than restating it.
  *
  * These read the source rather than a DOM, like the rest of the suite: there is
  * no layout engine here, and what is being pinned is what the components and
@@ -327,7 +334,28 @@ describe('below sm a row is a card, and nothing scrolls sideways', () => {
   const card = bodyOf(table, 'RowCard')
 
   test('the desk changes layout where the columns stop fitting', () => {
-    expect(table, 'the phone boundary is gone').toMatch(/export const COLUMNS_MIN = 640/)
+    // Pinned as the arithmetic, not as a literal. The literal is what broke:
+    // 640 was written against the viewport while the table is only ever given
+    // the page column, so the band it opened — 640 to 799, an iPad upright
+    // among them — got the sideways table this describe block exists to have
+    // removed. A threshold derived from the widths it is a threshold *for*
+    // cannot drift away from them again.
+    expect(table, 'the phone boundary went back to a hand-written number')
+      .toMatch(/export const COLUMNS_MIN = PHONE_MIN \+ SHELL_FIXED/)
+
+    // And the arithmetic itself, read out of the source the same way the rest
+    // of this file reads it, so the widths cannot quietly stop adding up.
+    const num = (re: RegExp) => Number(table.match(re)![1])
+    const phoneMin =
+      num(/PHONE_TITLE_MIN = (\d+)/) + num(/PHONE_W = \{ status: (\d+)/)
+      + num(/PHONE_W = \{ status: \d+, where: (\d+)/) + num(/PHONE_W = \{ status: \d+, where: \d+, due: (\d+)/)
+    const shell = table.match(/SHELL_FIXED = (\d+) \+ (\d+)/)!
+    const columnsMin = phoneMin + Number(shell[1]) + Number(shell[2])
+    expect(phoneMin, 'the phone table changed width').toBe(552)
+    expect(columnsMin, 'the columns stop fitting somewhere new').toBe(800)
+    // The band that shipped broken: a page column narrower than the table.
+    expect(768 - Number(shell[1]) - Number(shell[2]))
+      .toBeLessThan(phoneMin)
     expect(home, 'the desk stopped choosing a layout for the phone')
       .toContain('const hasColumns = width >= COLUMNS_MIN')
     expect(home, 'the phone went back to the sideways table').toContain('<CardList')

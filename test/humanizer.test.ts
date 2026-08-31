@@ -61,6 +61,12 @@ const BANNED = [
   'happy to help', 'great question', 'as an AI', 'I hope this helps',
   'let me know if you have any questions', 'circle back', 'reach out',
   'deep dive', 'leverage', 'utilize',
+  // The two he banned himself, in consecutive turns, on a draft that was
+  // otherwise finished: "Dont use workds like these -good catch, a" and then,
+  // about the next attempt, "You're right, not even this". Both are the sound
+  // of a model agreeing with him rather than answering, which is the one thing
+  // a message sent under his name must never do.
+  'good catch', "you're right",
 ]
 
 describe('the Humanizer is a modifier, not an investigation', () => {

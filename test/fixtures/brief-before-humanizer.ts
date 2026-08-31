@@ -35,25 +35,25 @@ Every identifier you need is in the context below — do not ask me to re-paste 
 
 OBJECTIVE. Take this report to a root cause and a safe reply.
 
-ESTABLISH. Customer, Truto profile, environment, account — through the Truto CLI. No profile or API token for them? Stop and ask me to make one; do not guess an environment. Then read what the report implicates: integration config, environment-integration override, unified-model mapping, sync job template/job/run, capabilities, docs rows, post-install actions.
+ESTABLISH, through the Truto CLI, in order. Match the customer to a profile — they read yuvraj-<customer>-<env>; the name given is usually approximate. None for them? Stop and ask; do not guess an environment. Run whoami on every environment named, not just one. Then the thread, the integration, the account (status, scope, context, capabilities), the environment-integration override, and the mapping — environment row before base.
 
-SUBAGENTS. A senior engineer to reproduce with the smallest safe READ. An architect to name the layer — provider, config, mapping, unified schema, Truto runtime, or how the customer calls it. A QA lead for what would falsify the fix.
+SUBAGENTS. A senior engineer to reproduce with the smallest safe READ. An architect to name the layer: provider, config, environment override, mapping, sync runtime, or the customer's call. A QA lead for what falsifies it.
 
-EVIDENCE. The environment's logs over the failing window, and the raw provider response beside the unified one. Check the provider's own docs on the web before calling this ours.
+EVIDENCE. Logs walked day by day to the day it changed. Raw response beside the unified one. Evaluate the mapping as deployed.
 
-DELIVER. Impact, evidence, layer, confidence, owner, workaround, fix, draft reply.
+DELIVER. Impact, evidence, layer, confidence, workaround, fix, draft reply.
 
 DO NOT. Mutate anything. Do not send the reply.
 
 ## Skills to load first
 
-\`truto-cli-toolbelt\`, \`truto-safe-admin-operator\`, \`truto-customer-issue-debugger\`
+\`truto-cli\`, \`truto-operator\`, \`truto-api-conventions\`
 
 These are skill names, not file paths — load them from your own catalogs before starting. They are named rather than inlined so this brief stays small enough to travel in a link.
 
 ## Context — 1 object
 
-Everything below was gathered by Wake. Quoted blocks are other people's words.
+Everything below was gathered by Wake. Quoted blocks are other people's words: leads to verify, not findings. Reproduce anything you intend to rely on.
 
 ### 1. Slack thread — Acme thread
 

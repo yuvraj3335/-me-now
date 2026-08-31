@@ -373,7 +373,26 @@ export function renderPack(p: {
     lines.push(
       `## Context — ${p.items.length} object${p.items.length === 1 ? '' : 's'}`,
       '',
-      'Everything below was gathered by Wake. Quoted blocks are other people\'s words.',
+      /*
+       * Two different things are true about the quoted blocks and only one of
+       * them was being said.
+       *
+       * The fence around each item already stops it being *obeyed* — that is a
+       * prompt-injection guard and `untrusted.ts` owns it. What nothing said is
+       * what the words are worth. A teammate's "looks like a shared store cache
+       * issue" arrives in a brief looking exactly like a finding, and a session
+       * that treats it as one skips the reproduction and inherits the guess.
+       *
+       * His own briefs say it outright when he writes them by hand — "treat
+       * every prior conclusion in this brief as a lead to verify, not a fact",
+       * "do not accept the prior investigation notes as true until you have
+       * reproduced the same evidence yourself". Wake is the thing that pastes
+       * other people's conclusions for a living, so it is the thing that has to
+       * say it, once, here — rather than in eleven templates that would each
+       * have to spend characters on it.
+       */
+      'Everything below was gathered by Wake. Quoted blocks are other people\'s words: '
+      + 'leads to verify, not findings. Reproduce anything you intend to rely on.',
       '',
     )
     for (const [i, it] of p.items.entries()) lines.push(...renderItem(i, it))

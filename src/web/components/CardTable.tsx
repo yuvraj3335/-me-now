@@ -182,23 +182,68 @@ export function plainMarkdown(s: string): string {
 /** The width at which a table stops being a diagram of one. */
 export const TABLE_MIN = 1024
 
+/** The shell's own rail, plus one page pad both sides. Neither is the table's. */
+export const SHELL_FIXED = 200 + 48
+
+/**
+ * The phone's own columns, measured for a 375px screen rather than derived
+ * from the laptop's.
+ *
+ * `Status` holds the same control the table does and its longest option is
+ * still `Not started`. `Where` holds `15five — Roopi`, which is what the phone
+ * row was missing altogether. `Due` holds `Overdue 12d`. Title takes what is
+ * left and is the only elastic column, exactly as on the laptop.
+ *
+ * 368 fixed plus a 184 floor under Title is 552, and 552 is now the number
+ * `COLUMNS_MIN` is built out of rather than a width to be reached by scrolling.
+ * The columns are drawn where they can be read, and a viewport that cannot hold
+ * all four at once is given row-cards instead — rather than every column being
+ * squeezed to 68px so that all four fit and none of them says anything.
+ *
+ * Status is 144 and not the 132 it shipped at, and the twelve pixels were a
+ * coarse pointer's. `styles.css` raises every `<select>` to 16px under
+ * `@media (pointer: coarse)` — the fix for iOS zooming the page on focus and
+ * never zooming back — so a native control rendered here two points larger than
+ * any desktop window ever would: `Not started` measured 90.4px against the 86px
+ * of text room a 132px column left, and the phone read `Not start…` on every
+ * row. The control is a `StatusPicker` now, which is a button rather than a
+ * `<select>` and so is not touched by that rule at all; the closed chip is 134px
+ * including the cell's gap, at every pointer. The column keeps 144 anyway. The
+ * margin is what the last two passes at this number were both short of. It used
+ * to be free because the table scrolled; now it is paid for once, in the
+ * viewport at which the table starts being drawn at all.
+ */
+export const PHONE_W = { status: 144, where: 136, due: 88 }
+
+/** What Title wants on a phone. Below this a two-word title starts eliding. */
+export const PHONE_TITLE_MIN = 184
+
+/** The width the table refuses to go under, and therefore is not drawn below. */
+export const PHONE_MIN =
+  PHONE_TITLE_MIN + PHONE_W.status + PHONE_W.where + PHONE_W.due
+
 /**
  * The width at which columns are worth having at all.
  *
- * Tailwind's `sm`, and the same 640 the stylesheet draws the tab bar below —
- * one number, so "this is a phone" means the same thing in the CSS and in the
- * component that has to decide what to render.
+ * Derived, not chosen, and that is the whole repair. It used to be a flat 640 —
+ * Tailwind's `sm`, the width the stylesheet draws the tab bar below — on the
+ * stated grounds that "from 640 up the 552 fits inside the page column with room
+ * to spare, nothing scrolls". That sentence measured the table against the
+ * *viewport*, and the table has never been given the viewport. The rail takes
+ * 200 and the page pads 24 each side, so at 640 the page column is 392 and a
+ * 552px table hung 160px off the end of it — at 768, an iPad held upright, it
+ * still hung 32 off. The band that shipped to remove a sideways-scrolling table
+ * was itself a sideways-scrolling table, one breakpoint up, and `WHO` was cut
+ * off mid-word again in exactly the way the last pass wrote three paragraphs
+ * about ending.
  *
- * Under it the desk is a list of row-cards and over it a table, and the reason
- * is measured rather than aesthetic. The phone table's own columns need
- * `PHONE_MIN` — 552px — and a 375px screen gives a page column 343, so four
- * columns at a readable width can only be reached by scrolling the table
- * sideways. That shipped, and `WHO` was still cut off mid-word at the fold
- * before a finger ever moved. A row is a thing everywhere else in this product;
- * below `sm` it is a thing here too. From 640 up the 552 fits inside the page
- * column with room to spare, nothing scrolls, and the table is the better read.
+ * So it is spelled as the arithmetic it always was: the table's own floor plus
+ * the shell's fixed furniture, which is 800. Below it the desk is a list of
+ * row-cards, over it a table whose four columns are all on screen at once. A
+ * number cannot drift away from its reason if it is not written down twice —
+ * change `PHONE_W` and this follows.
  */
-export const COLUMNS_MIN = 640
+export const COLUMNS_MIN = PHONE_MIN + SHELL_FIXED
 
 /**
  * The width at which the detail pane earns its column.
@@ -229,9 +274,6 @@ export const W = { status: 140, kind: 100, due: 96 }
 
 /** What Title wants. It is the only elastic column. */
 export const TITLE_MIN = 280
-
-/** The shell's own rail, plus one page pad both sides. Neither is the table's. */
-export const SHELL_FIXED = 200 + 48
 
 /**
  * The widest the pane may be at this viewport before Title starts collapsing.
@@ -780,43 +822,6 @@ function DueCell({ card, onDue, children }: {
 }
 
 /* ----------------------------- the phone table ---------------------------- */
-
-/**
- * The phone's own columns, measured for a 375px screen rather than derived
- * from the laptop's.
- *
- * `Status` holds the same control the table does and its longest option is
- * still `Not started`. `Where` holds `15five — Roopi`, which is what the phone
- * row was missing altogether. `Due` holds `Overdue 12d`. Title takes what is
- * left and is the only elastic column, exactly as on the laptop.
- *
- * 368 fixed plus a 184 floor under Title is 552, against the 343 a 375px phone
- * leaves inside the page pad. **That difference is the feature.** The columns
- * are drawn at a width where they can be read and the table is moved to reach
- * them, rather than every column being squeezed to 68px so that all four fit
- * and none of them says anything.
- *
- * Status is 144 and not the 132 it shipped at, and the twelve pixels were a
- * coarse pointer's. `styles.css` raises every `<select>` to 16px under
- * `@media (pointer: coarse)` — the fix for iOS zooming the page on focus and
- * never zooming back — so a native control rendered here two points larger than
- * any desktop window ever would: `Not started` measured 90.4px against the 86px
- * of text room a 132px column left, and the phone read `Not start…` on every
- * row. The control is a `StatusPicker` now, which is a button rather than a
- * `<select>` and so is not touched by that rule at all; the closed chip is 134px
- * including the cell's gap, at every pointer. The column keeps 144 anyway. The
- * margin is what the last two passes at this number were both short of, and it
- * costs nothing: this table scrolls, so the price is 10px of travel rather than
- * 10px off Title.
- */
-export const PHONE_W = { status: 144, where: 136, due: 88 }
-
-/** What Title wants on a phone. Below this a two-word title starts eliding. */
-export const PHONE_TITLE_MIN = 184
-
-/** The width the phone table refuses to go under, and therefore scrolls at. */
-export const PHONE_MIN =
-  PHONE_TITLE_MIN + PHONE_W.status + PHONE_W.where + PHONE_W.due
 
 /**
  * Five columns, the last of which has no width.
