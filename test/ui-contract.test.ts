@@ -379,6 +379,61 @@ describe('the shell reaches everywhere from both places', () => {
     }
   })
 
+  test('the desk leads with Tasks, and there is no All', () => {
+    const home = read('src/web/pages/Home.tsx')
+
+    // The word is gone from the strip, and the first tab says what you are
+    // looking at rather than what the filter is doing.
+    const strip = home.slice(home.indexOf('function SourceTabs('), home.indexOf('function Blank('))
+    expect(strip, 'the first tab stopped naming the unfiltered view').toMatch(/>\s*Tasks\s*</)
+    expect(strip, 'the All tab came back').not.toMatch(/>\s*All\s*</)
+
+    // And no source filter is the absence of one, everywhere, rather than a
+    // sixth name that every consumer has to remember to exclude by hand.
+    for (const f of web) {
+      expect(codeOf(f), `${f}: the source filter grew a sixth name again`)
+        .not.toMatch(/SourceName\s*\|\s*'all'/)
+    }
+
+    /*
+     * A `?src=` nobody implements must mean no filter, not an empty desk.
+     *
+     * This is the one that bites in the field: every bookmark and every entry
+     * in his phone's history made before the rename carries `?src=all`, and a
+     * cast would send that string into `inBucket` as a source name matching
+     * nothing — a blank desk with no explanation and no control showing as
+     * pressed. Read through the list, an unknown value is simply not a filter.
+     */
+    expect(home, 'the source filter went back to a cast')
+      .toMatch(/FILTERS\.find\(s => s === p\.src\) \?\? null/)
+    expect(home, 'the source filter is being cast again')
+      .not.toMatch(/p\.src \?\? 'all'/)
+  })
+
+  test('only one surface in the product is called Tasks', () => {
+    /*
+     * The collision this rename created, pinned so it cannot come back quietly.
+     *
+     * The desk's first tab is `Tasks`. Work's segmented control used to be too,
+     * which is two navigation destinations wearing one word — and the two mean
+     * genuinely different things: one is every row on the desk, the other is the
+     * `tasks` table. Work says `To do` now. See the comment at that call site
+     * for why the word went to the surface with the weaker claim on it, which is
+     * the uncomfortable half of the trade.
+     *
+     * Scoped to the two segmented/tab *labels*, not to the word anywhere: a goal
+     * pane listing the tasks linked to it is correctly headed `Tasks`, because
+     * those are tasks and it is not somewhere you navigate to.
+     */
+    const work = read('src/web/pages/Work.tsx')
+    // Self-closing, so the element ends at the first `/>` after it.
+    const from = work.indexOf('<Segmented<Tab>')
+    const seg = work.slice(from, work.indexOf('/>', from) + 2)
+    expect(seg.length, 'the segmented control could not be found').toBeGreaterThan(80)
+    expect(seg, "Work's list is called Tasks again").not.toMatch(/label: 'Tasks'/)
+    expect(seg, "Work's list lost its name").toMatch(/label: 'To do'/)
+  })
+
   test('navigating keeps the harness flag and drops the page-local filter', () => {
     const route = read('src/web/lib/route.ts')
     expect(route, 'go() dropped the query string again').toContain('CARRIED')

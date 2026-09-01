@@ -34,7 +34,27 @@ import { ago, timeOfDay } from '../lib/time'
 import { Button, Menu, type MenuItem } from './primitives'
 import { SOURCE_LABEL } from './sources'
 
-type Scope = SourceName | 'all'
+/**
+ * What one press of Sync re-polls. `null` is every pipe.
+ *
+ * The same thing the desk's first tab means — no source filter — spelled the
+ * same way, so the tab and this control cannot drift into two vocabularies for
+ * one idea.
+ */
+type Scope = SourceName | null
+
+/**
+ * The same choice as a menu row id, which has to be a string.
+ *
+ * `Menu` keys its rows by id and a `null` id is not selectable — there would be
+ * nothing to compare against and nothing to put in a `key`. So the menu keeps a
+ * word, and `scopeOf` is the single place it turns back into the absence of a
+ * source. The mapping is one line in one direction and one line in the other,
+ * which is cheaper than teaching the menu about nullable ids.
+ */
+type ScopeId = SourceName | 'everything'
+const scopeOf = (id: ScopeId): Scope => (id === 'everything' ? null : id)
+const idOf = (s: Scope): ScopeId => s ?? 'everything'
 
 /** What either control on the header row answers with when it is done. */
 export type ResultLine = { text: string; title?: string }
@@ -138,7 +158,7 @@ export function syncLine(r: SyncReport): { text: string; title: string } {
   }
 }
 
-export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
+export function Sync({ source }: { source: SourceName | null }): JSX.Element {
   const { state, syncing } = useStore()
   const [mine, setMine] = useState(false)
   const [line, say] = useResultLine()
@@ -156,7 +176,7 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
    */
   const busy = mine || syncing
 
-  const word = source === 'all' ? null : label(source)
+  const word = source && label(source)
   const runs = new Map((state?.lastSync ?? []).map(r => [r.source, r]))
 
   /**
@@ -174,16 +194,16 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
     return r && r.connected && r.ok ? ago(r.at) : '—'
   }
 
-  const items: ReadonlyArray<MenuItem<Scope>> = [
-    { id: 'all', label: 'Everything' },
-    ...ORDER.map((s): MenuItem<Scope> => ({
+  const items: ReadonlyArray<MenuItem<ScopeId>> = [
+    { id: 'everything', label: 'Everything' },
+    ...ORDER.map((s): MenuItem<ScopeId> => ({
       id: s, label: label(s), meta: metaFor(s), group: 'One source',
     })),
   ]
 
   const run = async (scope: Scope) => {
     setMine(true)
-    const r = await refresh(scope === 'all' ? undefined : scope)
+    const r = await refresh(scope ?? undefined)
     setMine(false)
     say(r.ok
       ? syncLine(r.report)
@@ -200,7 +220,7 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
    * the alerts on the Sentry tab come from, and the tooltip names it rather
    * than leaving the operator to notice a second source in the result line.
    */
-  const pipes = source === 'all' ? [] : pipesFor(source)
+  const pipes = source ? pipesFor(source) : []
   const carriers = pipes.filter(p => p !== source)
 
   /* The chevron cannot be a `Button`: it is a menu trigger and has to say so
@@ -290,13 +310,13 @@ export function Sync({ source }: { source: SourceName | 'all' }): JSX.Element {
           </span>
         </Button>
 
-        <Menu<Scope>
+        <Menu<ScopeId>
           items={items}
           /* The check marks what the big half does, not what the last pick was:
              picking a row runs it there and then and leaves the tab alone, so
              the button's scope is still the tab's and the menu says so. */
-          value={source}
-          onPick={s => void run(s)}
+          value={idOf(source)}
+          onPick={s => void run(scopeOf(s))}
           align="end"
           ariaLabel="Sync one source"
           trigger={({ open, toggle }) => (

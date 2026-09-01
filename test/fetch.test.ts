@@ -299,9 +299,15 @@ describe('Fetch can be scoped to one source', () => {
     // based on a filter elsewhere on the page would be a trap.
     const home = readFileSync('src/web/pages/Home.tsx', 'utf8')
     const fn = /function Fetch\(\{[\s\S]*?\n\}\n/.exec(home)?.[0] ?? ''
-    expect(fn, 'Fetch stopped taking the current source').toMatch(/source:\s*SourceName\s*\|\s*'all'/)
+    // AMENDED: the unfiltered tab is `null`, not `'all'`.
+    //
+    // Both assertions pinned the old spelling rather than the rule. What has to
+    // stay true is that Fetch is scoped by whichever tab you are standing on,
+    // and that standing on the unfiltered one asks every connector — which is
+    // now `source ?? undefined` rather than a ternary against a magic string.
+    expect(fn, 'Fetch stopped taking the current source').toMatch(/source:\s*SourceName\s*\|\s*null/)
     expect(fn, 'Fetch stopped passing the source to the collector').toMatch(/fetchNow\(only\)/)
-    expect(fn, 'the All tab stopped meaning "everything"').toMatch(/source === 'all' \? undefined : source/)
+    expect(fn, 'the unfiltered tab stopped meaning "everything"').toMatch(/source \?\? undefined/)
     expect(fn, 'the button no longer names the source it is about to ask').toContain('SOURCE_LABEL[only]')
   })
 })

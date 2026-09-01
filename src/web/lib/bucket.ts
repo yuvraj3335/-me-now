@@ -120,9 +120,19 @@ export function bucketsOf(card: Card): SourceName[] {
   return seen
 }
 
-/** The tab predicate. `all` takes everything, including a card with no members. */
-export function inBucket(card: Card, tab: SourceName | 'all'): boolean {
-  return tab === 'all' || card.sources.some(s => bucketOf(s) === tab)
+/**
+ * The tab predicate. `null` is no source filter at all, so it takes everything
+ * — including a card with no members.
+ *
+ * It used to be the string `'all'`, which read as a sixth source sitting beside
+ * the five real ones and had to be excluded by hand everywhere a real source
+ * name was expected: `source === 'all' ? undefined : source` appeared in three
+ * files. `null` says the same thing in the type system — there is no source here
+ * — so those exclusions become `??` and the compiler checks them instead of a
+ * reader remembering to.
+ */
+export function inBucket(card: Card, tab: SourceName | null): boolean {
+  return tab === null || card.sources.some(s => bucketOf(s) === tab)
 }
 
 /**

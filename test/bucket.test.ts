@@ -214,8 +214,14 @@ describe('a card is on every tab one of its members claims', () => {
     expect(bucketsOf(c)).toEqual(['github', 'slack'])
   })
 
-  test('the All tab takes everything, including a card with no members', () => {
-    expect(inBucket(card({ sources: [] }), 'all')).toBe(true)
+  test('the unfiltered tab takes everything, including a card with no members', () => {
+    // AMENDED: no source filter is `null` now, not the string `'all'`.
+    //
+    // The tab is labelled `Tasks` and the value behind it is the absence of a
+    // source rather than a sixth source name — which is what `'all'` read as
+    // everywhere a real `SourceName` was expected. The rule is unchanged: no
+    // filter takes every row, including one carrying no members at all.
+    expect(inBucket(card({ sources: [] }), null)).toBe(true)
     expect(inBucket(card({ sources: [] }), 'slack')).toBe(false)
   })
 

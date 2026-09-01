@@ -14,7 +14,7 @@
  *
  * Four filter axes, all of them in the URL: source, search, due, priority,
  * status. Because none of them is component-local tab state, they compose the
- * same way on the All tab and inside a source tab, which is the whole
+ * same way on the Tasks tab and inside a source tab, which is the whole
  * requirement — you can be in Slack, at Urgent, overdue, on page 2, and put all
  * of that in a bookmark.
  *
@@ -148,7 +148,18 @@ export function Home() {
   const { state } = useStore()
   const width = useViewport()
   const p = useParams(['src', 'q', 'due', 'pri', 'status', 'page', 'sort'])
-  const filter = (p.src ?? 'all') as SourceName | 'all'
+  /*
+   * Read through the source list rather than cast.
+   *
+   * `?src=` is a string a person can type, a phone can hold in its history and a
+   * bookmark can carry — including `?src=all`, which every bookmark made before
+   * this tab was renamed is carrying right now. Cast, that lands in `inBucket`
+   * as a source name matching nothing and renders an empty desk with nothing on
+   * screen to say why. Checked, an unrecognised value means what no value means:
+   * no source filter. Same whitelist `sort` keeps four lines down, for the same
+   * reason.
+   */
+  const filter: SourceName | null = FILTERS.find(s => s === p.src) ?? null
   const query = p.q ?? ''
   const due = (p.due ?? 'any') as DueFilter
   const pri = p.pri ?? 'any'
@@ -855,7 +866,7 @@ function DetailPath({ card, onBack }: { card: CardT; onBack: () => void }) {
  * a reader has to be able to press either one on purpose, and a poll that was
  * reachable only from the command palette was a poll nobody knew existed.
  */
-function Header({ count, source }: { count?: number; source: SourceName | 'all' }) {
+function Header({ count, source }: { count?: number; source: SourceName | null }) {
   return (
     <header className="pt-4 pb-2 flex items-center gap-3">
       <PageTitle>Desk</PageTitle>
@@ -874,7 +885,7 @@ function Header({ count, source }: { count?: number; source: SourceName | 'all' 
 }
 
 /**
- * All / Slack / Gmail / GitHub / Sentry / Claude, as a real tab strip.
+ * Tasks / Slack / Gmail / GitHub / Sentry / Claude, as a real tab strip.
  *
  * A strip with a rule under it and `aria-selected` on the pressed one, rather
  * than six lozenges: a lozenge row reads as six filters that could be combined,
@@ -900,7 +911,7 @@ function Header({ count, source }: { count?: number; source: SourceName | 'all' 
 function SourceTabs({
   value, state,
 }: {
-  value: SourceName | 'all'
+  value: SourceName | null
   state: { lastSync: Array<{ source: string; ok: number; connected: number; error: string | null }> }
 }) {
   const runs = new Map(state.lastSync.map(r => [r.source, r]))
@@ -925,9 +936,24 @@ function SourceTabs({
     <div className="rail" data-spill={rail.spill || undefined}>
       <div ref={rail.ref}
         className="flex items-center gap-4 border-b border-edge overflow-x-auto no-scrollbar">
-        <button aria-selected={value === 'all'} role="tab" className={tab(value === 'all')}
+        {/*
+          `Tasks`, and it is the unfiltered view it has always been.
+
+          The word `All` is gone because it named the mechanism rather than the
+          contents: it told you what the filter was doing and nothing about what
+          you were looking at. Every row on this desk is something somebody is
+          waiting on him for, which is the only sense in which this product has
+          ever used the word, so the first tab says that and the five source tabs
+          beside it narrow it.
+
+          It carries no `SourceMark`, unlike the five, and that is deliberate: a
+          mark here would make it look like a sixth source when it is the exact
+          opposite — the absence of a source filter. See `filter` above, where
+          that absence is `null` rather than a sixth name.
+        */}
+        <button aria-selected={value === null} role="tab" className={tab(value === null)}
           onClick={() => { setParam('src', null); setParam('page', null) }}>
-          All
+          Tasks
         </button>
         {FILTERS.map(s => {
           const bad = wordFor(s)
@@ -977,7 +1003,7 @@ function SourceTabs({
  */
 function Blank({
   query, filtered, source,
-}: { query: string; filtered: boolean; source: SourceName | 'all' }) {
+}: { query: string; filtered: boolean; source: SourceName | null }) {
   /* Everything but the tab, and the page with it: page 3 of a list you are
      about to widen is not where the answer starts. The tab is left alone
      because the strip above says which one is pressed and unpressing it is one
@@ -996,7 +1022,7 @@ function Blank({
             // source name out of here keeps the query out of here.
             ? 'Nothing on the desk matches this search.'
             : 'Nothing on the desk matches these filters.'
-          : source === 'all'
+          : source === null
             ? 'Nothing is on you.'
             : `Nothing from ${SOURCE_LABEL[source]} is on you.`}
       </p>
@@ -1004,7 +1030,7 @@ function Blank({
         <Button size="lg" variant="secondary" className="mt-3" onClick={clear}>
           Clear filters
         </Button>
-      ) : source !== 'all' ? (
+      ) : source !== null ? (
         <Button size="lg" variant="secondary" className="mt-3"
           onClick={() => { setParam('src', null); setParam('page', null) }}>
           Show every source
@@ -1240,17 +1266,17 @@ function FilterRow({
  * the tab strip rather than a second control: the desk already carries the
  * question "which source" in the URL, and answering it twice — once to filter,
  * once again inside a menu on the button — is two places to be out of step with
- * each other. On the All tab the button reads `Fetch` and asks everything; on
+ * each other. On the Tasks tab the button reads `Fetch` and asks everything; on
  * the Slack tab it reads `Fetch Slack` and asks Slack alone.
  *
  * The label is what makes it discoverable. A control that silently changed what
  * it did based on a filter elsewhere on the page would be a trap; one that
  * renames itself is a statement, and it is the only affordance needed.
  */
-function Fetch({ source }: { source: SourceName | 'all' }) {
+function Fetch({ source }: { source: SourceName | null }) {
   const [busy, setBusy] = useState(false)
   const [line, say] = useResultLine()
-  const only = source === 'all' ? undefined : source
+  const only = source ?? undefined
   const word = only ? SOURCE_LABEL[only] : null
 
   /**

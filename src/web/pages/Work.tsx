@@ -589,7 +589,28 @@ export function Work() {
             */}
             <Segmented<Tab>
               ariaLabel="Which list"
-              options={[{ id: 'tasks', label: 'Tasks' }, { id: 'goals', label: 'Goals' }]}
+              /*
+                `To do`, not `Tasks`, and this is the losing half of a trade
+                rather than an improvement on its own.
+
+                The desk's first tab is called `Tasks` now (see `SourceTabs` in
+                `Home.tsx`), and two destinations wearing one word is worse than
+                either word being slightly off, so something had to move.
+
+                What is uncomfortable about it: these are the actual `tasks`
+                table — first-class objects with their own rows, their own API
+                and their own provenance, per DECISIONS #10 — and the desk's
+                unfiltered view is not. The word went to the surface with the
+                weaker claim on it. The URL still says `?tab=tasks` and the type
+                is still `Tab = 'tasks' | 'goals'`, because the underlying thing
+                did not change and renaming storage to chase a label is how a
+                schema ends up needing translating in both directions.
+
+                `To do` is at least true, and is what he calls this list out
+                loud. The real fix is one surface rather than two names, and
+                that is a bigger change than a label.
+              */
+              options={[{ id: 'tasks', label: 'To do' }, { id: 'goals', label: 'Goals' }]}
               value={tab}
               onChange={id => setParam('tab', id === 'tasks' ? null : id)}
             />
