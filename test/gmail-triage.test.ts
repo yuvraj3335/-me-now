@@ -127,15 +127,41 @@ describe('the replied-thread query', () => {
  * useless for a test in a suite that shares one process — so configurability is
  * checked the way the operator will actually exercise it: by setting the
  * variable and starting Wake.
+ *
+ * **`process.execPath`, not `'bun'`.** These four tests passed on a laptop and
+ * failed on the box, and the difference was `PATH`: `wake-deploy.service` is a
+ * systemd *user* unit and gets systemd's PATH, which is `/usr/local/bin:/usr/bin`
+ * and friends — and bun lives in `~/.bun/bin`. So the spawn found nothing,
+ * stdout came back empty, and every assertion below failed on a string that was
+ * never produced rather than on a setting that was wrong.
+ *
+ * It went unnoticed because the deploy timer was not reaching the test step at
+ * all: it compared `HEAD` to `origin/main` and exited before verification
+ * whenever a commit had been made in the deploy checkout. Fixing that trigger is
+ * what ran this suite in the systemd environment for the first time in a while,
+ * and this is what it found.
+ *
+ * The binary already running this test is the right one to spawn anyway — it is
+ * the one the assertions are about.
  */
 const queryUnder = (env: Record<string, string>, days = 14): string => {
   const r = Bun.spawnSync({
-    cmd: ['bun', '-e', `const m = await import(${JSON.stringify(`${process.cwd()}/src/server/env.ts`)}); console.log(m.gmailCardQuery(${days}) + '\\n' + m.GMAIL_PAGE_SIZE)`],
+    cmd: [process.execPath, '-e', `const m = await import(${JSON.stringify(`${process.cwd()}/src/server/env.ts`)}); console.log(m.gmailCardQuery(${days}) + '\\n' + m.GMAIL_PAGE_SIZE)`],
     env: { ...process.env, ...env },
     stdout: 'pipe',
     stderr: 'pipe',
   })
-  return new TextDecoder().decode(r.stdout).trim()
+  const out = new TextDecoder().decode(r.stdout).trim()
+  // A spawn that produced nothing is a broken test, not a failing assertion.
+  // Without this the four tests below all report "expected the query to contain
+  // X", which sends you looking at `env.ts` instead of at the spawn.
+  if (!out) {
+    throw new Error(
+      `could not read the query back: ${process.execPath} exited ${r.exitCode}\n` +
+      new TextDecoder().decode(r.stderr).trim(),
+    )
+  }
+  return out
 }
 
 describe('the query is a setting, not a string buried in the adapter', () => {
