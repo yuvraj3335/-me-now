@@ -54,7 +54,7 @@
 import { animate, motion, useMotionValue, useTransform, type MotionValue } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  axisFor, clampSwipe, elasticSwipe, openSwipeKey, setOpenSwipe, snapSwipe, SWIPE_ACTION_W,
+  axisFor, clampSwipe, elasticSwipe, openSwipeKey, setOpenSwipe, snapSwipe,
   SWIPE_ENGAGE_PX, SWIPE_SPRING, swipeWidth, useOpenSwipe, type SwipeAxis,
 } from '../lib/swipe'
 import { statusColor, statusWash } from './status'
@@ -573,6 +573,19 @@ export function SwipeDrawer({
 
   const act = (run: () => void) => () => { run(); onClose() }
 
+  /*
+   * The buttons that will actually paint, and the box each of them gets.
+   *
+   * Counted from the props rather than taken as a number, because the caller
+   * already told `useSwipe` how wide to be and a second, hand-kept count here is
+   * how the strip and its window drift apart. `Done` and `Delete` are always
+   * drawn; `Task` and `Status` are each optional, and every combination is in
+   * use — four on the desk, three on a session (no status), three on a task (no
+   * task-from-a-task).
+   */
+  const count = 2 + (onTask ? 1 : 0) + (status ? 1 : 0)
+  const each = width / count
+
   if (picking && status) {
     /*
      * `w-max` and no `max-w-full`.
@@ -704,25 +717,35 @@ export function SwipeDrawer({
         {/* `Task`, not `+`. Every other action in this drawer is a word you can
             read at arm's length, and a glyph here would be the one control on
             the surface you have to already know. */}
-        {onTask && <SwipeButton tone="accent" label="Task" onClick={act(onTask)} />}
-        <SwipeButton tone="ok" label="Done" onClick={act(onDone)} />
+        {onTask && <SwipeButton w={each} tone="accent" label="Task" onClick={act(onTask)} />}
+        <SwipeButton w={each} tone="ok" label="Done" onClick={act(onDone)} />
         {status && (
-          <SwipeButton tone="ink" label="Status" onClick={() => setPicking(true)} />
+          <SwipeButton w={each} tone="ink" label="Status" onClick={() => setPicking(true)} />
         )}
-        <SwipeButton tone="bad" label="Delete" onClick={act(onDelete)} />
+        <SwipeButton w={each} tone="bad" label="Delete" onClick={act(onDelete)} />
       </motion.div>
     </div>
   )
 }
 
 function SwipeButton({
-  tone, label, onClick,
-}: { tone: keyof typeof TONE; label: string; onClick: () => void }) {
+  w, tone, label, onClick,
+}: { w: number; tone: keyof typeof TONE; label: string; onClick: () => void }) {
   return (
     <button
       data-swipe-action
       onClick={onClick}
-      style={{ width: SWIPE_ACTION_W }}
+      /*
+       * The width is handed down rather than read from the constant.
+       *
+       * The drawer's own box is `swipeWidth(actionCount)`, and a button sized
+       * from a *different* number than the box divides the strip either short of
+       * the row's edge or past it. Dividing the box by the buttons about to be
+       * painted makes the two agree by construction, which matters now that the
+       * per-action width is not one number — four actions use a narrower box so
+       * a four-action drawer does not cover the whole of a 375px row.
+       */
+      style={{ width: w }}
       className={`shrink-0 flex items-center justify-center text-sm font-medium
         transition-[filter] duration-100 hover:brightness-110 ${TONE[tone]}`}
     >

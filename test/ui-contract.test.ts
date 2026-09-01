@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  axisFor, clampSwipe, elasticSwipe, snapSwipe, SWIPE_AXIS_RATIO,
+  axisFor, clampSwipe, elasticSwipe, snapSwipe, swipeActionWidth, swipeWidth, SWIPE_AXIS_RATIO,
 } from '../src/web/lib/swipe'
 
 const walk = (dir: string): string[] =>
@@ -1776,6 +1776,48 @@ describe('a row can be acted on without being opened', () => {
     // range, so an overdragged release still lands on one of the two.
     expect(snapSwipe(clampSwipe(elasticSwipe(-400, 264), 264), 264)).toBe(-264)
     expect(snapSwipe(clampSwipe(elasticSwipe(40, 264), 264), 264)).toBe(0)
+  })
+
+  test('a four-action drawer still leaves the row readable', () => {
+    /*
+     * The drawer exists so a row can be acted on without opening it, and that
+     * only works if you can still tell *which* row you are acting on. #38 sized
+     * three actions at 88px — 264px, leaving the glyph and the first few words
+     * of the title on a 390px phone — and said so.
+     *
+     * Adding `Task` at the same 88 makes 352, and the narrowest row in the
+     * product is 343px at 375. The drawer would cover the row completely: every
+     * action legible, and nothing at all to say what was about to be finished.
+     * That is worse than a cramped label because it is silent.
+     *
+     * So four actions use a narrower box, chosen to come to the same 264 the
+     * three-action drawer already has. The fourth action costs the title
+     * nothing, and the number is one this codebase has already defended.
+     */
+    const PHONE_ROW = 343
+    expect(swipeWidth(3), 'the three-action drawer changed width').toBe(264)
+    expect(swipeWidth(4), 'a four-action drawer no longer matches the three').toBe(264)
+
+    for (const n of [2, 3, 4]) {
+      expect(swipeWidth(n), `${n} actions cover the whole of a 375px row`)
+        .toBeLessThan(PHONE_ROW)
+      // And every box stays a real touch target.
+      expect(swipeActionWidth(n), `${n} actions put a box under 44px`)
+        .toBeGreaterThanOrEqual(44)
+    }
+  })
+
+  test('the strip is divided by the buttons that actually paint', () => {
+    // The window is `swipeWidth(actionCount)` and the buttons divide that same
+    // number, so the two cannot disagree. A button sized from a standalone
+    // constant would leave the strip short of the row's edge on a four-action
+    // drawer, or past it on a two.
+    expect(swipe, 'the drawer went back to a fixed per-button width')
+      .not.toMatch(/style=\{\{ width: SWIPE_ACTION_W \}\}/)
+    expect(swipe, 'the button width is no longer derived from the box')
+      .toMatch(/const each = width \/ count/)
+    expect(swipe, 'the count is no longer read off the props that paint')
+      .toMatch(/const count = 2 \+ \(onTask \? 1 : 0\) \+ \(status \? 1 : 0\)/)
   })
 
   test('a thumb travelling in an arc still counts as a swipe', () => {

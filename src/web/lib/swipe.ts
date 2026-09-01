@@ -74,8 +74,32 @@ export const SWIPE_AXIS_RATIO = 1.2
  */
 export const SWIPE_ACTION_W = 88
 
+/**
+ * The narrower box a four-action drawer uses, and why there are two numbers.
+ *
+ * Three at 88 is 264px, which the paragraph above is written about: on a 390px
+ * phone it leaves the row's glyph and the first few words of its title showing,
+ * so it stays obvious which row is about to be acted on.
+ *
+ * Four at 88 is **352**, and the narrowest row in the product is 343px wide at
+ * 375. The drawer would cover the row completely — every action legible, and no
+ * way to tell which of twenty rows you were about to finish. That is a worse
+ * failure than a cramped label, because it is silent.
+ *
+ * 66 is chosen so that four of them come to exactly 264: the same total the
+ * three-action drawer already has, so the fourth action costs the title nothing
+ * and the number is one this file has already defended. It is still well clear
+ * of the 44px floor `min-w-11` puts under a touch target, and the longest label
+ * on it (`Status`, `Delete`) measures ~40px at `text-sm`.
+ */
+export const SWIPE_ACTION_W_TIGHT = 66
+
+/** One action's box, given how many are sharing the row. */
+export const swipeActionWidth = (n: number) =>
+  n >= 4 ? SWIPE_ACTION_W_TIGHT : SWIPE_ACTION_W
+
 /** The revealed width for a row offering `n` actions. */
-export const swipeWidth = (n: number) => n * SWIPE_ACTION_W
+export const swipeWidth = (n: number) => n * swipeActionWidth(n)
 
 export type SwipeAxis = 'undecided' | 'x' | 'y'
 
