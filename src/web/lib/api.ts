@@ -277,7 +277,11 @@ export const actions = {
   pushKey: () => req<{ key: string }>('/push/key'),
   pushSubscribe: (subscription: unknown, label?: string) => post('/push/subscribe', { subscription, label }),
   pushUnsubscribe: (endpoint: string) => post('/push/unsubscribe', { endpoint }),
-  pushTest: () => post<{ sent: boolean; devices: number }>('/push/test'),
+  // `sent` is whether a device was actually woken — not whether a row was
+  // written. `reason` is present whenever it was not, and is a sentence rather
+  // than a code, because it goes straight onto the screen.
+  pushTest: () =>
+    post<{ sent: boolean; devices: number; delivered: number; reason: string | null }>('/push/test'),
   pushStatus: () =>
     req<{ devices: Array<{ endpoint: string; ua: string | null; label: string | null; created_at: number; last_ok_at: number | null }> }>(
       '/push/status',

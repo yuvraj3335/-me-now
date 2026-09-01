@@ -24,7 +24,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import {
-  bareChannel, isAllowedSlackChannel, SLACK_ALERT_CHANNELS, SLACK_CHANNELS,
+  bareChannel, DESK_CHANNELS, isAllowedSlackChannel, SLACK_ALERT_CHANNELS, SLACK_CHANNELS,
 } from '../src/server/env'
 import {
   bucketHits, CHANNEL_SCOPE, parseSlackResults, searchArgs, type SlackHit,
@@ -33,12 +33,23 @@ import { ME_ID } from './fixtures/slack'
 import { slackCard } from '../src/server/fetch/index'
 import type { SearchHit } from '../src/server/sources/search'
 
-/** The eighteen, exactly as the operator wrote them. This is the specification. */
+/**
+ * The sixteen, exactly as the operator wrote them. This is the specification.
+ *
+ * NARROWED from eighteen. `#truto` and `#crisp-chats` came off because he gave
+ * a list and neither was on it — `#truto` was the third-busiest source of Slack
+ * rows on the box at the time, so its removal is a real change and not tidying.
+ *
+ * He named seventeen. `Customer (private)` is the seventeenth and is absent on
+ * purpose: it could not be resolved to an id against the connected token, and a
+ * private channel nobody can see cannot be guessed at without pointing the whole
+ * scope at the wrong conversation. See the note above `DESK_CHANNELS`.
+ */
 const THE_LIST = [
-  '#truto', '#clonepartner', '#sprinto', '#maximor-truto', '#spendflo-truto',
+  '#clonepartner', '#sprinto', '#maximor-truto', '#spendflo-truto',
   '#15five-truto', '#komplai-truto', '#evergrowth-truto', '#thoropass-truto',
   '#open-truto', '#stax-truto', '#naq-truto', '#docsbot-truto', '#truto-balkanid',
-  '#ex-superhawk-truto', '#truto-zen', '#framer-clonepartner', '#crisp-chats',
+  '#ex-superhawk-truto', '#truto-zen', '#framer-clonepartner',
 ]
 
 /** The four that were really on the desk on 2026-08-31 and should not have been. */
@@ -182,7 +193,12 @@ const codeOf = (f: string) =>
 
 describe('the list is written once, in env.ts, and read everywhere', () => {
   test('env.ts holds exactly the eighteen the operator gave', () => {
-    expect(SLACK_CHANNELS.map(c => `#${c.name}`)).toEqual(THE_LIST)
+    // `DESK_CHANNELS`, not `SLACK_CHANNELS`: this assertion is the
+    // specification of the list Wake *ships*, and the suite deliberately
+    // configures a wider scope of its own (see `test/setup.ts`). Reading the
+    // configured value here would make this test agree with itself no matter
+    // what shipped, which is the one thing it exists to prevent.
+    expect(DESK_CHANNELS.map(c => `#${c.name}`)).toEqual(THE_LIST)
   })
 
   test('no channel is named at the call site', () => {

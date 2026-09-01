@@ -148,6 +148,11 @@ export function Settings() {
     // toggle is on" and "this device will actually be woken".
     const t = await actions.pushTest()
     setDevices(t.devices)
+    // A test that woke nothing has to say so. This read `t.devices` and nothing
+    // else, so a round trip that reached zero devices set the count to 0 and
+    // left the row looking enabled — which is how "notifications do not fire"
+    // stayed unexplained while every part of the machinery was healthy.
+    if (!t.sent) setPushWord(t.reason ?? 'nothing was woken')
   }
 
   return (

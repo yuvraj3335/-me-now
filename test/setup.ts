@@ -26,6 +26,40 @@ process.env.WAKE_CLAUDE_HOME = join(root, 'claude')
 process.env.WAKE_EMAILS = 'me@example.com,team@example.com'
 
 /**
+ * The suite pins its own Slack scope, rather than borrowing the shipped one.
+ *
+ * This was not deliberate before and it bit: narrowing `DESK_CHANNELS` to the
+ * sixteen channels the operator named took `#truto` off the list, and thirty-
+ * nine tests failed that have nothing to do with which channels he wants. They
+ * failed because `test/fixtures/slack.ts` is a real capture from `#truto`, and
+ * every thread, dedup, recency and activity test is built on it.
+ *
+ * Reshaping the capture was the obvious way out and is the wrong one — that file
+ * says so at the top, and it is right: a fixture edited to suit a test stops
+ * proving anything. So the fixture stays verbatim and the *scope* becomes the
+ * suite's own business, which is what it should always have been. A test about
+ * thread parsing must not change its answer because somebody edited a
+ * configuration list.
+ *
+ * The ids are carried, not just the names, because `isAllowedSlackChannel`
+ * matches on the id first and several tests here pin exactly that — a channel
+ * whose name arrived unreadable, and a channel that was renamed.
+ *
+ * `slack-channels.test.ts` is the one file this must not speak for: it is the
+ * specification of the shipped list, so it asserts against `DESK_CHANNELS`
+ * directly rather than against whatever is configured.
+ */
+process.env.WAKE_SLACK_CHANNELS = [
+  'truto:C04D9HKDWAV',
+  'clonepartner:C09BRBLNXNH', 'sprinto:C050LJAMFSN', 'maximor-truto:C0A8B267EE9',
+  'spendflo-truto:C05CJ0CUV35', '15five-truto:C0AHHQMF08L', 'komplai-truto:C0A437E7UAU',
+  'evergrowth-truto:C0A25L2QEB0', 'thoropass-truto:C05P80HPYSK', 'open-truto:C08SS821JHG',
+  'stax-truto:C09TKFVP6AY', 'naq-truto:C09REMSHL14', 'docsbot-truto:C093QFW4U3E',
+  'truto-balkanid:C07PMS3UYKB', 'ex-superhawk-truto:C0AACN2HYM7', 'truto-zen:C07AVEG7ZHN',
+  'framer-clonepartner:C06UP5J326B', 'crisp-chats:C07351C8Z8E',
+].join(',')
+
+/**
  * Skill catalogs point at a fixture, not at ~/work.
  *
  * The index used to read whatever the machine happened to have cloned, so the

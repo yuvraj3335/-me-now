@@ -147,6 +147,46 @@ describe('a card has a deadline too', () => {
   })
 })
 
+describe('a push that woke nobody says so', () => {
+  /*
+   * The reported symptom was "notifications are not firing", and everything
+   * downstream turned out to be healthy: the 30s tick runs, VAPID keys are
+   * generated and stored, `sw.js` is correct and in `dist/`, and `notify()` had
+   * written its rows. `push_subs` was simply empty — `POST /api/push/subscribe`
+   * has never been called on this deployment, not once in the service's logged
+   * history.
+   *
+   * That part is his to fix, on a device, and it is one tap. What was Wake's to
+   * fix is that nothing ever said so: `/push/test` called `notify()` and
+   * reported *its* return value, which answers whether the dedup key was new.
+   * With nothing subscribed the response was `{ sent: true, devices: 0 }` — two
+   * true facts arranged to read as success, on the one button whose entire job
+   * is telling him whether this works.
+   */
+  test('the test button reports reach, not that a row was written', async () => {
+    db.query(`DELETE FROM push_subs`).run()
+
+    const r = await api.request('/push/test', { method: 'POST' })
+    expect(r.status).toBe(200)
+    const body = await r.json() as { sent: boolean; devices: number; reason: string | null }
+
+    expect(body.devices, 'a device appeared from nowhere').toBe(0)
+    expect(body.sent, 'a push that reached nobody reported success').toBe(false)
+    expect(body.reason, 'the failure has no reason on it').toBeTruthy()
+    expect(body.reason, 'the reason does not say what to do about it')
+      .toContain('subscribed')
+  })
+
+  test('a test does not appear in his notifications', () => {
+    // It used to go through `notify()`, which writes a row. A test is not a
+    // thing that happened to him and has no business in that list.
+    const before = db.query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM notifications WHERE kind = 'test'`,
+    ).get()!.n
+    expect(before, 'the test button is still filing notifications').toBe(0)
+  })
+})
+
 describe('a reminder cannot be set in the past', () => {
   test('the boundary refuses it, with a reason', async () => {
     // It used to validate presence only, and `runReminders()` fires on

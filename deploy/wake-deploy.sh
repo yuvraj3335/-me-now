@@ -42,6 +42,26 @@ fi
 
 # Fast-forward only. A diverged local checkout means someone edited on the box,
 # and silently discarding that is worse than refusing to deploy.
+#
+# Refuse outright if the tree is dirty, and refuse BEFORE the merge.
+#
+# The rollback below is `git reset --hard`, which cannot tell the commit it is
+# undoing from work nobody has committed yet. Measured, painfully: an agent
+# working in this checkout committed locally without pushing, so local and remote
+# differed; the ff-merge failed; the ERR trap fired; and `reset --hard` threw
+# away every uncommitted edit in the tree. The comment two lines above promises
+# exactly the opposite of that happening.
+#
+# So the two halves are made consistent. This script only ever touches a clean
+# tree, and the rollback can then only ever undo its own checkout. Untracked
+# files are deliberately not counted: agent litter in the working directory is
+# the normal state of this box and is not work to protect.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "wake-deploy: refusing to deploy - uncommitted changes in $REPO" >&2
+  git status --short --untracked-files=no >&2
+  exit 1
+fi
+
 git merge --ff-only "origin/$BRANCH"
 
 # And back out of it if the commit does not survive verification.

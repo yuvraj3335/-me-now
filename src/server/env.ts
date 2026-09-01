@@ -143,15 +143,44 @@ export const bareChannel = (s: string | null | undefined): string =>
  * useless name, and never the other way round. `isAllowedSlackChannel` reads
  * the id first for exactly that reason and falls back to the name.
  *
- * The ids were read off this workspace on 2026-08-31 with
- * `slack_search_channels`; twelve of the eighteen channels are private, and
- * both kinds answer to `in:#name` in a search. `WAKE_SLACK_CHANNELS` replaces
+ * The ids were read off this workspace with `slack_search_channels` and checked
+ * again on 2026-09-01 when the list was narrowed — all sixteen resolved to the
+ * same ids they already carried. Twelve of the seventeen are private, and both
+ * kinds answer to `in:#name` in a search. `WAKE_SLACK_CHANNELS` replaces
  * the whole list with plain comma-separated names — a person can type names and
  * cannot be expected to type ids, and a name match on its own is the behaviour
  * this list had before it carried any.
  */
-const DESK_CHANNELS: SlackChannel[] = [
-  { name: 'truto',               id: 'C04D9HKDWAV' },
+/*
+ * NARROWED to the seventeen he named, and two came off.
+ *
+ * `#truto` (`C04D9HKDWAV`) and `#crisp-chats` (`C07351C8Z8E`) were on this list
+ * and are not on his. `#truto` is not a small removal — it was the third-busiest
+ * source of Slack rows on the box, ten of them at the time of the change — so it
+ * is worth being explicit that it went because he listed the channels he wants
+ * to hear from and that was not among them, not because anything about it was
+ * wrong.
+ *
+ * **This is the fetch scope, not a push filter, and that is a decision.** The
+ * ask was "Slack should only ping me from these channels", and the obvious place
+ * for that is `push.ts` — except no Slack message has ever produced a push.
+ * `push.ts` has exactly two internal triggers, a reminder he set and a due date
+ * he set; `ingest.ts` never calls `notify()` at all. So a filter there would be
+ * narrowing an empty set and would read as done while changing nothing. The
+ * layer where his sentence has an effect today is what Slack surfaces to Wake in
+ * the first place, which is this list.
+ *
+ * `Customer (private)` is on his list and is NOT here, because it could not be
+ * resolved. Searched against the connected token as both `public_channel` and
+ * `private_channel`, for `customer`, `customers` and `cust`: the only matches
+ * anywhere in the workspace are `#truto-customer-events` and
+ * `#elaichi-customer-events`, both public and neither plausibly the one he
+ * means. A private channel the token cannot see cannot be given an id, and
+ * guessing at one would silently point this list at the wrong conversation. It
+ * is left out and said out loud rather than quietly dropped — add it with
+ * `WAKE_SLACK_CHANNELS`, or name it here once its real name is known.
+ */
+export const DESK_CHANNELS: SlackChannel[] = [
   { name: 'clonepartner',        id: 'C09BRBLNXNH' },
   { name: 'sprinto',             id: 'C050LJAMFSN' },
   { name: 'maximor-truto',       id: 'C0A8B267EE9' },
@@ -168,11 +197,31 @@ const DESK_CHANNELS: SlackChannel[] = [
   { name: 'ex-superhawk-truto',  id: 'C0AACN2HYM7' },
   { name: 'truto-zen',           id: 'C07AVEG7ZHN' },
   { name: 'framer-clonepartner', id: 'C06UP5J326B' },
-  { name: 'crisp-chats',         id: 'C07351C8Z8E' },
 ]
 
+/**
+ * `WAKE_SLACK_CHANNELS`, which now takes an id beside a name if you have one.
+ *
+ * `truto, spendflo-truto` still works and is still the form a person types. But
+ * a name-only override silently gave up the half of the match that matters most:
+ * `isAllowedSlackChannel` reads the id first precisely because a renamed channel
+ * keeps its id and `parseSlackResults` substitutes an id for a name when the
+ * payload has no readable one — so a hit can arrive with a good id and a useless
+ * name, and an operator who narrowed the list by env had no way to catch it.
+ *
+ * So `spendflo-truto:C05CJ0CUV35` is accepted too, and the two forms mix freely
+ * in one variable. Anything after a second colon is ignored rather than treated
+ * as an id, because that is a typo and a wrong id is worse than none.
+ */
 const TYPED_CHANNELS: SlackChannel[] = str('WAKE_SLACK_CHANNELS')
-  .split(',').map(bareChannel).filter(Boolean).map(name => ({ name }))
+  .split(',')
+  .map(entry => {
+    const [rawName, rawId] = entry.split(':')
+    const name = bareChannel(rawName)
+    const id = (rawId ?? '').trim().toUpperCase()
+    return id ? { name, id } : { name }
+  })
+  .filter(c => !!c.name)
 
 export const SLACK_CHANNELS: SlackChannel[] =
   TYPED_CHANNELS.length ? TYPED_CHANNELS : DESK_CHANNELS

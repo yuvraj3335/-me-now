@@ -40,10 +40,35 @@ export type PushPayload = { title: string; body?: string; url?: string; tag?: st
  * anything else is counted and only dropped after repeated failure, so one
  * flaky network moment does not unsubscribe a phone.
  */
-async function deliver(p: PushPayload) {
+export type Delivery = { devices: number; delivered: number; dropped: number }
+
+async function deliver(p: PushPayload): Promise<Delivery> {
   ensureVapid()
   const subs = db.query<any, []>(`SELECT * FROM push_subs`).all()
   const body = JSON.stringify(p)
+  let delivered = 0
+  let dropped = 0
+
+  /*
+   * A send that reached nobody is said out loud.
+   *
+   * `push_subs` was empty on this deployment and had been for the whole life of
+   * the service — `POST /api/push/subscribe` has never been called, not once.
+   * Every part of the machinery downstream is healthy: the 30s tick runs, VAPID
+   * keys exist, `sw.js` is correct and deployed, and `notify()` wrote its rows.
+   * They just went to an empty list, silently: this function had no logging at
+   * all, so a zero-device delivery was indistinguishable from a successful one
+   * in the journal, and `POST /push/test` answered `{ sent: true, devices: 0 }`
+   * — which reads as "it works".
+   *
+   * That is why "notifications are not firing" went unexplained for so long. The
+   * cause is that no device ever completed the subscription; the *bug* is that
+   * nothing anywhere said so.
+   */
+  if (!subs.length) {
+    console.warn(`wake: push "${p.title}" reached no devices — nothing is subscribed`)
+    return { devices: 0, delivered: 0, dropped: 0 }
+  }
 
   await Promise.all(subs.map(async (s) => {
     try {
@@ -53,16 +78,42 @@ async function deliver(p: PushPayload) {
         { TTL: 12 * 3600 },
       )
       db.query(`UPDATE push_subs SET last_ok_at = ?, fail_count = 0 WHERE endpoint = ?`).run(now(), s.endpoint)
+      delivered++
     } catch (e: any) {
       const code = e?.statusCode
       if (code === 404 || code === 410) {
         db.query(`DELETE FROM push_subs WHERE endpoint = ?`).run(s.endpoint)
+        dropped++
       } else {
         db.query(`UPDATE push_subs SET fail_count = fail_count + 1 WHERE endpoint = ?`).run(s.endpoint)
         db.query(`DELETE FROM push_subs WHERE endpoint = ? AND fail_count > 8`).run(s.endpoint)
       }
+      console.warn(`wake: push to ${new URL(s.endpoint).host} failed (${code ?? 'no status'})`)
     }
   }))
+
+  return { devices: subs.length, delivered, dropped }
+}
+
+/** How many devices a push would reach right now. */
+export function pushDeviceCount(): number {
+  return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM push_subs`).get()!.n
+}
+
+/**
+ * Send one now, past the dedup table, and report what actually happened.
+ *
+ * `notify()` is the wrong shape for a test: it answers whether a *row* was
+ * created, which is a fact about the notifications table and not about whether
+ * a phone buzzed. A test button exists to answer the second question.
+ */
+export async function sendTestPush(): Promise<Delivery> {
+  return deliver({
+    title: 'Wake',
+    body: 'Notifications are working.',
+    kind: 'test',
+    tag: `test:${now()}`,
+  })
 }
 
 /**

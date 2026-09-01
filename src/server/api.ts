@@ -3,7 +3,7 @@ import { db, isTaskStatus, latestFinishedRuns, logEvent, now, taskStatus, uid } 
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
 import { fetchStatus, startFetch, isFetchScope } from './fetch'
-import { notify, runReminders, vapidPublicKey } from './push'
+import { notify, runReminders, sendTestPush, vapidPublicKey } from './push'
 import { CARD_PRIORITIES, CARD_STATUSES, type CardPriority, type CardStatus } from './sources/types'
 import { readThread, slackTsToMs } from './sources/slack'
 import {
@@ -1342,14 +1342,32 @@ api.post('/push/unsubscribe', async c => {
   return c.json({ ok: true })
 })
 
+/*
+ * The test says whether a device was actually woken, not whether a row was
+ * written.
+ *
+ * It used to call `notify()` and report its return value as `sent`. `notify()`
+ * answers a different question — whether this dedup key was new — so with an
+ * empty `push_subs` this route returned `{ sent: true, devices: 0 }`, which is
+ * two true facts arranged to read as "it works". On this deployment that is
+ * exactly what it did, every time, for the whole life of the service: nothing
+ * has ever been subscribed, and the button said it was fine.
+ *
+ * It also no longer writes a notification row. A test is not a thing that
+ * happened to him and has no business appearing in his notification list.
+ */
 api.post('/push/test', async c => {
-  const sent = await notify(`test:${now()}`, {
-    title: 'Wake',
-    body: 'Notifications are working.',
-    kind: 'test',
+  const r = await sendTestPush()
+  return c.json({
+    sent: r.delivered > 0,
+    devices: r.devices,
+    delivered: r.delivered,
+    reason: r.devices === 0
+      ? 'No device is subscribed to this Wake yet — turn notifications on, on the device you want them on.'
+      : r.delivered === 0
+        ? 'Every subscribed device refused the push. They may have been reinstalled, or had notification permission revoked.'
+        : null,
   })
-  const devices = db.query<Row, []>(`SELECT COUNT(*) AS n FROM push_subs`).get()!.n
-  return c.json({ sent, devices })
 })
 
 api.get('/push/status', c =>
