@@ -445,23 +445,45 @@ describe('what the reader does to a turn on its way to the page', () => {
   })
 
   /**
-   * Tool calls that never reach a turn still happened.
+   * Tool calls that never reach a turn still happened — and are not a turn.
    *
    * `pending` rides to the next turn that has prose in it, which is right while
    * the session keeps talking and wrong at the end of the file: a session
    * mid-run has called eight tools since its last sentence, and dropping them
    * is how a page watching live work shows nothing moving.
+   *
+   * The first fix pushed them in as a turn with no text, and the poll is what
+   * makes that wrong: the page asks `?after=<last turn ts>` every 3.5 seconds
+   * and appends, so a synthetic turn stamped with the newest record's time is
+   * newer on every poll and a page left open for an hour grew a thousand tool
+   * chips. State is replaced; messages are appended. So they are reported beside
+   * the turns, and this test pins that they are not *in* them.
    */
-  test('a session that is working shows that it is working', () => {
+  test('a session that is working reports what it is doing, outside the turns', () => {
     const r = parseSessionTurns(BUSY)
-    const last = r.turns[r.turns.length - 1]!
-    expect(last.role).toBe('assistant')
-    expect(last.text, 'a tool-only turn should carry no prose').toBe('')
-    expect(last.tools.length, 'the tools since the last sentence were dropped').toBeGreaterThan(0)
+    expect(r.window!.pending.length, 'the tools since the last sentence were dropped').toBe(6)
+    expect(r.turns.every(t => t.text.trim().length > 0), 'a turn with no text reached the list')
+      .toBe(true)
     // And the window is reported, so a page with nothing to draw can say which
     // kind of nothing it has rather than "nothing has been said yet".
     expect(r.window!.records).toBeGreaterThan(10)
     expect(r.window!.tools).toBe(6)
+  })
+
+  /**
+   * The accumulation, stated as the property rather than as the symptom.
+   *
+   * Polling twice with nothing new in between must produce the same page. Any
+   * shape where "what it is doing now" is carried as an appendable turn fails
+   * this, however the timestamp is chosen.
+   */
+  test('polling a busy session twice adds nothing', () => {
+    const first = parseSessionTurns(BUSY)
+    const edge = first.turns.length ? first.turns[first.turns.length - 1]!.ts : 0
+    const again = parseSessionTurns(BUSY, { after: edge })
+    expect(again.turns, 'a poll invented a turn out of unchanged tool work').toEqual([])
+    // The state is still reported, because it is still true.
+    expect(again.window!.pending.length).toBe(6)
   })
 
   test('the route carries the window to the page', async () => {

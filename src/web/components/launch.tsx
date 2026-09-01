@@ -1672,6 +1672,23 @@ function SkillPicker({
 
   const named = (id: string) => all.find(s => s.id === id)
 
+  const skillRow = (s: LaunchState['skills'][number]) => (
+    <PickRow
+      key={s.id}
+      label={s.name}
+      mono
+      // The refusal replaces the blurb rather than sitting beside it: on a
+      // 343px row there is one slot, and "you cannot use this here" beats a
+      // description of what it would have done.
+      blurb={outOfReach(s) ?? blurbOf(s)}
+      dim={!!outOfReach(s)}
+      on={selected.includes(s.id)}
+      onToggle={() => toggle(s.id)}
+      open={info === s.id}
+      onInfo={() => setInfo(v => (v === s.id ? null : s.id))}
+    />
+  )
+
   return (
     <section className="py-4">
       <div className="flex items-center gap-2 mb-2">
@@ -1730,24 +1747,27 @@ function SkillPicker({
         </div>
       ))}
 
-      <div className={NAME_GRID}>
-        {shown.map(s => (
-          <PickRow
-            key={s.id}
-            label={s.name}
-            mono
-            // The refusal replaces the blurb rather than sitting beside it: on a
-            // 343px row there is one slot, and "you cannot use this here" beats
-            // a description of what it would have done.
-            blurb={outOfReach(s) ?? blurbOf(s)}
-            dim={!!outOfReach(s)}
-            on={selected.includes(s.id)}
-            onToggle={() => toggle(s.id)}
-            open={info === s.id}
-            onInfo={() => setInfo(v => (v === s.id ? null : s.id))}
-          />
-        ))}
-      </div>
+      {/*
+        Two groups under one list, with the second one named.
+
+        Dimming was the first attempt and it does not survive a phone: below
+        `sm` the blurb column — where the reason lives — is not painted at all,
+        so a 60%-opacity slug beside a 100%-opacity slug is the only signal, and
+        at 390px it is no signal. A heading costs no row width, says the whole
+        thing in four words, and is the pattern this sheet already uses for the
+        voice row. It names the repository, because that is what the answer
+        depends on: the same skill is loadable in `truto` and not in `wake`.
+      */}
+      <div className={NAME_GRID}>{shown.filter(s => !outOfReach(s)).map(skillRow)}</div>
+
+      {shown.some(s => outOfReach(s)) && (
+        <>
+          <h4 className="text-eyebrow uppercase text-fg-mute mb-2 mt-4">
+            No session {cwd ? `in ${cwd.split('/').pop()}` : 'here'} can load these
+          </h4>
+          <div className={NAME_GRID}>{shown.filter(s => outOfReach(s)).map(skillRow)}</div>
+        </>
+      )}
 
       {/* The rest of the list, as a count rather than as a scrollbar. It says the
           number because the number is the fact being withheld, and it is the one

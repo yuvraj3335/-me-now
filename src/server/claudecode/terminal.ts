@@ -58,8 +58,8 @@ import {
 import { getRepo } from '../registry/scan'
 import { getSession, isSessionActive } from '../sources/claudeSessions'
 import {
-  DEFAULT_PERMISSION_MODE, resolveCwd, type PermissionMode,
-  DEFAULT_SESSION_MODEL, type SessionModel,
+  DEFAULT_PERMISSION_MODE, PERMISSION_MODES, resolveCwd, type PermissionMode,
+  DEFAULT_SESSION_MODEL, SESSION_MODELS, type SessionModel,
 } from './launch'
 
 /* ------------------------------- identity --------------------------------- */
@@ -178,6 +178,22 @@ export const terminalSocketPath = (id: string) => `/api/claude/terminals/${id}/s
  * asks it through a soft keyboard. "The brief is the first message the session
  * receives" is the requirement; a draft is not a message.
  */
+/**
+ * The most a brief may be, because `execve` has an opinion about it.
+ *
+ * A single argument is capped at `MAX_ARG_STRLEN` — 32 pages, so 131,072 bytes
+ * on every Linux this runs on — and the brief is one argument. Past that the
+ * exec fails with E2BIG, tmux reports it as "no reason given", and the operator
+ * gets "the session did not start" about a message he can see on his own screen.
+ *
+ * A packed brief is a few kilobytes and cannot reach this; `POST /sessions/new`
+ * takes free text and can. The bound is stated in characters rather than bytes
+ * on purpose — it is what the composer counts, so the refusal and the thing he
+ * is looking at are in the same units — and it is set well under the real limit
+ * so that a brief of multi-byte characters cannot cross it either.
+ */
+export const MAX_BRIEF_CHARS = 100_000
+
 export function claudeArgv(o: {
   sessionId: string
   resume: boolean
@@ -342,6 +358,11 @@ export type TerminalInfo = {
   cwd: string
   repo: string | null
   permissionMode: PermissionMode
+  /**
+   * The model it was started on, or `null` for a session that predates the
+   * option — which is not the same as `default`, and must not be shown as it.
+   */
+  model: SessionModel | null
   /** True when this was `--resume <id>` rather than a fresh `--session-id`. */
   resumed: boolean
   /** False means it was already running and we simply pointed the browser at it. */
@@ -368,13 +389,31 @@ export type TerminalInfo = {
  * same reasoning `liveSessions()` gives for reading Claude Code's own per-process
  * files instead of tracking sessions itself.
  */
+/*
+ * Eight fields, and two of them are Wake's own words written into tmux.
+ *
+ * `@wake-mode` and `@wake-model` are tmux user options, set on the session at
+ * `new-session` and read back here. They exist because this row used to *assert*
+ * `permissionMode: DEFAULT_PERMISSION_MODE` for every session tmux reported,
+ * whatever it had actually been started with — so a session started under
+ * `acceptEdits` was described as bypassing permissions on the one screen that is
+ * meant to say what it may do without asking. The comment there conceded the
+ * point and left the lie in place.
+ *
+ * Storing them in tmux rather than in a table keeps the rule this file is built
+ * on: tmux already holds the only copy of this state that can be right, a row
+ * saying "running" outlives a process that did not, and a second copy is a thing
+ * to reconcile on every boot. A user option lives and dies with the session it
+ * is set on, which is exactly the lifetime of the fact.
+ */
 const LIST_FORMAT = [
   '#{session_name}', '#{session_attached}', '#{window_width}',
   '#{window_height}', '#{session_created}', '#{session_path}',
+  '#{@wake-mode}', '#{@wake-model}',
 ].join('\t')
 
 function infoFrom(line: string): TerminalInfo | null {
-  const [name, attached, width, height, created, path] = line.split('\t')
+  const [name, attached, width, height, created, path, mode, model] = line.split('\t')
   const id = name ? sessionIdFromTmuxName(name) : null
   if (!id) return null
   const cwd = path ?? ''
@@ -383,11 +422,14 @@ function infoFrom(line: string): TerminalInfo | null {
     sessionId: id,
     cwd,
     repo: getRepo(cwd)?.name ?? null,
-    // What it is *running* under is a fact about the process, and the process is
-    // the authority on it — Wake's request is only what it asked for. The
-    // Sessions list already reads the real mode off the transcript
-    // (`permissionMode` there), so this is not the place to make a second claim.
-    permissionMode: DEFAULT_PERMISSION_MODE,
+    // What Wake started it with, read back off the session rather than assumed.
+    // A session started before this option existed reports nothing, and the
+    // default is then a guess rather than a claim — which is what it always was,
+    // except that now it is only a guess in the one case where it has to be.
+    permissionMode: PERMISSION_MODES.includes(mode as PermissionMode)
+      ? mode as PermissionMode
+      : DEFAULT_PERMISSION_MODE,
+    model: SESSION_MODELS.includes(model as SessionModel) ? model as SessionModel : null,
     resumed: false,
     started: false,
     briefSent: false,
@@ -639,6 +681,18 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
   const cols = size(input.cols, TERMINAL_COLS, 500)
   const rows = size(input.rows, TERMINAL_ROWS, 300)
 
+  // Refused here, in characters he can count, rather than at `execve` — which
+  // answers E2BIG, which tmux reports as "no reason given", which arrives as
+  // "the session did not start" about a message on his own screen.
+  if (input.brief && input.brief.length > MAX_BRIEF_CHARS) {
+    return {
+      status: 400,
+      error: `that brief is ${input.brief.length.toLocaleString()} characters and a session's first message ` +
+        `cannot be more than ${MAX_BRIEF_CHARS.toLocaleString()} — the operating system will not carry it. ` +
+        'Send the short version and attach the rest as context.',
+    }
+  }
+
   /* --- resuming a session that exists ------------------------------------ */
   if (input.sessionId) {
     const id = String(input.sessionId).toLowerCase()
@@ -790,6 +844,13 @@ function spawn(o: {
   ])
   if (!r.ok) return { error: `tmux refused to start the session: ${r.err || 'no reason given'}`, status: 409 }
 
+  // Written after the session exists, and not fatal if it fails: these are how
+  // the terminal describes itself later, and a session that runs without them
+  // is a session Wake can only describe less precisely. Both values come from
+  // closed lists, so there is nothing here a caller chose the spelling of.
+  tmux(['set-option', '-t', name, '@wake-mode', o.mode])
+  tmux(['set-option', '-t', name, '@wake-model', o.model])
+
   const started = getTerminal(o.id)
   if (!started) {
     return {
@@ -800,6 +861,7 @@ function spawn(o: {
   return {
     ...started,
     permissionMode: o.mode,
+    model: o.model,
     resumed: o.resume,
     started: true,
     briefSent: !!(o.brief && o.brief.trim()),

@@ -26,8 +26,8 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  claudeArgv, derivedSessionId, isSessionId, openTerminal, resolveSessionCwd,
-  sessionIdFromTmuxName, terminalRoute, terminalSocketPath, tmuxNameFor,
+  claudeArgv, derivedSessionId, getTerminal, isSessionId, MAX_BRIEF_CHARS, openTerminal,
+  resolveSessionCwd, sessionIdFromTmuxName, terminalRoute, terminalSocketPath, tmuxNameFor,
 } from '../src/server/claudecode/terminal'
 import {
   buildPack, parseSessionModel, renderPack, SESSION_MODELS,
@@ -593,5 +593,61 @@ describe('one pack, one session, however many times Open is pressed', () => {
     } finally {
       tmux(['kill-session', '-t', name])
     }
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * The two things a terminal knows about itself.
+ * ------------------------------------------------------------------------- */
+
+describe('what a running terminal can say about itself', () => {
+  /**
+   * `permissionMode` on a listed terminal used to be a constant.
+   *
+   * `infoFrom` asserted `DEFAULT_PERMISSION_MODE` for every session tmux
+   * reported, whatever it had been started with, and the comment beside it
+   * conceded the point and left it there. So a session started under
+   * `acceptEdits` was described as bypassing permissions on the one screen whose
+   * job is to say what it may do without asking. tmux user options are where it
+   * belongs: they live and die with the session, which is the lifetime of the
+   * fact, and they keep this file's rule that tmux holds the only copy.
+   */
+  test('the mode and the model are read back off the session', () => {
+    const repo = join(root, 'truto')
+    const id = derivedSessionId('pack:mode-readback')
+    const name = tmuxNameFor(id)!
+    const tmux = (args: string[]) =>
+      Bun.spawnSync(['tmux', '-L', process.env.WAKE_TMUX_SOCKET!, ...args], { stdout: 'pipe', stderr: 'pipe' })
+
+    if (tmux(['new-session', '-d', '-s', name, '-c', repo, 'sleep', '30']).exitCode !== 0) return
+    try {
+      tmux(['set-option', '-t', name, '@wake-mode', 'acceptEdits'])
+      tmux(['set-option', '-t', name, '@wake-model', 'opus'])
+      const t = getTerminal(id)!
+      expect(t, 'the terminal was not listed').toBeTruthy()
+      expect(t.permissionMode, 'the mode was asserted rather than read').toBe('acceptEdits')
+      expect(t.model).toBe('opus')
+    } finally {
+      tmux(['kill-session', '-t', name])
+    }
+  })
+
+  /**
+   * A brief bigger than one argv element, refused in units he can count.
+   *
+   * `MAX_ARG_STRLEN` is 128KB on Linux and the brief is one argument, so past
+   * that `execve` answers E2BIG, tmux reports "no reason given", and the
+   * operator is told the session did not start about a message he can see on his
+   * own screen. A packed brief is a few kilobytes; `POST /sessions/new` takes
+   * free text and can reach it.
+   */
+  test('a brief too large to exec is refused by size, not by tmux', () => {
+    const r = openTerminal({ cwd: join(root, 'truto'), brief: 'x'.repeat(MAX_BRIEF_CHARS + 1) })
+    expect('error' in r).toBe(true)
+    if (!('error' in r)) return
+    expect(r.status).toBe(400)
+    expect(r.error).toContain('cannot be more than')
+    // And it names the number in the same units the composer counts in.
+    expect(r.error).toContain(MAX_BRIEF_CHARS.toLocaleString())
   })
 })

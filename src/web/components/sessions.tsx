@@ -652,42 +652,34 @@ function Row({
           aria-hidden
         />
         <span className="min-w-0 grow">
-          <span className="flex items-center gap-1.5 min-w-0">
-            <span className="min-w-0 text-base text-fg truncate" title={s.title}>{s.title}</span>
-            {/*
-              A `claude -p` run, said on the row rather than discovered on the
-              page after it.
-
-              Thirteen sessions were live on this box at once and eight were
-              headless agent runs. They are genuinely running and genuinely his,
-              so hiding them would be the same class of lie in the other
-              direction — but there is no terminal to attach to and no composer
-              to type into, and the only place that used to be said was the
-              refusal that arrives after the tap. One word on the row is the
-              whole fix.
-            */}
-            {s.headless && (
-              <span className="shrink-0 text-eyebrow uppercase text-fg-mute border border-edge
-                               rounded-chip px-1.5 py-px leading-none">
-                headless
-              </span>
-            )}
-            {/* Said in a word as well as in the dot, because the dot is 8px and
-                the difference between "still going" and "over" is the first
-                thing this row has to carry. */}
-            {s.live === false && (
-              <span className="shrink-0 text-eyebrow uppercase text-fg-mute border border-edge
-                               rounded-chip px-1.5 py-px leading-none">
-                ended
-              </span>
-            )}
-          </span>
+          <span className="block text-base text-fg truncate" title={s.title}>{s.title}</span>
           {/* The last thing said, clipped to one line. It is a whole sentence
               of somebody's half-finished thought, and one line of it is what
               tells this session from the other three in the same repository —
-              which is the only job this row has. */}
-          {s.lastPrompt && (
-            <span className="block mt-0.5 text-sm text-fg-mute truncate">{s.lastPrompt}</span>
+              which is the only job this row has.
+
+              The state word rides in front of it rather than beside the title,
+              and that is a measured correction: as a bordered chip on the title
+              line it took ~90px on a 390px screen, and eight of the nine
+              sessions running on this box are headless, so it was on almost
+              every row — clipping the one string that actually distinguishes
+              them. Here it costs the title nothing and sits with the other
+              quiet fact, which is what it is. */}
+          {(s.headless || s.live === false || s.lastPrompt) && (
+            <span className="block mt-0.5 text-sm text-fg-mute truncate">
+              {/*
+                A `claude -p` run, said on the row rather than discovered on the
+                page after it. They are genuinely running and genuinely his, so
+                hiding them would be the same class of lie in the other
+                direction — but there is no terminal to attach to and no
+                composer to type into, and the only place that was said was the
+                refusal that arrives after the tap.
+              */}
+              {s.headless && <span className="text-fg-dim">headless</span>}
+              {s.live === false && <span className="text-fg-dim">ended</span>}
+              {(s.headless || s.live === false) && s.lastPrompt && ' · '}
+              {s.lastPrompt}
+            </span>
           )}
         </span>
         <span className="shrink-0 text-sm text-fg-mute tnum">{ago(s.lastTs)}</span>

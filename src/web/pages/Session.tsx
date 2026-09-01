@@ -594,6 +594,7 @@ export function SessionPage({ id }: { id: string | null }) {
 
         <div className="flex flex-col gap-3">
           {shown.map(t => <Turn key={`${t.role}:${t.ts}:${t.text.length}`} turn={t} />)}
+          <Working window={window_} active={active} />
         </div>
       </div>
 
@@ -749,6 +750,44 @@ export function SessionPage({ id }: { id: string | null }) {
 }
 
 /**
+ * What it is doing right now, under the last thing it said.
+ *
+ * One line that gets replaced rather than a turn that gets appended, and the
+ * difference is the whole of it. Tool calls made since the last sentence used to
+ * be dropped on the floor, so a page watching a session work showed nothing
+ * moving for minutes at a time; the first attempt at fixing that pushed them in
+ * as a turn with no text, and because the poll asks `?after=<last turn ts>` and
+ * appends, a page left open accumulated a fresh chip every 3.5 seconds. State
+ * belongs at the bottom, once, and it disappears the moment the session speaks.
+ *
+ * `active` gates it because a finished session's trailing tools are not
+ * something it is still doing — they are the last thing it did before it
+ * stopped, and a spinner over them would be the page inventing a live process.
+ */
+function Working({ window: w, active }: { window: TurnWindow | null; active: boolean }) {
+  const [open, setOpen] = useState(false)
+  const names = w?.pending ?? []
+  if (!active || !names.length) return null
+  return (
+    <div className="flex justify-start">
+      <button
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="hit relative inline-flex items-start gap-2 max-w-[80%] min-w-0 text-left
+                   text-sm text-fg-mute hover:text-fg-dim transition-colors duration-100"
+      >
+        <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin" aria-hidden />
+        <span className="min-w-0">
+          {open
+            ? <span className="font-mono break-words">{names.join(' · ')}</span>
+            : `Working — ${names.length} tool${names.length === 1 ? '' : 's'} since it last said anything`}
+        </span>
+      </button>
+    </div>
+  )
+}
+
+/**
  * An empty conversation, saying which kind of empty it is.
  *
  * There are three and they used to share a sentence. A session that has never
@@ -809,16 +848,10 @@ function Turn({ turn }: { turn: SessionTurn }) {
           slab — but the bubble itself is now a piece of the material rather
           than a rectangle of `ink-800`, which is the row-hover token and made
           every message I sent look like a row somebody was pointing at. */}
-      {/* A turn with tools and no prose is real and is drawn as the chip
-          alone: it is the session working between two sentences, and the
-          padded bubble it used to get was an empty grey box with a number in
-          it. `text` is allowed to be empty — see `SessionTurn`. */}
-      <div className={`max-w-[80%] min-w-0 ${mine && turn.text ? 'glass-raise rounded-panel px-3 py-2' : ''}`}>
-        {turn.text && (
-          <div className={`text-base leading-[1.7] ${mine ? 'text-fg' : 'text-fg-dim'}`}>
-            <Prose text={turn.text} />
-          </div>
-        )}
+      <div className={`max-w-[80%] min-w-0 ${mine ? 'glass-raise rounded-panel px-3 py-2' : ''}`}>
+        <div className={`text-base leading-[1.7] ${mine ? 'text-fg' : 'text-fg-dim'}`}>
+          <Prose text={turn.text} />
+        </div>
         <Tools names={turn.tools} />
       </div>
     </div>

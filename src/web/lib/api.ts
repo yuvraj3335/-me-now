@@ -304,14 +304,6 @@ export const actions = {
  */
 export type SessionTurn = {
   role: 'user' | 'assistant'
-  /**
-   * What was said. Empty is legal and means "only tools happened here".
-   *
-   * A turn that is nothing but tool calls used to be dropped, and its tools
-   * with it — so a session that had been working for the whole window rendered
-   * as a blank page. `Turn` draws the chip alone for these, which is the honest
-   * picture of what happened.
-   */
   text: string
   ts: number
   tools: string[]
@@ -330,6 +322,16 @@ export type TurnWindow = {
   ofBytes: number
   records: number
   tools: number
+  /**
+   * Tools called since the last thing anybody said — what it is doing *now*.
+   *
+   * Deliberately not a turn. The page polls `?after=<last turn ts>` every 3.5
+   * seconds and appends whatever comes back, so a synthetic turn stamped with
+   * the newest record's time is newer on every poll: the first version of this
+   * accumulated a fresh tool chip every few seconds for as long as the page was
+   * open. State gets replaced; messages get appended, and this is state.
+   */
+  pending: string[]
 }
 
 /**

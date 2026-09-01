@@ -678,7 +678,10 @@ export function parseSessionTurns(
     found: true,
     cwd: read.cwd,
     turns: read.turns,
-    window: { bytes: budget, ofBytes: read.size, records: read.records, tools: read.tools },
+    window: {
+      bytes: budget, ofBytes: read.size, records: read.records,
+      tools: read.tools, pending: read.pending,
+    },
   }
 }
 
@@ -699,17 +702,28 @@ export type TurnWindow = {
   records: number
   /** Tool calls seen in the window. */
   tools: number
+  /**
+   * Tools called since the last thing anybody said — the session's state now.
+   *
+   * Not a turn, and deliberately not in `turns`: a turn is a thing that was said
+   * and this is a thing that is happening, so it is replaced on each read rather
+   * than appended to a list. See `readWindow`.
+   */
+  pending: string[]
 }
 
 function readWindow(
   hit: SessionFile, budget: number, after: number, limit: number,
-): { ok: boolean; size: number; cwd?: string; turns: SessionTurn[]; records: number; tools: number } {
+): {
+  ok: boolean; size: number; cwd?: string; turns: SessionTurn[]
+  records: number; tools: number; pending: string[]
+} {
   let size = 0
   try { size = statSync(hit.path).size } catch { /* the read below reports it */ }
 
   let text: string
   try { text = readTail(hit.path, budget) } catch {
-    return { ok: false, size, turns: [], records: 0, tools: 0 }
+    return { ok: false, size, turns: [], records: 0, tools: 0, pending: [] }
   }
 
   const turns: SessionTurn[] = []
@@ -762,20 +776,24 @@ function readWindow(
   }
 
   /*
-   * Tool calls that never reached a turn still happened.
+   * Tool calls that never reached a turn still happened — but they are not a turn.
    *
    * `pending` rides to the next turn that has prose in it, which is right while
    * the session keeps talking and wrong at the end of the file: a session that
    * is mid-run has called eight tools since its last sentence, and dropping
-   * those on the floor is how a page that is watching live work shows nothing
-   * moving. It is emitted as a turn with no text — the reader draws it as the
-   * tools chip alone, which is exactly what it is.
+   * those is how a page watching live work shows nothing moving.
+   *
+   * The first attempt at this pushed them as a turn with no text, and that was
+   * wrong in a way only the poll reveals. The page asks `?after=<last turn ts>`
+   * every 3.5 seconds and appends what comes back; a synthetic turn stamped with
+   * the newest record's timestamp is newer on every single poll, so a session
+   * left open for an hour accumulated a thousand tool chips. It is not a message
+   * and it does not belong in a list of messages: it is the session's *current*
+   * state, which is one thing that gets replaced rather than many things that
+   * accumulate. So it is reported beside the turns and the page draws it once,
+   * at the bottom.
    */
-  if (pending.length && lastTs > after) {
-    turns.push({ role: 'assistant', text: '', ts: lastTs, tools: pending })
-  }
-
-  return { ok: true, size, cwd, turns: turns.slice(-limit), records, tools }
+  return { ok: true, size, cwd, turns: turns.slice(-limit), records, tools, pending }
 }
 
 /**
