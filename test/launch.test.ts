@@ -63,11 +63,42 @@ describe('templates', () => {
     }
   })
 
-  test('every template tells the session not to ask for what is already packed', () => {
-    // The point of packing context is that nothing has to be re-typed.
-    for (const t of TEMPLATES.filter(x => x.id !== 'continue-session')) {
-      expect(t.instruction.toLowerCase(), t.id).toContain('re-paste')
+  /*
+   * AMENDED, and the amendment is the decision.
+   *
+   * This used to require every template to carry "do not ask me to re-paste
+   * any of it" in its own text. Nine of them did, identically, for 220
+   * characters each — inside a budget seven of them were within six characters
+   * of spending. And a typed instruction *replaces* the template's, so the one
+   * brief most likely to need the clause, the hand-written one, was the only
+   * brief that never got it.
+   *
+   * It lives in `renderPack` now. The test that matters is that it reaches
+   * every brief, including a brief with no template's words in it at all.
+   */
+  test('no template repeats the shared clause; the brief says it once', () => {
+    for (const t of TEMPLATES) {
+      expect(t.instruction.toLowerCase(), `${t.id} still carries the shared clause`)
+        .not.toContain('re-paste')
     }
+
+    const built = buildPack({ template: 'blank', items: [] })
+    if ('error' in built) throw new Error(built.error)
+    expect(built.firstMessage.split('re-paste').length - 1, 'said more than once').toBe(1)
+  })
+
+  test('a hand-typed instruction still gets the shared rules', () => {
+    // The case the old shape could not cover: nothing of the template's own
+    // words survives, and every one of these rules still has to.
+    const built = buildPack({
+      template: 'blank', items: [], instruction: 'Find out why the sync stopped.',
+    })
+    if ('error' in built) throw new Error(built.error)
+    const body = built.firstMessage
+    expect(body).toContain('Find out why the sync stopped.')
+    expect(body.toLowerCase()).toContain('re-paste')
+    expect(body).toContain('work in it')
+    expect(body, 'the hedge rule did not reach a typed brief').toContain('Where you are not certain')
   })
 
   test('skills are named, not inlined', () => {
@@ -512,7 +543,33 @@ describe('quoted provider text cannot break out of its fence', () => {
     if ('error' in built) throw new Error(built.error)
     const body = readFileSync(built.packPath, 'utf8')
     expect(body.length).toBeLessThan(PER_ITEM_QUOTE_CHARS + 4_000)
-    expect(body).toContain('Wake cut this quote')
+    expect(body).toContain('Wake cut')
+  })
+
+  /*
+   * The cut keeps both ends, and this is the decision rather than the arithmetic.
+   *
+   * `sessionExcerpt` keeps the *last* 4,000 characters of a transcript, because
+   * where a conversation got to is the only reason to attach one. The quote clip
+   * then kept the *first* 2,000 of those — so a `Continue earlier work` brief
+   * carried the middle of the conversation and the last word of it never
+   * travelled. A head-only cut is wrong for every conversational object Wake
+   * packs; keeping both ends is right for all of them, and the size of the gap
+   * is stated so the receiving session can ask for what it is missing.
+   */
+  test('a long quote keeps its end as well as its beginning', () => {
+    const excerpt = `THE-OPENING-LINE\n${'filler filler filler\n'.repeat(600)}\nTHE-LAST-WORD`
+    expect(excerpt.length).toBeGreaterThan(PER_ITEM_QUOTE_CHARS * 3)
+    const built = buildPack({
+      template: 'continue-session',
+      title: 'Where it got to',
+      items: [{ kind: 'session', ref: 's1', excerpt }],
+    })
+    if ('error' in built) throw new Error(built.error)
+    const body = readFileSync(built.packPath, 'utf8')
+    expect(body).toContain('THE-OPENING-LINE')
+    expect(body, 'the end of the conversation did not survive the cut').toContain('THE-LAST-WORD')
+    expect(body).toMatch(/Wake cut [\d,]+ characters out of the middle/)
   })
 })
 
@@ -589,10 +646,19 @@ describe('templates are multi-select', () => {
 
 const MAX_INSTRUCTION_CHARS = 1_200
 
-/** Roles, not tools. A template that names none is a paragraph, not a brief. */
-const ROLES = [
-  'architect', 'senior engineer', 'UI subagent', 'UX subagent', 'designer', 'QA lead',
-]
+/**
+ * AMENDED. The old list was job titles — architect, senior engineer, QA lead —
+ * and a template had to name one of them.
+ *
+ * The casting was doing one useful thing and one decorative one. It split the
+ * work into questions that get answered separately, and it dressed them up as
+ * people. The split is what earns the characters, and the clause that makes the
+ * split real was never written down: a subagent that reads the first one's
+ * conclusion is an echo, not a second opinion. So the requirement moved from
+ * "names a role" to "says the parts run independently", which is the thing that
+ * was actually being asked for.
+ */
+const INDEPENDENCE = "none reading another's answer"
 
 describe('the instructions fit in a link', () => {
   test('no instruction exceeds the per-template cap', () => {
@@ -616,12 +682,50 @@ describe('the instructions fit in a link', () => {
 })
 
 describe('the instructions direct the work', () => {
-  test('every template but the blank one names a subagent role', () => {
+  test('every template but the blank one splits the work', () => {
     // `blank` is "just the objects and your own instruction" — putting process
     // into it would be putting a template into the template-less option.
     for (const t of TEMPLATES.filter(x => x.id !== 'blank')) {
-      const named = ROLES.filter(r => t.instruction.toLowerCase().includes(r.toLowerCase()))
-      expect(named.length, `${t.id} names no subagent role`).toBeGreaterThan(0)
+      expect(t.instruction, `${t.id} names no subagents`).toContain('SUBAGENTS')
+    }
+  })
+
+  test('an investigation says its subagents do not read each other', () => {
+    // The whole value of the split. Three subagents that each read the last
+    // one's answer are one opinion stated three times, and the template that
+    // forgets to say so is the template that gets one.
+    const shared = TEMPLATES.filter(t =>
+      (t.kind ?? 'investigation') === 'investigation' &&
+      !['blank', 'continue-session'].includes(t.id))
+    expect(shared.length).toBeGreaterThan(8)
+    for (const t of shared) {
+      expect(t.instruction, `${t.id} lets its subagents read each other`).toContain(INDEPENDENCE)
+    }
+  })
+
+  test('an investigation puts somebody on being wrong', () => {
+    /*
+     * One of the parallel questions is always adversarial, and that is not
+     * decoration. Every one of these jobs ends in something he acts on — a
+     * reply sent to a customer, a merge, a mapping — and the failure that costs
+     * most is a confident wrong answer that nobody was asked to attack.
+     */
+    const adversarial = /falsif|argues (the|we)|wrong rather than|should not (do it|fix it)|are wrong|smaller version|test is wrong|not be a bug/i
+    /*
+     * The exclusions are the templates whose split is two questions rather than
+     * three, and where the adversary is elsewhere in the instruction instead: in
+     * `slack-thread` and `mail-thread` it is "name the gap" and "anything
+     * unverified goes in as a question", and in `account-health` it is "say
+     * plainly whether reauthorizing fixes it or merely repeats it". A rule that
+     * demanded a third subagent from a two-question job would be buying the
+     * shape rather than the property.
+     */
+    const shared = TEMPLATES.filter(t =>
+      (t.kind ?? 'investigation') === 'investigation' &&
+      !['blank', 'continue-session', 'mail-thread', 'slack-thread', 'account-health'].includes(t.id))
+    expect(shared.length).toBeGreaterThan(7)
+    for (const t of shared) {
+      expect(adversarial.test(t.instruction), `${t.id} has nobody arguing against it`).toBe(true)
     }
   })
 
@@ -686,7 +790,7 @@ describe('how the brief says to run it', () => {
     if ('error' in built) throw new Error(built.error)
     expect(built.permissionMode).toBe('bypassPermissions')
     const body = readFileSync(built.packPath, 'utf8')
-    expect(body).toContain('## How to run this')
+    expect(body).toContain('## How to work from this')
     expect(body).toContain('Do not stop to ask permission')
   })
 

@@ -31,7 +31,7 @@ import { PACK_DIR, WORKSPACE_ROOT } from '../env'
 import { redact } from '../redact'
 import { getRepo } from '../registry/scan'
 import { getSession } from '../sources/claudeSessions'
-import { listSkills } from '../skills/catalog'
+import { listSkills, skillReaches, type Skill } from '../skills/catalog'
 import { handoffFor, type Handoff } from './handoff'
 import { getTemplate, TEMPLATES, type SlotKind, type Template } from './templates'
 import { formatUntrusted, inspect } from '../untrusted'
@@ -306,12 +306,72 @@ function renderItem(i: number, it: PackItemInput): string[] {
 
   const quoted = stripNestedBrief(it.excerpt?.trim() ?? '').trim()
   if (quoted) {
-    const clipped = quoted.length > PER_ITEM_QUOTE_CHARS
-      ? `${quoted.slice(0, PER_ITEM_QUOTE_CHARS)}\n…[Wake cut this quote at ${PER_ITEM_QUOTE_CHARS} characters so one attachment cannot fill the link]`
-      : quoted
-    lines.push(formatUntrusted(KIND_LABEL[it.kind] ?? it.kind, clipped), '')
+    lines.push(
+      formatUntrusted(KIND_LABEL[it.kind] ?? it.kind, fitQuote(quoted), { note: WORTH_OF[it.kind] }),
+      '',
+    )
   }
   return lines
+}
+
+/**
+ * What a quote is worth, said inside the fence rather than only above it.
+ *
+ * The Context preamble already says "leads to verify, not findings" once, at the
+ * top, before N fenced blocks. That is the right place to say it and the wrong
+ * place to say it *only*: the sentence a model is reading when it decides
+ * whether to believe something is the sentence next to the something, and by the
+ * fourth block the preamble is two thousand characters upstream.
+ *
+ * The wording differs by kind because the failure differs by kind. A teammate's
+ * Slack guess arrives looking exactly like a diagnosis; a Sentry issue's own
+ * grouping is a machine's opinion about which errors are one error; a PR
+ * description says what the author *meant* to do. Nothing is said about a note
+ * or a task — those are the operator's own words, and telling a session to
+ * distrust the person who wrote the brief is noise.
+ */
+const WORTH_OF: Partial<Record<SlotKind, string>> = {
+  slack: 'Somebody thinking out loud about the problem, not a diagnosis of it. Any cause named in here is a lead to reproduce.',
+  mail: 'What was said to a customer, which is not necessarily what is true now. Check anything it promises against the live state.',
+  github: "The author's account of their own change. Read the diff before you believe it.",
+  sentry: "Sentry's own grouping and counts, which are a machine's opinion about which errors are one error.",
+  notion: 'A document, which was true when it was written.',
+  session: 'An earlier conversation. What it concluded was true of the repository at that moment; check the repository for now.',
+}
+
+/**
+ * One quote, cut in the middle rather than at the end.
+ *
+ * The old cut was `slice(0, 2000)`, which is the wrong end for almost everything
+ * Wake packs — and it was the wrong end *twice* on the path that matters most.
+ * `sessionExcerpt` already keeps the last 4,000 characters of a transcript,
+ * because "where did this get to" is the only reason a session is ever attached
+ * to a brief; this then kept the first 2,000 of those. So a `Continue earlier
+ * work` brief quoted characters −4,000 to −2,000 of the conversation — the
+ * middle — and announced one of the two cuts. The most recent exchange, which is
+ * the entire content of the request, never travelled at all.
+ *
+ * A Slack thread's real question is usually its last message; a mail thread's is
+ * its last reply; a stack trace's is its first frame; a pull request's is its
+ * description. No single end serves all of those, and choosing per kind would
+ * put a table of editorial guesses in the packer. Keeping both ends does serve
+ * all of them, and it is the shape a person skim-reads anyway: what this is,
+ * then where it got to, with the gap stated in characters so the receiving
+ * session knows exactly how much it has not been shown and can ask.
+ */
+export function fitQuote(text: string, max = PER_ITEM_QUOTE_CHARS): string {
+  if (text.length <= max) return text
+  const note = (n: number) =>
+    `\n\n…[Wake cut ${n.toLocaleString()} characters out of the middle of this quote to keep one ` +
+    `attachment from filling the brief. Ask me for the rest if the gap matters.]\n\n`
+
+  // The tail gets the larger share: the end of a thread is where the question
+  // usually is, and the head only has to establish what the thing is.
+  const budget = max - note(text.length).length
+  if (budget < 200) return `${text.slice(0, max)}\n…[Wake cut this quote at ${max.toLocaleString()} characters]`
+  const head = Math.floor(budget * 0.35)
+  const tail = budget - head
+  return `${text.slice(0, head)}${note(text.length - budget)}${text.slice(-tail)}`
 }
 
 /** The session a brief is about, as the brief needs to state it. */
@@ -322,18 +382,36 @@ export type PackSession = {
   lastPrompt?: string | null
 }
 
+/**
+ * One named skill, as the brief has to state it.
+ *
+ * The name is what a session acts on. `when` is the line that turns a list of
+ * orders into a routing decision it can make itself — "load these three" tells a
+ * session nothing about which one this job wants, and it will load all three or
+ * none. The text is the skill's own `whenToUse`, clipped, because Wake indexes
+ * it already and a curated sentence beats a slug.
+ */
+export type PackSkill = { name: string; when?: string | null }
+
+/** A skill the brief was asked to name and deliberately did not. */
+export type DroppedSkill = { name: string; why: string }
+
 export function renderPack(p: {
   template: string
   templates: string[]
   title: string
   cwd: string
   repo: string | null
-  skills: string[]
+  skills: Array<string | PackSkill>
   instruction: string
+  /** The voice template's own text, if one was selected. Never in `instruction`. */
+  voice?: string | null
   items: PackItemInput[]
   createdAt: number
   permissionMode?: PermissionMode
   session?: PackSession | null
+  /** Skills the chosen directory cannot reach, and why. */
+  droppedSkills?: DroppedSkill[]
 }): string {
   const mode = p.permissionMode ?? DEFAULT_PERMISSION_MODE
   const lines: string[] = [
@@ -348,9 +426,28 @@ export function renderPack(p: {
       ? `A brief from Wake, my personal command centre. It concerns the **${p.repo}** repository, checked out at \`${p.cwd}\`.`
       : 'A brief from Wake, my personal command centre. It does not concern one specific repository.',
     '',
-    '## How to run this',
+    /*
+     * The rules that are true of every brief, said once, here.
+     *
+     * Two of these three used to be the first 220 characters of nine separate
+     * template instructions — the same sentence, nine times, inside a
+     * 1,200-character budget that seven of them were within six characters of
+     * spending. That is eighteen per cent of every template gone on duplication,
+     * and worse: a typed instruction *replaces* the template's, so the one brief
+     * most likely to need "do not ask me to re-paste this" — the hand-written
+     * one — was the only brief that never carried it.
+     *
+     * The third is new here and was previously in `qa-branch` alone: "not
+     * certain? say so". A confident wrong finding costs more than a hedged right
+     * one in every job on this list, not only in a QA run, and it is the single
+     * cheapest instruction in this file per character.
+     */
+    '## How to work from this',
     '',
-    PERMISSION_MODE_WORDS[mode],
+    '- Every identifier you need is below. Do not ask me to re-paste any of it — packing the context instead of typing a prompt is the whole point of this file.',
+    '- If you have a checkout of the repository named above, work in it. If not, reason from what is here and tell me what you would need.',
+    '- Where you are not certain, say so in the same sentence as the claim, and say what would settle it. A hedged right answer is worth more to me than a confident wrong one.',
+    `- ${PERMISSION_MODE_WORDS[mode]}`,
     '',
   ]
 
@@ -392,18 +489,74 @@ export function renderPack(p: {
     '',
   )
 
-  if (p.skills.length) {
+  /*
+   * Voice is a section, not a paragraph of the orders.
+   *
+   * It used to be concatenated into `## What I need` alongside the
+   * investigations, in the order the rows happened to be clicked — so selecting
+   * the Humanizer first put a paragraph about sentence length above `Customer
+   * incident`, where a session reads it as step one. The template worked around
+   * its own position by opening with three sentences declaring what it governed,
+   * which is a workaround paying rent on a structural mistake.
+   *
+   * Here it is structural: whatever order the rows were clicked in, the voice
+   * lands last, under a heading that says what it is for. Its instruction got
+   * those three sentences back as budget, and the brief reads in the order the
+   * work happens — find out, then write it down.
+   */
+  if (p.voice?.trim()) {
     lines.push(
-      '## Skills to load first',
+      '## How the reply should read',
       '',
-      // The bare name, not the catalog-prefixed id. "B/" is Wake's own index
-      // talking; a session has never heard of it and cannot act on it.
-      `${p.skills.map(s => `\`${s.split('/').pop()}\``).join(', ')}`,
+      'This governs the wording of what I will send, and nothing else. It replaces none of the above.',
       '',
-      'These are skill names, not file paths — load them from your own catalogs before starting. ' +
-      'They are named rather than inlined so this brief stays small enough to travel in a link.',
+      p.voice.trim(),
       '',
     )
+  }
+
+  const skills = p.skills.map(s => (typeof s === 'string' ? { name: s } : s))
+  if (skills.length || p.droppedSkills?.length) {
+    lines.push('## Skills to load first', '')
+    if (skills.length) {
+      lines.push(
+        // The bare name, not the catalog-prefixed id. "B/" is Wake's own index
+        // talking; a session has never heard of it and cannot act on it.
+        //
+        // One per line with what it is for, rather than a comma-separated row of
+        // slugs. A list of three names is an instruction to load three things; a
+        // list of three names with a reason each is a routing decision the
+        // session can make, which is the difference between reading one skill
+        // and reading all of them.
+        ...skills.map(s => {
+          const bare = s.name.split('/').pop()!
+          return s.when ? `- \`${bare}\` — ${s.when}` : `- \`${bare}\``
+        }),
+        '',
+        'These are skill names, not file paths. Load them from your own catalogs before starting. ' +
+        'They are named rather than inlined so this brief stays small; if a name does not resolve, say so rather than guessing at a substitute.',
+        '',
+      )
+    }
+    if (p.droppedSkills?.length) {
+      /*
+       * Naming a skill the session cannot load is worse than naming none.
+       *
+       * Wake indexes three trees; a Claude Code session resolves a name from
+       * `~/.claude/skills` and from `<cwd>/.claude/skills`. Fourteen of the
+       * thirty-two skills indexed on this machine are in neither, and nine more
+       * are project skills of one repository — so a brief could, and did, order
+       * a session to load something that does not exist for it. The session's
+       * options at that point are to give up quietly or to load something with a
+       * similar name, and it was measured doing the second.
+       */
+      lines.push(
+        `A session running in \`${p.cwd}\` cannot load ${p.droppedSkills.length === 1 ? 'one skill' : `${p.droppedSkills.length} skills`} ` +
+        'this brief would otherwise have named, so ' + (p.droppedSkills.length === 1 ? 'it is' : 'they are') + ' left out rather than ordered and not found: ' +
+        p.droppedSkills.map(d => `\`${d.name}\` (${d.why})`).join(', ') + '.',
+        '',
+      )
+    }
   }
 
   if (p.items.length) {
@@ -425,11 +578,17 @@ export function renderPack(p: {
        * "do not accept the prior investigation notes as true until you have
        * reproduced the same evidence yourself". Wake is the thing that pastes
        * other people's conclusions for a living, so it is the thing that has to
-       * say it, once, here — rather than in eleven templates that would each
-       * have to spend characters on it.
+       * say it.
+       *
+       * The second sentence is what makes the first one checkable. "Treat these
+       * as leads" is a maxim and a model can agree with it while doing the
+       * opposite; "if you repeat one without reproducing it, say so in the same
+       * sentence" is an instruction with an observable output, and the same
+       * clause is repeated inside each fence by `renderItem`, where it is
+       * actually being read.
        */
-      'Everything below was gathered by Wake. Quoted blocks are other people\'s words: '
-      + 'leads to verify, not findings. Reproduce anything you intend to rely on.',
+      'Everything below was gathered by Wake. Quoted blocks are other people\'s words: leads to verify, not findings. '
+      + 'If you end up repeating a conclusion from below without having reproduced it, say so in the same sentence you use it in.',
       '',
     )
     for (const [i, it] of p.items.entries()) lines.push(...renderItem(i, it))
@@ -495,16 +654,41 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
 
   const id = uid()
   const createdAt = now()
+
+  /*
+   * Voice never joins the orders, whatever order it was clicked in.
+   *
+   * `chosen` is in click order and `humanizer` used to concatenate into it, so
+   * clicking the voice row first put a paragraph about sentence length above
+   * `Customer incident` — and the template carried three sentences of its own
+   * text declaring what it governed, purely to survive that position. The split
+   * is here rather than there: investigations render under `## What I need`, the
+   * voice renders under `## How the reply should read`, always last. One brief
+   * either way, which is what multi-select has always had to preserve.
+   */
+  const work = chosen.filter(t => (t.kind ?? 'investigation') === 'investigation')
+  const voice = chosen.filter(t => t.kind === 'voice')
+
   // A typed instruction replaces the templates' own; with none typed, the
-  // selected templates concatenate under one heading, each under its own label.
-  // One brief either way — `renderPack` and `handoffFor` emit exactly one, which
-  // is why multi-select costs nothing at the link.
+  // selected investigations concatenate under one heading, each under its own
+  // label. A voice row selected on its own still leaves `## What I need` with
+  // something in it, because a brief whose only section is about wording is a
+  // brief that never says what to do.
+  const typed = input.instruction?.trim()
   const instruction = (
-    input.instruction?.trim() ||
-    (chosen.length === 1
-      ? template.instruction
-      : chosen.map(t => `### ${t.label}\n\n${t.instruction.trim()}`).join('\n\n'))
+    typed ||
+    (work.length === 0
+      ? 'OBJECTIVE. I picked no investigation for this one — read the context below, say what you think it is asking for, and ask me the question that would settle it before you start.'
+      : work.length === 1
+        ? work[0]!.instruction
+        : work.map(t => `### ${t.label}\n\n${t.instruction.trim()}`).join('\n\n'))
   ).trim()
+
+  // A typed instruction replaces the *investigation*, not the voice: the two
+  // answer different questions, and "write it in my voice" is not something he
+  // stops wanting because he wrote the objective himself.
+  const voiceText = voice.map(t => t.instruction.trim()).join('\n\n') || null
+
   // The composer may add a skill the template did not think of, or drop one it
   // did; an explicit empty list has to mean empty rather than "fall back".
   //
@@ -512,7 +696,9 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
   // template's list and the composer's list meet for the first time on this
   // line and neither one alone can see the collision.
   const catalog = skillIndex()
-  const skills = normaliseSkills(catalog, input.skills ?? chosen.flatMap(t => t.skills))
+  const asked = normaliseSkills(catalog, input.skills ?? chosen.flatMap(t => t.skills))
+  const { named, dropped } = skillsFor(asked, cwd.path)
+  const skills = named.map(s => s.name)
 
   const permissionMode = input.permissionMode ?? DEFAULT_PERMISSION_MODE
   const session = sessionFor(input.sessionId)
@@ -523,12 +709,14 @@ export function buildPack(input: BuildPack): BuiltPack | { error: string } {
     title,
     cwd: cwd.path,
     repo: cwd.repo,
-    skills,
+    skills: named,
     instruction,
+    voice: voiceText,
     items,
     createdAt,
     permissionMode,
     session,
+    droppedSkills: dropped,
   })
 
   mkdirSync(PACK_DIR, { recursive: true })
@@ -606,6 +794,74 @@ function skillIndex(): Array<{ id: string; name: string }> {
   } catch {
     return []
   }
+}
+
+/**
+ * Which of the named skills the session will actually be able to load, and what
+ * to say about the rest.
+ *
+ * "Named, never inlined" rests on one claim — that the receiving session has the
+ * same catalogs Wake indexes — and the claim is false in two directions on this
+ * machine. Fourteen of the thirty-two skills Wake indexes live only under an old
+ * `Cursor-skills` tree that neither `~/.claude/skills` nor any repository points
+ * at, so nothing can load them. Nine more are project skills of `truto` alone,
+ * and `review-pr` — whose `defaultRepo` is null, so it opens in whichever
+ * repository the pull request is in — names one of them.
+ *
+ * An order that cannot be carried out is worse than no order: the session either
+ * gives up quietly or loads something with a similar name, and it was measured
+ * doing the second. So reach is checked against the directory the session will
+ * run in, and what cannot be reached is reported rather than issued.
+ *
+ * A skill Wake cannot resolve at all — an index that failed to load, a name
+ * nobody has heard of — is still named. It may be a plugin skill, or a name he
+ * knows and Wake does not, and refusing to pass on a name Wake merely failed to
+ * recognise would be Wake overruling him with its own ignorance.
+ */
+function skillsFor(names: string[], cwd: string): { named: PackSkill[]; dropped: DroppedSkill[] } {
+  let index: Skill[]
+  try { index = listSkills() } catch { return { named: names.map(name => ({ name })), dropped: [] } }
+
+  const named: PackSkill[] = []
+  const dropped: DroppedSkill[] = []
+  for (const name of names) {
+    const bare = name.split('/').pop()!
+    const hit = index.find(s => s.id === name) ?? index.find(s => s.name === bare) ?? null
+    if (!hit) { named.push({ name }); continue }
+    if (skillReaches(hit, cwd)) {
+      named.push({ name, when: oneLine(hit.when_to_use ?? hit.description) })
+      continue
+    }
+    dropped.push({
+      name: bare,
+      why: hit.reach === 'project' && hit.root
+        ? `only inside ${hit.root}`
+        : 'not in any catalog a Claude Code session reads on this machine',
+    })
+  }
+  return { named, dropped }
+}
+
+/**
+ * A skill's `whenToUse`, cut to one clause.
+ *
+ * These run to several hundred words in the published corpus — they are written
+ * for a router that reads them all, not for a brief that names three. The first
+ * sentence is the routing signal and the rest is elaboration the session will
+ * get anyway the moment it loads the skill.
+ */
+function oneLine(text: string | null | undefined): string | null {
+  if (!text) return null
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if (!flat) return null
+  // A full stop only. Breaking on a semicolon produced "triage vague reports;"
+  // — a fragment that reads as a truncation bug rather than as a description.
+  const first = /^(.{40,}?[.!?])(\s|$)/.exec(flat)?.[1]
+  if (first && first.length <= 180) return first
+  if (flat.length <= 180) return flat
+  const cut = flat.slice(0, 180)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 120 ? cut.slice(0, space) : cut).replace(/[\s,;:—–-]+$/, '')}…`
 }
 
 /**

@@ -12,10 +12,10 @@
  * the platform MCP, and a repo skill about ginger is wrong advice for both.
  */
 
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { readdirSync, readFileSync, existsSync, realpathSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { db, now } from '../db'
-import { SKILL_PATHS } from '../env'
+import { CLAUDE_HOME, SKILL_PATHS } from '../env'
 
 export type Catalog = 'A' | 'B' | 'C'
 
@@ -40,6 +40,36 @@ export type Skill = {
   sha: string | null
   bytes: number
   indexed_at: number
+  /**
+   * Whether a Claude Code session could actually load this by name, and where.
+   *
+   * The brief names skills and never inlines them, on the argument that "the
+   * session can read them itself, and it has the same catalogs Wake indexes".
+   * The second half of that sentence was not true. Wake indexes three trees;
+   * a session resolves a name from `~/.claude/skills` and from
+   * `<cwd>/.claude/skills`, and those are not the same set:
+   *
+   *   - Catalog B is `~/work/Cursor-skills/.cursor/skills`, fifteen skills.
+   *     Exactly one of them — `humanizer-voice` — is symlinked into
+   *     `~/.claude/skills`. The other fourteen are loadable by nothing, and Wake
+   *     was offering all fourteen as chips in the composer and writing whichever
+   *     were chosen into a brief that says "load them from your own catalogs".
+   *   - Catalog C is `~/work/truto/.claude/skills`, which a session running in
+   *     `truto` finds and a session running in `truto-app` does not — while
+   *     `review-pr`, whose `defaultRepo` is null and which is the template for
+   *     any repository's pull request, names `platform-change-checklist` out of
+   *     exactly that tree.
+   *
+   * So reach is computed rather than assumed, at read time rather than at index
+   * time, because it is a fact about the filesystem now and not about when the
+   * index last ran. `user` is loadable from anywhere; `project` is loadable
+   * under `root` and nowhere else; `none` cannot be loaded by any session on
+   * this machine, and a brief that names one is a brief giving an order that
+   * cannot be carried out.
+   */
+  reach: 'user' | 'project' | 'none'
+  /** For `project` reach, the directory a session has to be inside. */
+  root: string | null
 }
 
 /* --------------------------- frontmatter parsing -------------------------- */
@@ -120,7 +150,19 @@ const MUTATING = new Set([
 
 /* -------------------------------- indexing ------------------------------- */
 
-function readSkillDir(catalog: Catalog, root: string, name: string, extra: Partial<Skill> = {}): Skill | null {
+/**
+ * Reach is deliberately not part of what gets indexed.
+ *
+ * It is a fact about the filesystem *now* — which names `~/.claude/skills`
+ * currently carries — and the index is a snapshot of what was read at startup.
+ * Storing it would let the two disagree, and the disagreement would be silent
+ * in exactly the direction that hurts: a brief going on naming a skill after the
+ * symlink that made it loadable was removed. So the row on disk is identity and
+ * metadata, and `hydrate` computes reach on every read.
+ */
+type IndexedSkill = Omit<Skill, 'reach' | 'root'>
+
+function readSkillDir(catalog: Catalog, root: string, name: string, extra: Partial<Skill> = {}): IndexedSkill | null {
   const file = join(root, name, 'SKILL.md')
   if (!existsSync(file)) return null
   let raw: string
@@ -155,7 +197,7 @@ function readSkillDir(catalog: Catalog, root: string, name: string, extra: Parti
 }
 
 /** Catalog A — the published Truto skill corpus, metadata from its own manifest. */
-function indexCatalogA(): Skill[] {
+function indexCatalogA(): IndexedSkill[] {
   const root = SKILL_PATHS.truto
   const skillsDir = join(root, 'skills')
   if (!existsSync(skillsDir)) return []
@@ -182,14 +224,14 @@ function indexCatalogA(): Skill[] {
         when_to_use: m?.whenToUse ?? null,
       })
     })
-    .filter((s): s is Skill => s !== null)
+    .filter((s): s is IndexedSkill => s !== null)
 }
 
-function indexFlat(catalog: Catalog, root: string): Skill[] {
+function indexFlat(catalog: Catalog, root: string): IndexedSkill[] {
   if (!existsSync(root)) return []
   return dirsIn(root)
     .map(name => readSkillDir(catalog, root, name))
-    .filter((s): s is Skill => s !== null)
+    .filter((s): s is IndexedSkill => s !== null)
 }
 
 const UPSERT = `
@@ -230,6 +272,77 @@ export function reindexSkills(): { indexed: number; byCatalog: Record<string, nu
 
 /* --------------------------------- reads --------------------------------- */
 
+/**
+ * The names a session can load from anywhere on this machine.
+ *
+ * `~/.claude/skills` is Claude Code's personal catalog and it is mostly
+ * symlinks, so the *name* is what matters rather than the target — a session
+ * asks for `truto-cli` and Claude Code looks for a directory of that name. The
+ * realpath is read as well so a skill indexed under its true location is
+ * recognised as the same thing.
+ *
+ * Re-read when the directory's mtime moves. Skills are symlinked in and out by
+ * hand and a cached answer would go on offering a name that stopped resolving,
+ * which is the failure this whole field exists to end.
+ */
+/*
+ * Under `CLAUDE_HOME`, not under `homedir()`.
+ *
+ * They are the same directory on this machine and they are not the same *fact*:
+ * `WAKE_CLAUDE_HOME` is where Wake has been told Claude Code keeps its things,
+ * and reach is a claim about what the session Wake is about to start will find.
+ * Reading `~` instead would also make this answer depend on the developer's own
+ * home from inside a test suite that redirects everything else.
+ */
+const USER_SKILLS_DIR = `${CLAUDE_HOME}/skills`
+let userSkills: { at: number; names: Set<string>; paths: Set<string> } | null = null
+
+function userCatalog(): { names: Set<string>; paths: Set<string> } {
+  let at = 0
+  try { at = statSync(USER_SKILLS_DIR).mtimeMs } catch { /* absent is an empty catalog */ }
+  if (userSkills && userSkills.at === at) return userSkills
+
+  const names = new Set<string>()
+  const paths = new Set<string>()
+  try {
+    for (const e of readdirSync(USER_SKILLS_DIR)) {
+      const p = join(USER_SKILLS_DIR, e)
+      if (!existsSync(join(p, 'SKILL.md'))) continue
+      names.add(e)
+      try { paths.add(realpathSync(p)) } catch { /* a broken symlink is not reach */ }
+    }
+  } catch { /* no personal catalog on this machine */ }
+
+  userSkills = { at, names, paths }
+  return userSkills
+}
+
+/**
+ * A skill's own directory, and the project root it would be scoped to.
+ *
+ * A project skill lives at `<root>/.claude/skills/<name>/SKILL.md`, so the root
+ * is four levels up from the file. Anything not in that shape has no project
+ * root — it is either personal or it is out of reach.
+ */
+function projectRootOf(path: string): string | null {
+  const skillsDir = dirname(dirname(path))
+  return skillsDir.endsWith('/.claude/skills') ? skillsDir.slice(0, -'/.claude/skills'.length) : null
+}
+
+function reachOf(r: { name: string; path: string }): { reach: Skill['reach']; root: string | null } {
+  const user = userCatalog()
+  if (user.names.has(r.name)) return { reach: 'user', root: null }
+  let real = r.path
+  try { real = realpathSync(r.path) } catch { /* the indexed path is the best we have */ }
+  if (user.paths.has(dirname(real))) return { reach: 'user', root: null }
+  const root = projectRootOf(real)
+  return root ? { reach: 'project', root } : { reach: 'none', root: null }
+}
+
+/** Whether a session running in `cwd` can load this skill by name. */
+export const skillReaches = (s: Pick<Skill, 'reach' | 'root'>, cwd: string | null | undefined): boolean =>
+  s.reach === 'user' || (s.reach === 'project' && !!cwd && !!s.root && (cwd === s.root || cwd.startsWith(`${s.root}/`)))
+
 function hydrate(r: Record<string, any>): Skill {
   let requires: string[] = []
   try {
@@ -237,7 +350,7 @@ function hydrate(r: Record<string, any>): Skill {
   } catch {
     /* keep the empty default */
   }
-  return { ...r, requires } as Skill
+  return { ...r, requires, ...reachOf(r as { name: string; path: string }) } as Skill
 }
 
 export function listSkills(catalog?: Catalog): Skill[] {

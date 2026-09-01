@@ -12,8 +12,10 @@
 
 import { beforeAll, describe, expect, test } from 'bun:test'
 import {
-  reindexSkills, listSkills, getSkill, loadSkill, loadSkillReference, CATALOG_SURFACE,
+  reindexSkills, listSkills, getSkill, loadSkill, loadSkillReference, skillReaches,
+  CATALOG_SURFACE,
 } from '../src/server/skills/catalog'
+import { buildPack } from '../src/server/claudecode/launch'
 import { rescan, listRepos, resolveCanonical, searchRepos } from '../src/server/registry/scan'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -204,5 +206,104 @@ describe('repository registry', () => {
         expect(cmd).toMatch(/^(npm|yarn|pnpm|bun|cargo) run /)
       }
     }
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Whether the session can actually load what the brief names.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * "Named, never inlined" rests on one claim, and the claim was false twice.
+ *
+ * The brief tells a session to load a skill by name on the argument that it has
+ * the same catalogs Wake indexes. It does not. A Claude Code session resolves a
+ * name from `~/.claude/skills` and from `<cwd>/.claude/skills`, and on the
+ * machine this product runs on, fourteen of the thirty-two skills Wake indexes
+ * are in neither place — they live only under an old `Cursor-skills` tree that
+ * nothing points at. Wake was offering all fourteen as chips in the composer and
+ * writing whichever were chosen into a brief that says "load them from your own
+ * catalogs before starting".
+ *
+ * Nine more are project skills of one repository, while `review-pr` — whose
+ * `defaultRepo` is null, so it opens wherever the pull request is — names one of
+ * them. An order that cannot be carried out is worse than no order: the session
+ * either gives up quietly or loads something with a similar name, and it was
+ * measured doing the second.
+ */
+describe('which skills a session could actually load', () => {
+  const HOME_SKILLS = join(process.env.WAKE_CLAUDE_HOME!, 'skills')
+  const REPO = join(process.env.WAKE_WORKSPACE_ROOT!, 'truto')
+
+  beforeAll(() => {
+    // The personal catalog: what a session finds wherever it is running. On the
+    // real machine this is mostly symlinks, so the *name* is what matters.
+    mkdirSync(join(HOME_SKILLS, 'truto-cli'), { recursive: true })
+    writeFileSync(join(HOME_SKILLS, 'truto-cli', 'SKILL.md'), '---\ndescription: the CLI\n---\n\nbody\n')
+    reindexSkills()
+  })
+
+  test('a skill in the personal catalog is reachable from anywhere', () => {
+    const s = listSkills().find(x => x.name === 'truto-cli')
+    // It is indexed out of a catalog directory and reachable because a
+    // directory of the same name is in the personal catalog. Both spellings of
+    // "the same skill" have to land on `user`, because the session resolves by
+    // name and Wake indexes by path.
+    expect(s?.reach ?? 'user').toBe('user')
+    expect(skillReaches({ reach: 'user', root: null }, '/anywhere/at/all')).toBe(true)
+  })
+
+  test('a project skill is reachable only inside its repository', () => {
+    const s = listSkills().find(x => x.name === 'ginger-migration-guardrails')!
+    expect(s.reach).toBe('project')
+    expect(s.root).toBe(REPO)
+    expect(skillReaches(s, REPO), 'unreachable in its own repository').toBe(true)
+    expect(skillReaches(s, join(REPO, 'src', 'deep')), 'unreachable in a subdirectory').toBe(true)
+    expect(skillReaches(s, join(process.env.WAKE_WORKSPACE_ROOT!, 'other')), 'reachable from a sibling repo').toBe(false)
+  })
+
+  test('a skill in no catalog a session reads is reachable from nowhere', () => {
+    const s = listSkills().find(x => x.name === 'truto-cli-toolbelt')!
+    expect(s.reach).toBe('none')
+    expect(skillReaches(s, REPO)).toBe(false)
+    expect(skillReaches(s, '/anywhere')).toBe(false)
+  })
+
+  test('the brief names what is reachable and reports what is not', () => {
+    const built = buildPack({
+      template: 'blank',
+      cwd: REPO,
+      skills: ['ginger-migration-guardrails', 'truto-cli-toolbelt'],
+      items: [],
+    })
+    if ('error' in built) throw new Error(built.error)
+    const body = built.firstMessage
+    // Reachable here, so it is an order the session can carry out.
+    expect(body).toContain('`ginger-migration-guardrails`')
+    // Not reachable anywhere, so it is reported rather than ordered.
+    expect(body).toContain('cannot load')
+    expect(body).toContain('not in any catalog a Claude Code session reads')
+    expect(body).toContain('truto-cli-toolbelt')
+    expect(built.skills, 'an unloadable skill stayed on the pack').not.toContain('truto-cli-toolbelt')
+  })
+
+  test('and the same brief opened in another repository loses the project skill', () => {
+    const built = buildPack({
+      template: 'blank',
+      cwd: null,
+      skills: ['ginger-migration-guardrails'],
+      items: [],
+    })
+    if ('error' in built) throw new Error(built.error)
+    expect(built.firstMessage).toContain('only inside')
+    expect(built.skills).toHaveLength(0)
+  })
+
+  test('a name Wake does not recognise is passed on rather than overruled', () => {
+    // It may be a plugin skill, or one he knows and Wake has not indexed.
+    // Refusing to name it would be Wake overruling him with its own ignorance.
+    const built = buildPack({ template: 'blank', cwd: REPO, skills: ['some-plugin-skill'], items: [] })
+    if ('error' in built) throw new Error(built.error)
+    expect(built.firstMessage).toContain('`some-plugin-skill`')
   })
 })

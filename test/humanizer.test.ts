@@ -2,18 +2,39 @@
  * The Humanizer, which is the only template that is not about the work.
  *
  * Every other row says what to find out. This one says how the last message
- * reads, and it is meant to be worn over one of the others rather than picked
- * instead of one. That shape fails in two directions, and this file pins both.
+ * reads, and it is worn over one of the others rather than picked instead of
+ * one. That shape fails in two directions, and this file pins both.
  *
  *   1. **Smothering.** Selected alongside `Customer incident`, it must not
  *      replace, truncate or soften a word of that template's investigation.
- *      `buildPack` concatenates in click order, so the two orders are tested
- *      separately — a rule that only holds when you happen to click it second
- *      is not a rule.
  *   2. **Leaking.** Unselected, it must not exist. A voice rule that reached a
  *      brief nobody asked it to reach would change every reply this product
  *      drafts, silently, and nobody diffs a brief. That is what the frozen
- *      fixture is for: the byte-for-byte text from before this row existed.
+ *      fixture is for: the byte-for-byte text of a brief with no voice in it.
+ *
+ * ── AMENDED: the position problem is now structural ───────────────────────
+ *
+ * This file used to test the two *click orders* separately, and then assert
+ * that the voice section opened by declaring what it governed — because
+ * `buildPack` concatenated the selected instructions into `## What I need` in
+ * the order they happened to be clicked, so clicking the Humanizer first put a
+ * paragraph about sentence length above `Customer incident`, where a session
+ * reads it as step one of the investigation. The template defended itself with
+ * three sentences of its own text: "VOICE. This section governs the words I
+ * will send, and nothing else…".
+ *
+ * That was a workaround paying rent on a structural mistake, and it cost about
+ * 200 of the template's ~1,100 characters. `buildPack` now separates the two
+ * kinds: investigations render under `## What I need`, voice renders under
+ * `## How the reply should read`, always last, whatever order the rows were
+ * clicked in. So the test changed shape with the code — it no longer asks the
+ * text to declare its own scope, it asks the *brief* to put it in the right
+ * place, which is a stronger claim and one the instruction cannot get wrong.
+ *
+ * The characters that bought back went into `WHAT IT IS NOT`, which bans the
+ * two evasions a model reaches for when it is asked to write in somebody's
+ * voice: handing back options to choose between, and explaining the message
+ * before giving it.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -48,6 +69,15 @@ function section(body: string, label: string): string {
   if (start === -1) throw new Error(`no "### ${label}" section in the brief`)
   const after = body.slice(start + `### ${label}\n`.length)
   const end = after.search(/\n(?:## |### )/)
+  return (end === -1 ? after : after.slice(0, end)).trim()
+}
+
+/** A top-level `## <heading>` block, lifted whole. */
+function block(body: string, heading: string): string {
+  const start = body.indexOf(`## ${heading}\n`)
+  if (start === -1) throw new Error(`no "## ${heading}" section in the brief`)
+  const after = body.slice(start + `## ${heading}\n`.length)
+  const end = after.search(/\n## /)
   return (end === -1 ? after : after.slice(0, end)).trim()
 }
 
@@ -151,17 +181,47 @@ describe('what the Humanizer demands of the reply', () => {
 })
 
 describe('the Humanizer worn over Customer incident', () => {
-  test('the investigation arrives whole, in either order', () => {
+  test('the investigation arrives whole, and the voice lands in its own section', () => {
     for (const order of [['customer-incident', 'humanizer'], ['humanizer', 'customer-incident']]) {
       const body = brief(order)
       // Byte-for-byte the template's own text, lifted back out of the brief.
       // Not `toContain` on a fragment: the claim is that nothing was dropped,
       // reworded or interleaved, and only equality says that.
-      expect(section(body, 'Customer incident'), `order ${order.join('+')}`)
+      expect(block(body, 'What I need'), `order ${order.join('+')}`)
         .toBe(incident.instruction.trim())
-      expect(section(body, 'Humanizer'), `order ${order.join('+')}`)
-        .toBe(humanizer.instruction.trim())
+      expect(block(body, 'How the reply should read'), `order ${order.join('+')}`)
+        .toContain(humanizer.instruction.trim())
     }
+  })
+
+  /**
+   * The click order cannot move the voice any more, and that is the whole fix.
+   *
+   * `buildPack` still concatenates in click order — nothing in `templates.ts`
+   * reorders anything — but the two kinds no longer share a list to be ordered
+   * within. Whichever row was pressed first, the orders come before the register
+   * they are written in, which is also the order the work happens in.
+   */
+  test('the voice is last whichever order it was clicked in', () => {
+    for (const order of [['customer-incident', 'humanizer'], ['humanizer', 'customer-incident']]) {
+      const body = brief(order)
+      expect(body.indexOf('## What I need'), `order ${order.join('+')}`)
+        .toBeLessThan(body.indexOf('## How the reply should read'))
+      // And the investigation is not inside the voice section, nor the reverse.
+      expect(block(body, 'What I need')).not.toContain('paste into Slack')
+      expect(block(body, 'How the reply should read')).not.toContain('root cause')
+    }
+  })
+
+  test('the section says what it governs, so the instruction does not have to', () => {
+    const body = brief(['customer-incident', 'humanizer'])
+    const voice = block(body, 'How the reply should read')
+    expect(voice).toContain('This governs the wording of what I will send, and nothing else.')
+    expect(voice).toContain('It replaces none of the above.')
+    // And the template got those characters back rather than spending them on
+    // defending its own position in a list it is no longer in.
+    expect(humanizer.instruction).not.toContain('VOICE.')
+    expect(humanizer.instruction).not.toContain('It replaces nothing else in this brief')
   })
 
   test('the investigation still says what to investigate', () => {
@@ -169,7 +229,7 @@ describe('the Humanizer worn over Customer incident', () => {
     expect(body).toContain('Take this report to a root cause and a safe reply')
     expect(body).toContain('Truto CLI')
     expect(body).toContain('do not guess an environment')
-    expect(body).toContain('DO NOT. Mutate anything. Do not send the reply.')
+    expect(body).toContain('DO NOT. Mutate anything. Send the reply.')
   })
 
   test('and the voice rules are in the same brief', () => {
@@ -179,18 +239,35 @@ describe('the Humanizer worn over Customer incident', () => {
     expect(body).toContain('If the cause is not known')
   })
 
-  test('the voice section declares what it governs, so its position cannot mislead', () => {
-    // `buildPack` concatenates in click order and nothing in templates.ts can
-    // reorder that, so the section has to carry its own scope. Landing above
-    // `Customer incident`, this is what stops it being read as step one of the
-    // investigation.
-    for (const order of [['customer-incident', 'humanizer'], ['humanizer', 'customer-incident']]) {
-      const voice = section(brief(order), 'Humanizer')
-      expect(voice).toContain('VOICE. This section governs the words I will send, and nothing else.')
-      expect(voice).toContain('It replaces nothing else in this brief')
-      expect(voice).toContain('the rest still says what to investigate')
-      expect(voice).toContain('none of it is softened')
-    }
+  /**
+   * A voice row on its own still produces a brief that says what to do.
+   *
+   * The failure this guards is small and total: pick only the Humanizer, and
+   * `## What I need` used to be the voice rules, which is a brief whose entire
+   * instruction is about wording. Now that voice is lifted out, the same brief
+   * would have had an *empty* orders section — which is worse. `buildPack` says
+   * the honest thing instead: no investigation was chosen, so ask.
+   */
+  test('the voice on its own still leaves an objective', () => {
+    const body = brief(['humanizer'])
+    const need = block(body, 'What I need')
+    expect(need.length).toBeGreaterThan(40)
+    expect(need).toContain('I picked no investigation')
+    expect(block(body, 'How the reply should read')).toContain('ready to paste')
+  })
+
+  test('a typed instruction replaces the investigation and keeps the voice', () => {
+    // They answer different questions. Writing the objective by hand is not a
+    // reason to stop wanting the reply in his own register.
+    const built = buildPack({
+      template: 'humanizer',
+      templates: ['customer-incident', 'humanizer'],
+      instruction: 'Just tell Priya the sync is back.',
+      items: ITEMS,
+    })
+    if ('error' in built) throw new Error(built.error)
+    expect(block(built.firstMessage, 'What I need')).toBe('Just tell Priya the sync is back.')
+    expect(block(built.firstMessage, 'How the reply should read')).toContain('ready to paste')
   })
 
   test('the skills of both are named, neither list replacing the other', () => {
@@ -228,8 +305,7 @@ describe('with the Humanizer off, the brief is what it always was', () => {
   test('no trace of the voice reaches a brief that did not ask for it', () => {
     for (const id of TEMPLATES.filter(t => t.kind !== 'voice').map(t => t.id)) {
       const body = brief([id])
-      expect(body, `${id} leaked the voice heading`).not.toContain('### Humanizer')
-      expect(body, `${id} leaked the voice section`).not.toContain('VOICE.')
+      expect(body, `${id} leaked the voice heading`).not.toContain('## How the reply should read')
       expect(body, `${id} leaked the voice skill`).not.toContain('humanizer-voice')
       for (const phrase of BANNED) {
         // "reach out" and "leverage" are ordinary English; the only way they can
@@ -239,14 +315,24 @@ describe('with the Humanizer off, the brief is what it always was', () => {
     }
   })
 
-  test('the clause every other template shares is untouched', () => {
-    // The cheapest way to have broken every brief at once would have been to
-    // edit NO_REPASTE while adding a row that does not use it.
-    const clause =
-      'Every identifier you need is in the context below — do not ask me to re-paste any of it. ' +
-      'If you have a checkout of the repository named above, work in it; if not, reason from what is here and tell me what you would need.'
-    for (const t of TEMPLATES.filter(t => t.kind !== 'voice' && t.id !== 'continue-session')) {
-      expect(t.instruction.startsWith(clause), `${t.id} no longer opens with the shared clause`).toBe(true)
+  /*
+   * AMENDED. The shared clause is in the brief now, not in each template.
+   *
+   * This used to assert that nine instructions all *opened* with the same 220
+   * characters. They did, and it was 18% of a budget seven of them were within
+   * six characters of spending — and a typed instruction replaced it, so the
+   * hand-written brief was the one that never carried it. The claim worth
+   * pinning is the one that was always meant: every brief says it, once.
+   */
+  test('the shared clause reaches every brief exactly once, from the brief', () => {
+    for (const t of TEMPLATES) {
+      expect(t.instruction, `${t.id} carries a copy of the shared clause`)
+        .not.toContain('do not ask me to re-paste')
+    }
+    for (const id of TEMPLATES.map(t => t.id)) {
+      const body = brief([id])
+      expect(body.split('Do not ask me to re-paste').length - 1, `${id}`).toBe(1)
+      expect(body, id).toContain('If you have a checkout of the repository named above, work in it.')
     }
   })
 })
