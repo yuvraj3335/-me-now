@@ -38,3 +38,7 @@ detailed.md
 # into a public repository. The rule is about what the file contains, so the
 # pattern matches on that rather than on how a given session happened to name it.
 CLAUDE_PROMPT*.md
+
+# Truto skill definitions land here from outside this project; they are not
+# Wake source and should not travel with it.
+.claude/skills/
