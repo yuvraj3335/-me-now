@@ -228,7 +228,22 @@ export type Skill = {
   description: string | null
   whenToUse: string | null
   mutating: boolean
+  /**
+   * Whether a Claude Code session could load this by name, and where.
+   *
+   * `user` is anywhere; `project` is inside `root` and nowhere else; `none` is
+   * nowhere at all. Optional, because a server that predates the field sends
+   * neither and the picker should behave as it always did rather than mark
+   * everything unreachable.
+   */
+  reach?: 'user' | 'project' | 'none'
+  root?: string | null
 }
+
+/** Whether a session running in `cwd` could load this skill by name. */
+export const skillReaches = (s: Skill, cwd: string | null): boolean =>
+  !s.reach || s.reach === 'user' ||
+  (s.reach === 'project' && !!cwd && !!s.root && (cwd === s.root || cwd.startsWith(`${s.root}/`)))
 
 /**
  * One skill, whichever way it was named.
@@ -337,9 +352,19 @@ export const launchApi = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
-  sessions: (opts: { all?: boolean; repo?: string; window?: number; limit?: number } = {}) => {
+  /**
+   * What Claude Code is running — and, with `ended`, what it was running.
+   *
+   * The default is live only and stays that way: the bug this list was rebuilt
+   * to end was a page of dead conversations, a tap on one, and Claude Code
+   * saying on his phone that it was archived. `ended` is not a relapse, because
+   * the harm was in *starting* a dead id and every start path now refuses one by
+   * name. What was left behind was a product where a conversation that finished
+   * at nine this morning could not be found at all.
+   */
+  sessions: (opts: { ended?: boolean; repo?: string; window?: number; limit?: number } = {}) => {
     const q = new URLSearchParams()
-    if (opts.all) q.set('all', '1')
+    if (opts.ended) q.set('include', 'ended')
     if (opts.repo) q.set('repo', opts.repo)
     if (opts.window) q.set('window', String(opts.window))
     if (opts.limit) q.set('limit', String(opts.limit))
@@ -347,7 +372,9 @@ export const launchApi = {
     // `reading` is whether Claude Code's own per-process directory could be
     // read at all, and `stale` counts the files in it whose process is gone. An
     // empty list has three causes and used to render as one blank page.
-    return req<{ sessions: Session[]; reading?: boolean; stale?: number }>(`/sessions${s ? `?${s}` : ''}`)
+    return req<{
+      sessions: Session[]; reading?: boolean; stale?: number; endedWindowDays?: number
+    }>(`/sessions${s ? `?${s}` : ''}`)
   },
   /**
    * Put a session away, or take it back out.

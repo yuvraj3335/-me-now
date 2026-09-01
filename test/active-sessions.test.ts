@@ -473,3 +473,67 @@ describe('what the reader does to a turn on its way to the page', () => {
     expect(body.excerpt).toBeUndefined()
   })
 })
+
+/* ---------------------------------------------------------------------------
+ * Finding the session that finished this morning.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The hole the live-only rebuild left behind, and why filling it is not a relapse.
+ *
+ * That rebuild was right: the page listed a hundred and thirty dead
+ * conversations, he tapped one, and Claude Code answered on his phone that the
+ * session was archived. But the harm in that sentence is *starting* a dead id,
+ * and every path that starts anything now refuses one by name — the resume, the
+ * send, the composer's picker. What was left was a product in which a
+ * conversation that finished at nine this morning could not be found at all: the
+ * reader opens any session by id over all of history, and the only surface that
+ * lists them refused to name one.
+ *
+ * So the two are on one list and are never confused. `live` is the field that
+ * carries the difference, the row draws no live dot without it, and the page it
+ * opens already said "not running any more" because that path was always
+ * reachable by URL.
+ */
+describe('sessions that have finished', () => {
+  test('the default list is still only what is running', async () => {
+    const r = await call('/sessions')
+    const body = await r.json() as { sessions: Array<{ id: string; live: boolean }> }
+    expect(body.sessions.map(s => s.id)).toContain(LIVE)
+    expect(body.sessions.map(s => s.id), 'a finished session reached the default view').not.toContain(DEAD)
+    expect(body.sessions.every(s => s.live)).toBe(true)
+  })
+
+  test('asking for them brings them back, marked as over', async () => {
+    const r = await call('/sessions?include=ended')
+    const body = await r.json() as { sessions: Array<{ id: string; live: boolean }>; endedWindowDays: number }
+    const found = body.sessions.find(s => s.id === DEAD)
+    expect(found, 'the finished session is still unreachable').toBeTruthy()
+    expect(found!.live, 'a finished session claimed to be running').toBe(false)
+    // And the live one is still on the list, and still live.
+    expect(body.sessions.find(s => s.id === LIVE)?.live).toBe(true)
+    expect(body.endedWindowDays).toBeGreaterThan(0)
+  })
+
+  test('and being on the list is not permission to start it', async () => {
+    // The whole reason the live-only rule existed. Listing a finished session is
+    // a reading affordance; every route that starts something reads
+    // `isSessionActive`, not this list.
+    expect(isSessionActive(DEAD)).toBe(false)
+    const r = await call(`/sessions/${DEAD}/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'carry on' }),
+    })
+    expect(r.status).toBe(409)
+    expect((await r.json() as { error: string }).error).toContain('not running any more')
+  })
+
+  test('the repository filter still applies to both halves', async () => {
+    const r = await call('/sessions?include=ended&repo=alive')
+    const body = await r.json() as { sessions: Array<{ id: string }> }
+    const ids = body.sessions.map(s => s.id)
+    expect(ids).toContain(LIVE)
+    expect(ids).toContain(DEAD)
+    expect(ids, 'the adjacent repository leaked in').not.toContain(LIVE_ELSEWHERE)
+  })
+})

@@ -17,8 +17,8 @@ import { unlinkSync } from 'node:fs'
 import { basename } from 'node:path'
 import { archivedSessionIds, audit, db, setSessionArchived } from '../db'
 import {
-  deleteSession, getSession, listActiveSessions, liveSessions, parseSessionTurns,
-  scanLiveSessions, sessionFilePaths,
+  deleteSession, getSession, listActiveSessions, listAllSessions, liveSessions,
+  parseSessionTurns, scanLiveSessions, sessionFilePaths,
 } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
 import {
@@ -77,6 +77,19 @@ claudecode.get('/state', c =>
       description: s.description?.slice(0, 240) ?? null,
       whenToUse: s.when_to_use?.slice(0, 200) ?? null,
       mutating: !!s.mutating,
+      /*
+       * Whether a session could load this, and where.
+       *
+       * The picker offered all 32 indexed skills as equals, and 14 of them are
+       * loadable by no Claude Code session on this machine — they live only
+       * under an old `Cursor-skills` tree that neither `~/.claude/skills` nor
+       * any repository points at. Nine more are project skills of one
+       * repository. `buildPack` already refuses to *order* what cannot be
+       * loaded, but a picker that hides the distinction is a picker that lets
+       * him spend a choice on nothing and find out from a footnote in the brief.
+       */
+      reach: s.reach,
+      root: s.root,
     })),
     sessions: sessionRows({ limit: 100 }),
     defaultPermissionMode: DEFAULT_PERMISSION_MODE,
@@ -117,29 +130,59 @@ function sessionRows(opts: { repo?: string; limit?: number } = {}) {
 }
 
 /**
- * The Sessions list: what Claude Code is running, and nothing else.
+ * The Sessions list: what Claude Code is running — and, when asked, what it was.
  *
- * There is no `all` and no window any more. Both were ways of asking for more
- * transcripts, and transcripts were the bug — the page listed a hundred and
- * thirty dead conversations, he tapped one, and Claude Code on his phone said
- * it was archived. `listActiveSessions` reads the live-process files instead,
- * so "active" is Claude Code's answer rather than a filter Wake computes and
- * he has to remember to leave switched on.
+ * The default is live only, and that is not a filter Wake computes. It reads
+ * Claude Code's own per-process files, because the bug this list was rebuilt to
+ * end was a page of a hundred and thirty dead conversations, a tap on one, and
+ * Claude Code answering on his phone that the session was archived. Wake had
+ * handed him a corpse.
+ *
+ * `?include=ended` is the correction to the correction, and it is worth being
+ * precise about why it is not a relapse. The thing that made a dead row harmful
+ * was that tapping it *started* something with an id that could not be started.
+ * Every path that starts anything now gates on `isSessionActive` — the resume,
+ * the send, the composer's picker — and each refuses by name. What was left was
+ * a product where a conversation that finished at nine this morning had no way
+ * to be found at all: the reader can open any session by id over all of history,
+ * and the only surface that lists them refused to name one.
+ *
+ * So finished sessions are reachable and are never confused with live ones. They
+ * arrive `live: false`, the row draws no live dot, and the page they open says
+ * the session is not running any more and offers a new one — which it already
+ * said, because that path was always reachable by URL.
  *
  * Wake's own archive table still hides a row he has put away, because "I am
  * done with this one" is a real thing to want about a session that is still
- * technically up. It can only ever *remove* from this list now; it can no
- * longer disagree with Claude Code about what is alive.
+ * technically up. It can only ever *remove* from either list; it can no longer
+ * disagree with Claude Code about what is alive.
  */
+/** How far back `?include=ended` looks. A week is "since I last had this open". */
+const ENDED_WINDOW_DAYS = 7
+
 claudecode.get('/sessions', c => {
   const scan = scanLiveSessions()
   const archived = archivedSessionIds()
-  const rows = listActiveSessions({
-    repo: c.req.query('repo') || undefined,
-    limit: Number(c.req.query('limit')) || 100,
-  })
+  const repo = c.req.query('repo') || undefined
+  const limit = Number(c.req.query('limit')) || 100
+  const live = listActiveSessions({ repo, limit })
     .filter(s => !archived.has(s.id))
     .map(s => ({ ...s, live: true, archived: false, startedAt: scan.sessions.get(s.id)?.startedAt ?? s.lastTs }))
+
+  const rows = c.req.query('include') !== 'ended' ? live : (() => {
+    const seen = new Set(live.map(s => s.id))
+    const ended = listAllSessions({ windowDays: ENDED_WINDOW_DAYS, repo, limit: limit * 2 })
+      .filter(s => !seen.has(s.id) && !archived.has(s.id))
+      // A session with one prompt and no answer is a typo, not work. The same
+      // floor the card pile keeps, and it is what stops a week's worth of
+      // half-starts burying the four conversations he actually wants.
+      .filter(s => s.turns >= 1)
+      .map(s => ({ ...s, live: false, archived: false, startedAt: s.lastTs }))
+    // Live first, then most recently written — the same rule `bySessionActivity`
+    // states for the browser, applied here so the page's first slice is right
+    // before it has re-sorted anything.
+    return [...live, ...ended].slice(0, limit)
+  })()
   /*
    * An empty list has three causes and used to render as one blank page.
    *
@@ -150,7 +193,12 @@ claudecode.get('/sessions', c => {
    * question could be asked; `stale` counts the per-process files whose pid is
    * gone, which is the residue of sessions that were killed rather than closed.
    */
-  return c.json({ sessions: rows, reading: scan.readable, stale: scan.stale })
+  return c.json({
+    sessions: rows, reading: scan.readable, stale: scan.stale,
+    // What "ended" would have covered, so the page can name the window it is
+    // standing over rather than implying it is showing everything.
+    endedWindowDays: ENDED_WINDOW_DAYS,
+  })
 })
 
 /**

@@ -76,7 +76,8 @@ import {
 import {
   PERMISSION_MODES, PHONE_COMPOSER, SESSION_MODELS, claudeAppUrl, closeLaunch, composerIsAPage,
   launchApi, launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
-  resolveSkillIds, setLaunchModel, setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
+  resolveSkillIds, setLaunchModel, setLaunchPermissionMode, setLaunchSession, skillReaches,
+  useLaunchBasket,
   type LaunchState, type PackItem, type PermissionMode, type SessionModel, type Session,
 } from '../lib/launch'
 import { navigate, useDetailKey, useRoute } from '../lib/route'
@@ -715,7 +716,7 @@ function LaunchComposer({
               setSkills(null)
             }}
           />
-          <SkillPicker all={meta.skills} selected={effectiveSkills} onChange={setSkills} />
+          <SkillPicker all={meta.skills} selected={effectiveSkills} onChange={setSkills} cwd={cwd} />
         </>
       )}
 
@@ -884,13 +885,24 @@ function TemplatePicker({
  * disclosed is a control that does nothing.
  */
 function PickRow({
-  label, blurb, on, mono, onToggle, open, onInfo,
+  label, blurb, on, mono, dim, onToggle, open, onInfo,
 }: {
   label: string
   blurb: string
   on: boolean
   /** Slugs and paths: the texture is what tells them apart. */
   mono?: boolean
+  /**
+   * The row is offerable but not usable here, and the blurb says why.
+   *
+   * Not `disabled`: Wake's index is not the last word on what a session can
+   * load — a plugin skill, or one symlinked in since the last reindex, is a
+   * name he may know better than this list does. So it is still pressable and
+   * the brief is what refuses to issue an order it cannot see a way to carry
+   * out. What the row owes him is that the cost of the choice is visible
+   * *before* he spends it, rather than in a footnote afterwards.
+   */
+  dim?: boolean
   onToggle: () => void
   open: boolean
   onInfo: () => void
@@ -903,11 +915,12 @@ function PickRow({
       <div className={`${NAME_ROW} ${rowStateClass({ selected: on })}`}>
         <button onClick={onToggle} aria-pressed={on} className={NAME_CELL}>
           <Check size={14} className={`shrink-0 ${on ? 'text-fg' : 'text-transparent'}`} />
-          <span className={`text-sm truncate ${mono ? 'font-mono ' : ''}${on ? 'text-fg' : 'text-fg-mute'}`}>
+          <span className={`text-sm truncate ${mono ? 'font-mono ' : ''}${
+            on ? 'text-fg' : dim ? 'text-fg-mute/60' : 'text-fg-mute'}`}>
             {label}
           </span>
         </button>
-        <span className="hidden sm:block text-sm text-fg-mute sm:line-clamp-2 grow min-w-0">{blurb}</span>
+        <span className={`hidden sm:block text-sm sm:line-clamp-2 grow min-w-0 ${dim ? 'text-fg-mute/70 italic' : 'text-fg-mute'}`}>{blurb}</span>
         {/* 44 by 44 outright rather than a small box wearing `.hit`. That class
             draws its collar *outside* the control, and in a list every row's
             collar overlaps its neighbours' — the last one painted takes the tap,
@@ -1586,8 +1599,14 @@ const PEEK = 6
  * worse than anything it would replace.
  */
 function SkillPicker({
-  all, selected, onChange,
-}: { all: LaunchState['skills']; selected: string[]; onChange: (next: string[]) => void }) {
+  all, selected, onChange, cwd,
+}: {
+  all: LaunchState['skills']
+  selected: string[]
+  onChange: (next: string[]) => void
+  /** The repository the session will run in, which is what decides reach. */
+  cwd: string | null
+}) {
   const [q, setQ] = useState('')
   const [searching, setSearching] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -1604,13 +1623,43 @@ function SkillPicker({
    */
   useEffect(() => { if (searching) field.current?.focus() }, [searching])
 
+  /**
+   * Reachable first, then the rest — not hidden, and not offered as equals.
+   *
+   * Of the 32 skills indexed on this machine, 14 are loadable by no Claude Code
+   * session at all: they live only under an old `Cursor-skills` tree that
+   * neither `~/.claude/skills` nor any repository points at. Nine more are
+   * project skills of one repository. All 32 were in this list as identical
+   * rows, so choosing one of the 14 cost a decision and bought nothing, and the
+   * only place that was ever said was a footnote in the finished brief.
+   *
+   * They are sorted down rather than removed. Wake's index is not the last word
+   * — a plugin skill, or one symlinked in after the last reindex, is a name he
+   * may legitimately know better than this list does — so what is here is the
+   * ordering and the label, and `buildPack` is what refuses to issue the order.
+   */
+  const reachable = useMemo(() => {
+    const ok = new Map<string, boolean>()
+    for (const s of all) ok.set(s.id, skillReaches(s, cwd))
+    return ok
+  }, [all, cwd])
+
   const matches = useMemo(() => {
     const term = q.trim().toLowerCase()
-    if (!term) return all
-    return all
-      .filter(s => `${s.name} ${s.title ?? ''} ${s.whenToUse ?? ''} ${s.description ?? ''} ${s.catalog}`
+    const list = term
+      ? all.filter(s => `${s.name} ${s.title ?? ''} ${s.whenToUse ?? ''} ${s.description ?? ''} ${s.catalog}`
         .toLowerCase().includes(term))
-  }, [all, q])
+      : all
+    return [...list].sort((a, b) => Number(reachable.get(b.id)) - Number(reachable.get(a.id)))
+  }, [all, q, reachable])
+
+  /** Why a row cannot be loaded here, in the words the brief would use. */
+  const outOfReach = (s: LaunchState['skills'][number]): string | null => {
+    if (reachable.get(s.id) !== false) return null
+    return s.reach === 'project' && s.root
+      ? `Only loadable inside ${s.root.split('/').pop()}`
+      : 'No Claude Code session on this machine can load this'
+  }
 
   // The cap used to be a flat 24 rows behind a 256px window, so it was invisible
   // twice over: you could not see the rows it kept and you could not see that it
@@ -1671,8 +1720,9 @@ function SkillPicker({
           {/* Gone below `sm`, rather than squeezed into 45% of a 343px row. This
               blurb's job is choosing, and on a row for something already chosen
               it is the second thing competing for a width that only holds one. */}
-          <span className="hidden sm:block text-sm text-fg-mute truncate shrink-0 max-w-[55%]">
-            {blurbOf(named(id))}
+          <span className={`hidden sm:block text-sm truncate shrink-0 max-w-[55%] ${
+            named(id) && outOfReach(named(id)!) ? 'text-bad' : 'text-fg-mute'}`}>
+            {(named(id) && outOfReach(named(id)!)) ?? blurbOf(named(id))}
           </span>
           <Button size="sm" variant="ghost" title="Remove" ariaLabel="Remove" onClick={() => toggle(id)}>
             <X size={14} />
@@ -1686,7 +1736,11 @@ function SkillPicker({
             key={s.id}
             label={s.name}
             mono
-            blurb={blurbOf(s)}
+            // The refusal replaces the blurb rather than sitting beside it: on a
+            // 343px row there is one slot, and "you cannot use this here" beats
+            // a description of what it would have done.
+            blurb={outOfReach(s) ?? blurbOf(s)}
+            dim={!!outOfReach(s)}
             on={selected.includes(s.id)}
             onToggle={() => toggle(s.id)}
             open={info === s.id}

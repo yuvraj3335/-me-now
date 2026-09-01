@@ -187,7 +187,7 @@ export const sessionRoute = (id: string) => `/sessions/${id}`
 /* ---------------------------------- page ---------------------------------- */
 
 export function SessionsView({ onCount }: { onCount?: (n: number | null) => void }) {
-  const p = useParams(['repo', 'page'])
+  const p = useParams(['repo', 'page', 'ended'])
   const page = Math.max(1, Number(p.page ?? '1') || 1)
 
   /**
@@ -213,7 +213,17 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
    * a new wrong answer on a deployment that has not caught up.
    */
   const [reading, setReading] = useState<boolean | undefined>(undefined)
-  const [scoped, setScoped] = useState<{ repo: string; rows: Session[] } | null>(null)
+  /**
+   * Whether finished conversations are on the list, and for how far back.
+   *
+   * It is a view rather than a preference, so it goes in the URL and nowhere
+   * else: a reload holds it, a link carries it, and tomorrow morning still
+   * opens on what is running — which is the answer that should cost nothing to
+   * get to, because it is the one that is true most of the time.
+   */
+  const ended = p.ended === '1'
+  const [endedDays, setEndedDays] = useState(7)
+  const [scoped, setScoped] = useState<{ repo: string; ended: boolean; rows: Session[] } | null>(null)
   /**
    * The repositories that exist on this machine, which is a different fact from
    * the directories sessions ran in.
@@ -241,11 +251,17 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
 
   useEffect(() => {
     let alive = true
-    launchApi.sessions()
-      .then(d => { if (alive) { setIndex(d.sessions); setReading(d.reading); setErr(null) } })
+    launchApi.sessions({ ended })
+      .then(d => {
+        if (!alive) return
+        setIndex(d.sessions)
+        setReading(d.reading)
+        if (d.endedWindowDays) setEndedDays(d.endedWindowDays)
+        setErr(null)
+      })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
-  }, [reloads])
+  }, [reloads, ended])
 
   useEffect(() => {
     let alive = true
@@ -267,11 +283,11 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     // the index rather than after it.
     if (repo === ALL_REPOS) return
     let alive = true
-    launchApi.sessions({ repo })
-      .then(d => { if (alive) { setScoped({ repo, rows: d.sessions }); setErr(null) } })
+    launchApi.sessions({ repo, ended })
+      .then(d => { if (alive) { setScoped({ repo, ended, rows: d.sessions }); setErr(null) } })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
-  }, [repo, reloads])
+  }, [repo, reloads, ended])
 
   /**
    * The scoped answer when it is for this repository, and the index until then.
@@ -282,7 +298,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   const inRepo = useMemo(() => {
     const all = index ?? []
     if (repo === ALL_REPOS) return all
-    if (scoped?.repo === repo) return scoped.rows
+    if (scoped?.repo === repo && scoped.ended === ended) return scoped.rows
     // `sessionInRepo` and not `repoIdOf(s) === repo`, because this list has to
     // be the same list the scoped answer replaces it with — and the server's
     // filter is exact-or-under. Identity here would drop every subdirectory
@@ -428,9 +444,11 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
         <Empty>
           {reading === false
             ? `Wake cannot read ${LIVE_DIR}, which is where Claude Code says what it is running. Until it can, this list is empty for a reason that is not "nothing is running".`
-            : repo === ALL_REPOS
-              ? 'Claude Code is not running anything on this machine.'
-              : 'Nothing running in this repository.'}
+            : ended
+              ? `Nothing running, and nothing finished in the last ${endedDays} days${repo === ALL_REPOS ? '' : ' in this repository'}.`
+              : repo === ALL_REPOS
+                ? 'Claude Code is not running anything on this machine. Switch to Running + recent for what finished this week.'
+                : 'Nothing running in this repository. Switch to Running + recent for what finished this week.'}
         </Empty>
       )
       : groups.map(([id, list]) => (
@@ -473,6 +491,34 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
       <div className="rail" data-spill={rail.spill || undefined}>
         <div ref={rail.ref}
           className="flex items-center gap-2 py-1.5 overflow-x-auto no-scrollbar">
+          {/*
+            Running, or running plus what has finished this week.
+
+            A view and not a preference, so it lives in the URL: `?ended=1`
+            survives a reload and travels in a link, and the default costs
+            nothing to get back to. It is a `Menu` rather than a pair of chips
+            because the rail already scrolls with two controls on a 375px screen
+            and a third pair would push `New` off it.
+
+            What it fixes is a hole the live-only rebuild left behind. A
+            conversation that finished at nine this morning was reachable only if
+            he still had the URL — the reader opens any session by id over all of
+            history, and the one surface that lists them refused to name one. The
+            harm the rebuild was aimed at was *starting* a dead id, and every
+            path that starts anything refuses one by name now.
+          */}
+          <Menu
+            items={[
+              { id: 'live', label: 'Running' },
+              { id: 'ended', label: 'Running + recent', meta: `${endedDays}d` },
+            ]}
+            value={ended ? 'ended' : 'live'}
+            onPick={id => {
+              setParam('ended', id === 'ended' ? '1' : null)
+              setParam('page', null)
+            }}
+            ariaLabel="Which sessions"
+          />
           <Menu
             items={choices}
             value={repo}
@@ -590,7 +636,21 @@ function Row({
             2px circle has no baseline of its own and a flex box gives it the
             top of its line box instead — which parked the dot two pixels above
             the cap height of the title beside it. */}
-        <span className="mt-1.5 w-2 h-2 rounded-full shrink-0 bg-status-live" aria-hidden />
+        {/*
+          The dot is the standing statement that this is a process rather than a
+          file, which is the exact thing the old page got wrong — so a row that
+          is a file must not have one. A hollow ring instead: the same 8px slot,
+          so the titles beside it stay on one grid, and visibly not the live
+          mark. `--color-fg-mute` is the same grey the row's own subtitle is
+          set in, which is the product's word for "true and quiet"; amber is
+          deliberately not used for either, because in this product amber means
+          something is waiting for you and neither of these is that.
+        */}
+        <span
+          className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${
+            s.live === false ? 'border border-fg-mute' : 'bg-status-live'}`}
+          aria-hidden
+        />
         <span className="min-w-0 grow">
           <span className="flex items-center gap-1.5 min-w-0">
             <span className="min-w-0 text-base text-fg truncate" title={s.title}>{s.title}</span>
@@ -610,6 +670,15 @@ function Row({
               <span className="shrink-0 text-eyebrow uppercase text-fg-mute border border-edge
                                rounded-chip px-1.5 py-px leading-none">
                 headless
+              </span>
+            )}
+            {/* Said in a word as well as in the dot, because the dot is 8px and
+                the difference between "still going" and "over" is the first
+                thing this row has to carry. */}
+            {s.live === false && (
+              <span className="shrink-0 text-eyebrow uppercase text-fg-mute border border-edge
+                               rounded-chip px-1.5 py-px leading-none">
+                ended
               </span>
             )}
           </span>
