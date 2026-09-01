@@ -1695,3 +1695,344 @@ Nothing else moved. Below the boundary the desk was already a list of row-cards
 and that was already right; the band 640–799 simply joins it, and every rule
 `phone-desk.test.ts` pins about reaching the table's columns still applies from
 800 up.
+
+---
+
+## 43. Smooth is motion, not glass — and the brief and this file disagreed
+
+**The conflict is the finding, so it goes first.** The brief asked for an
+iPhone-Mirroring feel and named **Liquid Glass**. This file has said *"Ink /
+amber console. No glass"* twice, and `ui-contract.test.ts` enforces it by
+refusing `backdrop-blur` in any `.tsx`.
+
+Resolved in favour of no glass, and the whole budget spent on **motion**. Not
+because the decision is old — it is reversible and he is entitled to reverse it
+— but because of what was actually wrong. The complaint was *"it's not smooth"*,
+and the surfaces he was touching were genuinely not smooth for reasons that have
+nothing to do with translucency:
+
+* The swipe drawer's offset was React state, written on every `pointermove`. So
+  a swipe re-rendered the row, its cells and every button in the drawer sixty
+  times a second. An earlier pass had already taken `width` out of the animation
+  and fixed the *layout* half of this; the *render* half was still there.
+* Nothing settled. The release jumped straight to its end value, which is where
+  a surface that was tracking a thumb one frame ago stops feeling attached to
+  the hand.
+* Every sheet and menu ran a fixed 180ms cubic bézier. `spring` and `softSpring`
+  had been declared in `primitives.tsx` since the first commit and used **nowhere**.
+* `sessions.tsx` had its own private copy of the drawer that still sized its clip
+  window with `style={{ width: shown }}` on every frame — the exact bug the
+  shared component had been fixed for, in a file nobody had gone back to.
+
+Blur would have fixed none of that. A translucent panel that re-renders sixty
+times a second is a translucent panel that stutters, and the honest reading of
+"extremely smooth, extremely cool" is that the first adjective is the one doing
+the work.
+
+So: the offset is a `MotionValue` written straight to the transform, and a
+gesture now costs **two renders** — the drawer mounting and unmounting — instead
+of one per frame. The release runs a critically-damped spring. Both limits
+rubber-band. Sheets and menus settle on the two springs that were already
+sitting in the file.
+
+**The rubber band is not a reversal of #38.** That decision banned a resting
+state in the *middle* — a drawer stopped 40% open with half-labelled actions —
+and that still cannot happen: `snapSwipe` is unchanged and the release still
+lands on exactly open or exactly shut. This is resistance at the two *ends*,
+which is the opposite thing. A row that goes dead under a finger reads as a
+stuck app; a row that gives reads as an end.
+
+**What was not done, and what would have to happen for it to be.** No blur, no
+translucency, not on one surface and not as a scrim. The brief offered a narrow
+reversible exception if the result still read flat after the motion work, to be
+proposed rather than shipped. I am not proposing it: I could not see the result
+on his device, and a departure from a rule made twice is not something to spend
+on a guess. If it still reads flat to him, the cheapest next thing is the launch
+sheet's scrim alone, and that is a sentence he can say.
+
+## 44. The desk leads with Tasks, and no source filter is the absence of one
+
+`All` is gone, and the first tab is `Tasks`.
+
+The word was wrong in a specific way: it named the *mechanism*. `All` tells you
+what the filter is doing and nothing about what you are looking at, which is the
+same fault the four chaptered pile-headings had before #38 removed them.
+
+And as a **value** it was worse than as a label. `SourceName | 'all'` put a
+sixth name beside five real ones, so every consumer had to exclude it by hand —
+`source === 'all' ? undefined : source` appeared in three files, and
+`inBucket(card, 'all')` had to special-case it. It is `null` now: there is no
+source here, said in the type system, and the exclusions became `??` where the
+compiler checks them.
+
+One real bug fell out of that. `?src=` was **cast**, not read through a list, so
+an unrecognised value went into `inBucket` as a source name matching nothing and
+rendered an empty desk with no control showing as pressed and nothing on screen
+saying why. Every bookmark and every phone-history entry made before this change
+carries `?src=all`, so the rename would have shipped that failure to him on the
+first tap. It is read through `FILTERS` now and anything unknown means no filter.
+
+### The collision, and which way it went
+
+The Work page already called its own list `Tasks`. Two navigation destinations
+wearing one word is worse than either word being slightly off, so one had to
+move, and **Work's moved**: its segmented control reads `To do | Goals`.
+
+**This is the losing half of the trade and it should be written down as one.**
+Work's list is the actual `tasks` table — first-class objects with their own
+rows, their own API and their own provenance (#10) — and the desk's unfiltered
+view is not. The word went to the surface with the weaker claim on it, because
+that is where he asked for it. Storage did not follow the label: the URL still
+says `?tab=tasks` and the type is still `Tab = 'tasks' | 'goals'`, since renaming
+a column to chase a UI string is how a schema ends up needing translating in both
+directions.
+
+The alternative the brief also offered — fold the two surfaces into one, so the
+desk's `Tasks` tab really is his task list — is the better answer and is a
+different size of change. It is one ask away.
+
+## 45. A session's swipe is the desk's swipe, minus the one action it cannot honestly have
+
+`sessions.tsx` kept a private copy of the drawer, on the stated reasoning that
+the shared one offers `Done`, `Status` and `Delete` and a session has none of
+the first two. Half right, and the copy cost more than it saved — it had quietly
+inherited the per-frame `width` write the shared component was fixed for.
+
+* **`Status` is genuinely N/A, and stays N/A.** A session has two facts about its
+  state and neither is a status: whether the process is up, which is Claude
+  Code's to say and which the row already draws as the live dot, and whether it
+  is on Wake's list, which is what `Done` writes. There is no five-state
+  lifecycle to pick from. The drawer's `status` prop is optional precisely so a
+  row with no lifecycle can decline it, and inventing one would be a second
+  vocabulary for a word this product spends carefully — and would have to lie
+  about which system owns the answer.
+* **`Done` was right and `Hide` was the weaker word.** #40 already settled what
+  the archive table means — "I am done looking at this one". That is `Done` in
+  the same sense the desk uses it: the row leaves, nothing upstream is touched,
+  and it undoes.
+
+So the counts differ on purpose and each is the number of actions that row can
+actually offer: the desk gets four, a session gets three, a task or a goal gets
+three. Nothing pads a drawer to a round number.
+
+### The fourth action
+
+`Task` — one gesture from a row to a task in Work, with no sheet and no
+confirmation. The sheet still exists and is still what the detail pane offers,
+because that is the path for a task you want to give a deadline, a goal and a
+colour. This is the other path: the row is already the title and already carries
+its own provenance, so the only thing a sheet could add is a confirmation of
+what is on screen.
+
+Two things it deliberately does not do. It does not take the card off the desk —
+writing something down is not finishing it, and a row that vanished when you
+noted it would be the one action on the page that quietly did two things. And it
+is not offered on a task row, because a task made from a task is nothing.
+
+The mapping lives in `lib/taskFrom.ts` rather than inline, which it was when
+`TaskSheet` was the only caller. Two callers, one mapping, so the quick path
+cannot silently carry less than the slow one.
+
+## 46. The tap-toggle's reasoning was right about a cycle, and a picker is not one
+
+`Work.tsx` set a task's status by tapping its glyph, and the comment above it had
+thought about this:
+
+> a control that steps through five states one press at a time makes the fourth
+> one four presses away and every mis-tap a state to undo.
+
+Every word of that is a case against a **cycle**. It is not a case against a
+picker: the five are on screen at once, so no state is further away than any
+other, and the value is seen before it is written rather than after. The cost it
+was protecting against does not arrive.
+
+What the toggle cost instead is why it is gone. It was a hidden two-state machine
+wearing a control that draws five — tapping a chip reading `In review` sent it
+straight to `Done` — and the identical chip on the identical row on the desk
+opened a picker. One glyph, two behaviours, depending which page you were on.
+
+**The quick path it was defending survives and is still one motion.** It moved
+from a tap to the swipe drawer's `Done`, which was already there, already the
+same call, and already remembered where the task came from. `beforeDone` went
+with the toggle: it existed so an untick could land on the state a tick replaced,
+and `setTaskStatus` already hands its own undo the exact previous value.
+
+## 47. The white screen was the server answering a script request with HTML
+
+Reproduced before it was diagnosed, which mattered — three of the four things
+suspected were innocent.
+
+`Terminal.tsx`'s mount order is correct and defensive. `FitAddon.fit()` on a
+zero-size element early-returns rather than throwing (checked against the
+installed addon's source). `terminalSocketUrl` builds `wss:` correctly. Cloudflare
+Access does not strip the upgrade — `originGuard` only covers mutating methods,
+and the socket does its own `Origin` check.
+
+The actual chain, end to end:
+
+1. `/assets/*` names are content-hashed, so a redeploy renames them.
+2. A tab or a home-screen app holding the old shell asks for a chunk that is gone
+   — routinely, because `sw.js` serves a cached shell on a flaky navigation.
+3. **The server answered that with the SPA shell: `200`, `text/html`, to a
+   `<script type="module">` request.** Only `api/` was excluded from the
+   fall-through.
+4. The browser rejects HTML as a module, so the `import()` rejects.
+5. React re-throws a rejected `lazy()` **during render**.
+6. There was no error boundary anywhere in the product, so the entire root
+   unmounted.
+
+Measured: `#root` innerHTML length **0**, one uncaught `TypeError` in a console
+that, on a phone, does not exist.
+
+Three fixes, because any one alone leaves the blank page reachable. Unknown
+`/assets/` 404s. The service worker refuses to store a response that is not `ok`
+or that is `text/html`, so a bad answer cannot outlive the deploy that caused it.
+And there is a boundary at the root — above `App`, because a rejected `lazy()` is
+re-thrown from inside `App`'s own render and a boundary nested deeper would be
+unmounted by the throw it exists to catch.
+
+The boundary shows the real message and recovers by dropping every cache and
+unregistering the workers before reloading. A plain reload would serve the same
+stale shell straight back, which is worse than the first failure because it
+teaches him the button does not work.
+
+Verified live at 375px against the running server: a blocked chunk now renders
+*"Wake updated while this was open"* with the underlying error and a Reload,
+where it previously rendered nothing at all.
+
+## 48. `--model` was never passed, and two buttons said Open
+
+Two of the three session complaints were one sentence each once traced.
+
+**No model choice.** There was no `--model` anywhere in the spawn path.
+`claudeArgv` was a closed three-flag builder and `OpenInput` had no field for
+one, so every session Wake ever started ran on whatever Claude Code picked, with
+no way to say otherwise — and on a phone, no way at all.
+
+It is a validated field now, in both composers, refused by name like the
+permission mode is. Aliases only (`opus`, `sonnet`, `haiku`, `fable`), read off
+`claude --help` on the installed 2.1.252 rather than remembered: a full name like
+`claude-opus-4-5` works today and pins a version that gets retired from under a
+picker kept for a year. `default` is the **absence** of the flag rather than a
+value for it — Claude Code chooses for itself, which respects whatever the
+operator configured, and passing the word would be Wake asserting a preference it
+does not have.
+
+Verified end to end: a session started with `model: 'sonnet'` shows
+`--model sonnet` in its argv on the box, and Claude Code's own banner in the
+rendered terminal reads *Sonnet 5*.
+
+**"Open in Claude" opened the chat.** Two anchors were labelled `Open in the
+Claude app` and `Open the Claude app`, and both point at `https://claude.ai/new`
+— the chat product, with no repository, no tools, nothing to resume. #40 kept
+that link deliberately and was right to; what it did not account for is that the
+surface also has a control whose whole job is opening the Claude Code session,
+and both of them said `Open` and both said `Claude`.
+
+The link stays, because it is a real universal link and a genuine hatch. It says
+`New chat in the Claude app` now, and the Session page's copy adds `not this
+session`. The contract test that pinned the old label was asserting the
+confusable word; it pins the honest one.
+
+A second, quieter version of the same bug: a Claude Code session that opened a
+pull request carries the PR as its card `url`, so the prominent `Open` in the
+action bar went to **GitHub** while the session button sat elsewhere under a
+different name. That control names its destination now — but only on a card that
+is also offering a session, since on an ordinary Slack row there is one `Open`
+and no ambiguity.
+
+## 49. Slack narrows to the list he gave, at the fetch scope, and one channel could not be found
+
+Sixteen of the seventeen he named were already in `DESK_CHANNELS` with the right
+ids — re-resolved through `slack_search_channels` and every one matched. Two
+channels came **off**: `#truto` and `#crisp-chats`, because he gave a list and
+neither was on it. `#truto` is not a small removal; it was the third-busiest
+source of Slack rows on the box at the time.
+
+**It is the fetch scope, not a push filter, and that is a decision.** The ask was
+"Slack should only ping me from these channels", and the obvious home for it is
+`push.ts` — except no Slack message has ever produced a push. `push.ts` has
+exactly two internal triggers, a reminder he set and a due date he set;
+`ingest.ts` never calls `notify()` at all. A filter there would be narrowing an
+empty set: it would read as done and change nothing. The layer where the sentence
+has an effect today is what Slack surfaces to Wake at all.
+
+**`Customer (private)` is not in the list, and is not silently dropped.** Searched
+against the connected token as both public and private, for `customer`,
+`customers` and `cust`: the only matches in the workspace are
+`#truto-customer-events` and `#elaichi-customer-events`, both public and neither
+plausibly it. A private channel the token cannot see cannot be given an id, and
+guessing would point the whole scope at the wrong conversation. It needs its real
+name, or a line in `WAKE_SLACK_CHANNELS`.
+
+### The removal exposed a coupling bug worth more than the removal
+
+Taking `#truto` off broke **39 tests** that have nothing to do with which
+channels he wants. They broke because `test/fixtures/slack.ts` is a real capture
+from `#truto`, and every thread, dedup, recency and activity test is built on it.
+
+The obvious way out was to rewrite the fixture's channel, and it is the wrong
+one: that file says at the top that it is verbatim and never reshaped to suit a
+test, and it is right — a fixture somebody tidied stops proving anything.
+
+So the fixture is untouched and the **scope** became the suite's own business,
+which is what it should always have been: a test about thread parsing must not
+change its answer because somebody edited a configuration list. `test/setup.ts`
+pins its own channels, and `slack-channels.test.ts` — which is the specification
+of the shipped list — asserts against `DESK_CHANNELS` directly rather than
+against whatever happens to be configured.
+
+`WAKE_SLACK_CHANNELS` learned to carry `name:id` so it could. That is an
+improvement on its own merits: a name-only override silently gave up the half of
+the match that matters most, since `isAllowedSlackChannel` reads the id first
+precisely because a renamed channel keeps its id.
+
+## 50. Notifications were never firing, and the button said they were
+
+The report was vague and the answer is not: **`push_subs` is empty, and
+`POST /api/push/subscribe` has never been called in the service's entire logged
+history.** Nothing is subscribed, so nothing can be delivered.
+
+Everything downstream is healthy and was verified rather than assumed. The 30s
+reminder tick runs (`WAKE_NO_SCHEDULER` is unset, and the one deadline
+notification on the box is exactly what a healthy tick produces). VAPID keys are
+generated on first use and stored — public 87 chars, private 43. `sw.js` has
+correct `push` and `notificationclick` handlers and is byte-identical in `dist/`.
+`notify()` wrote its rows. They went to an empty list.
+
+Subscribing is his to do, on a device, and it is one tap — on iPhone, after
+adding Wake to the Home Screen, which is Apple's rule and #13 already says so.
+
+**What was Wake's to fix is that nothing ever said any of this.** `deliver()` had
+no logging at all, so a delivery to zero devices was indistinguishable from a
+successful one in the journal. And `/push/test` called `notify()` and reported
+*its* return value as `sent` — but `notify()` answers whether the dedup key was
+new, which is a fact about a database table and not about whether a phone buzzed.
+With nothing subscribed the response was `{ sent: true, devices: 0 }`: two true
+facts arranged to read as "it works", on the one button whose entire job is
+telling him whether this works.
+
+The test reports **reach** now, with a sentence saying what to do, and Settings
+shows it. A zero-device send is logged. And the test no longer writes a
+notification row — a test is not a thing that happened to him.
+
+## 51. The deploy script's rollback ate uncommitted work
+
+Found by being bitten by it, mid-session, twice.
+
+`wake-deploy.sh` runs every minute. It is `--ff-only` on purpose, and its comment
+says why: *"a diverged local checkout means someone edited on the box, and
+silently discarding that is worse than refusing to deploy."*
+
+The rollback trap added later does `git reset --hard "$local_sha"`, which cannot
+tell the commit it is undoing from work nobody has committed yet. So: an agent
+working in this checkout commits locally without pushing; local and remote now
+differ; the ff-merge fails; the ERR trap fires; and every uncommitted edit in the
+tree is destroyed. Exactly the outcome the comment four lines above promises will
+not happen.
+
+The two halves are made consistent rather than one of them removed, because both
+are right on their own. The script refuses to run at all on a dirty tree —
+before the merge, before the backup — so the rollback can only ever undo its own
+checkout. Untracked files are deliberately not counted: agent litter in the
+working directory is the normal state of this box and is not work to protect.
