@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { join, normalize } from 'node:path'
 import { api } from './api'
 import { boot } from './boot'
+import { rescan } from './registry/scan'
 import { terminalSocket, websocket } from './claudecode/terminalSocket'
 import { originGuard, sweepConfirmations } from './security'
 import { HOST, PORT, POLL_INTERVAL_MS, PUBLIC_URL, REMINDER_TICK_MS, IS_DEV } from './env'
@@ -158,6 +159,9 @@ if (!process.env.WAKE_NO_SCHEDULER) {
     )
   })
   every(REMINDER_TICK_MS, 'reminders', runReminders)
+  // The repository registry, which used to be read once at boot and never
+  // again. See `REGISTRY_RESCAN_MS`.
+  every(REGISTRY_RESCAN_MS, 'registry', async () => { rescan() })
   // Spent and expired confirmation tokens are noise in a table that should only
   // ever contain live ones.
   every(6 * 3.6e6, 'confirmations', async () => { sweepConfirmations() })
