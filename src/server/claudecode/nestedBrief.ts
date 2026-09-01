@@ -88,3 +88,37 @@ export function titleWithoutBrief(title: string): string {
     .replace(/\s*A brief from Wake\b.*$/i, '')
     .trim()
 }
+
+/**
+ * A Wake brief, shortened to the part a person would want to re-read.
+ *
+ * `withoutBrief` answers "what else was in this text" and returns `null` when
+ * the answer is nothing, which is right for a card title and catastrophic for a
+ * transcript. A session started from Wake has that brief as its *first user
+ * turn*, so the reader ran it through `cleanPrompt`, got `null`, and dropped
+ * the turn — the conversation opened with Claude's answer and no visible
+ * question. The one loop this product exists to serve, rendered as a reply to
+ * nothing.
+ *
+ * So the brief renders as itself, cut down rather than deleted. What survives
+ * is the title, the objective it actually carried, and a line saying what was
+ * left out and how big it was — which is the difference between "you sent this"
+ * and a wall of Wake's own paperwork on a 375px screen.
+ */
+export function briefDigest(text: string): string | null {
+  if (!isNestedBrief(text)) return null
+
+  const title = /(?:^|\n)#\s+(.+)/.exec(text)?.[1]?.trim() ?? null
+  const need = /\n##\s+What I need\s*\n+([\s\S]*?)(?=\n##\s|\n---\s*\n|$)/.exec(text)?.[1]?.trim() ?? null
+  const objects = /\n##\s+Context\s+—\s+(\d+)\s+object/.exec(text)?.[1] ?? null
+
+  const head = `[A Wake brief${title ? ` — ${title}` : ''}${
+    objects ? `, with ${objects} attached object${objects === '1' ? '' : 's'}` : ''
+  } · ${text.length.toLocaleString()} characters. What it asked for:]`
+
+  // No instruction section means a shape this function does not know. Saying so
+  // beats printing a heading with nothing under it.
+  if (!need) return `${head}\n\n[Wake could not find the instruction in it — open the pack to read the whole brief.]`
+  const clipped = need.length > 1_400 ? `${need.slice(0, 1_400)}\n…[cut here; the whole brief is in the pack]` : need
+  return `${head}\n\n${clipped}`
+}

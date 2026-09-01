@@ -13,7 +13,7 @@ import {
 import { extractRefsFromElidable, subjectRef } from '../dedup'
 import { sessionInRepo } from '../../shared/sessionRepo'
 import { NotConnected, type RawCard, type SourceAdapter } from './types'
-import { titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
+import { briefDigest, titleWithoutBrief, withoutBrief } from '../claudecode/nestedBrief'
 
 /** Transcripts run to several MB; only the tail is needed for current state. */
 const TAIL_BYTES = 512 * 1024
@@ -48,21 +48,82 @@ const ALL_HISTORY_DAYS = 3650
  * machine's transcripts, which is more than anyone scrolls back through.
  */
 const TURNS_TAIL_BYTES = 256 * 1024
+/**
+ * How far the conversation page will read back looking for something said.
+ *
+ * Only reached when the first window produced no prose at all, which on this
+ * machine's transcripts means the session has been running tools without
+ * speaking for a quarter of a megabyte. 2MB back is roughly where the previous
+ * exchange is in that case, and it is a bounded amount of work rather than
+ * "read the whole file", which on the largest transcript here would be 12MB.
+ */
+const TURNS_MAX_TAIL_BYTES = 2 * 1024 * 1024
 
-function readTail(path: string, bytes: number): string {
-  const size = statSync(path).size
-  const start = Math.max(0, size - bytes)
-  const len = size - start
-  if (len <= 0) return ''
+/**
+ * How far `readTail` may grow past the budget it was asked for.
+ *
+ * A tail read has to start on a line boundary, and the only way to find one is
+ * to read and throw away whatever came before the first newline. That discard
+ * is normally a few hundred bytes. It is not always: Claude Code writes one
+ * JSONL record per line and a record carrying a large tool result is a single
+ * line of hundreds of kilobytes. Measured on this machine — 117 transcripts —
+ * seven of them throw away more than 40KB of a 96KB list tail, and the worst
+ * throws away 92KB of 96KB. What survived was 4KB, which parses to no cwd, no
+ * branch, no prompt and no turns: the row rendered as `Session in
+ * -home-yuvraj-work-truto` and vanished out of a repository-filtered list,
+ * because `sessionInRepo` was matching against the flattened directory name
+ * rather than the cwd the transcript never got to state.
+ *
+ * So the budget is a floor on *usable* bytes rather than a cap on bytes read.
+ * When the discard eats more than half of it, the read doubles and tries again,
+ * up to this multiple. Growth only happens on the transcripts that need it —
+ * the other 110 return on the first attempt, at exactly the old cost.
+ */
+const TAIL_GROWTH_LIMIT = 8
+
+/** Read `len` bytes from `start`, looping until the file has given them all. */
+function readRange(path: string, start: number, len: number): string {
   const fd = openSync(path, 'r')
   try {
     const buf = Buffer.alloc(len)
-    readSync(fd, buf, 0, len, start)
-    const text = buf.toString('utf8')
-    // A partial first line would fail to parse; drop it when we seeked.
-    return start > 0 ? text.slice(text.indexOf('\n') + 1) : text
+    let read = 0
+    // `readSync` is allowed to return short. The old code ignored its return
+    // value entirely, so a short read left the rest of the buffer as NUL bytes
+    // and the last record in the window stopped parsing.
+    while (read < len) {
+      const n = readSync(fd, buf, read, len - read, start + read)
+      if (n <= 0) break
+      read += n
+    }
+    return buf.toString('utf8', 0, read)
   } finally {
     closeSync(fd)
+  }
+}
+
+function readTail(path: string, bytes: number): string {
+  const size = statSync(path).size
+  if (size <= 0) return ''
+
+  let budget = Math.min(bytes, size)
+  const ceiling = Math.min(size, Math.max(bytes, bytes * TAIL_GROWTH_LIMIT))
+
+  for (;;) {
+    const start = size - budget
+    const text = readRange(path, start, budget)
+    // Read from the top: there is no partial line to drop, and a multi-byte
+    // character cannot be split by a boundary that does not exist.
+    if (start === 0) return text
+
+    // A partial first line would fail to parse — and it is also where a
+    // multi-byte character split by the byte boundary lands, so dropping it
+    // handles both. `-1` means the window is *inside* one enormous line and
+    // there is nothing usable in it at all.
+    const nl = text.indexOf('\n')
+    const usable = nl === -1 ? '' : text.slice(nl + 1)
+
+    if (usable.length >= budget / 2 || budget >= ceiling) return usable
+    budget = Math.min(ceiling, budget * 2)
   }
 }
 
@@ -75,6 +136,15 @@ type SessionInfo = {
   pr: { url: string; repo: string; number: number } | null
   lastTs: number
   userTurns: number
+  /**
+   * Tool results in the tail that was read.
+   *
+   * The other half of `userTurns`, and the reason it can now honestly be zero.
+   * A session that has been running tools for the whole window said nothing in
+   * it — which is a true and useful fact, but rendered on its own as "0 turns"
+   * it reads as a dead row. This is what lets the list say "working" instead.
+   */
+  toolResults: number
   /** The git branch the last recorded turn was on. */
   branch: string | null
   /** The Claude Code version that wrote the last turn, e.g. `2.1.247`. */
@@ -95,7 +165,7 @@ function parseSession(
 ): SessionInfo {
   const info: SessionInfo = {
     id, project, cwd: null, title: null, lastPrompt: null, pr: null,
-    lastTs: mtime, userTurns: 0,
+    lastTs: mtime, userTurns: 0, toolResults: 0,
     branch: null, version: null, entrypoint: null, permissionMode: null,
   }
 
@@ -120,9 +190,35 @@ function parseSession(
       case 'pr-link':
         if (d.prUrl) info.pr = { url: d.prUrl, repo: d.prRepository ?? '', number: d.prNumber ?? 0 }
         break
-      case 'user':
-        info.userTurns++
+      case 'user': {
+        /*
+         * A tool's output is not something he said.
+         *
+         * Claude Code files every `tool_result` as a `type: "user"` record, and
+         * this counter did not look inside — so `turns` was the number of user
+         * *records* in the tail, which on a tool-heavy session is thirty for one
+         * question. Two things read that number and both were being misled: the
+         * card pile's `MIN_TURNS >= 2` gate, which is supposed to mean "one
+         * prompt and no follow-up is a question, not work in progress" and was
+         * satisfied by a single prompt that ran two tools; and `turns_in_view`
+         * in a brief, which told the receiving session the conversation had been
+         * longer than it was.
+         *
+         * A subagent's turns are not his either — `parseSessionTurns` has always
+         * dropped `isSidechain` for the same reason, and the count should agree
+         * with the reader rather than contradict it.
+         */
+        // The directory is read off every record that carries it, sidechain or
+        // not: a subagent runs in the same working directory, and a tail that
+        // happens to be all subagent work would otherwise lose the one fact the
+        // list cannot render a row without.
         if (d.cwd) info.cwd = d.cwd
+        if (d.isSidechain) break
+        const content = d.message?.content
+        const isToolResult = Array.isArray(content)
+          && content.some((b: any) => b?.type === 'tool_result')
+        if (isToolResult) info.toolResults++
+        else info.userTurns++
         // Only a turn that carries a real prompt records these; a `tool_result`
         // user record has none of them. So each is assigned when present rather
         // than defaulted, and the last turn that knew wins — which is the
@@ -132,6 +228,7 @@ function parseSession(
         if (d.entrypoint) info.entrypoint = d.entrypoint
         if (d.permissionMode) info.permissionMode = d.permissionMode
         break
+      }
     }
   }
   return info
@@ -343,6 +440,8 @@ export type SessionRow = {
    * is a floor. Every surface that renders it says `turns in view`.
    */
   turns: number
+  /** Tool results in that same tail. See `SessionInfo.toolResults`. */
+  tools: number
   lastTs: number
   path: string
   pr: { url: string; repo: string; number: number } | null
@@ -350,6 +449,16 @@ export type SessionRow = {
   version: string | null
   entrypoint: string | null
   permissionMode: string | null
+  /**
+   * Running as `claude -p`, with no terminal and no composer.
+   *
+   * Only ever set by `listActiveSessions`, because it is a fact about the
+   * *process* rather than about the transcript, and only a live read knows a
+   * pid. Thirteen sessions were up on this box and eight of them were headless
+   * agent runs the list offered him as things to open — he cannot open them,
+   * and the refusal arrived a tap later as a sentence about tmux.
+   */
+  headless?: boolean
 }
 
 function rowOf(file: SessionFile, info: SessionInfo): SessionRow {
@@ -362,6 +471,7 @@ function rowOf(file: SessionFile, info: SessionInfo): SessionRow {
     project,
     lastPrompt: prompt,
     turns: info.userTurns,
+    tools: info.toolResults,
     lastTs: info.lastTs,
     path: file.path,
     pr: info.pr,
@@ -467,16 +577,16 @@ export function listActiveSessions(opts: { repo?: string; limit?: number } = {})
       if (isWakeRun({ cwd: l.cwd })) continue
       const row: SessionRow = {
         id, title: l.name || basename(l.cwd) || 'New session', cwd: l.cwd,
-        project: basename(l.cwd) || l.cwd, lastPrompt: null, turns: 0,
+        project: basename(l.cwd) || l.cwd, lastPrompt: null, turns: 0, tools: 0,
         lastTs: l.startedAt, path: '', pr: null, branch: null,
-        version: null, entrypoint: null, permissionMode: null,
+        version: null, entrypoint: null, permissionMode: null, headless: l.headless,
       }
       if (!wanted || sessionInRepo(row, wanted)) out.push(row)
       continue
     }
     const info = parseSession(file.path, file.id, file.project, file.mtime, LIST_TAIL_BYTES)
     if (isWakeRun({ cwd: info.cwd })) continue
-    const row = rowOf(file, info)
+    const row = { ...rowOf(file, info), headless: l.headless }
     if (wanted && !sessionInRepo(row, wanted)) continue
     out.push(row)
   }
@@ -532,17 +642,82 @@ export type SessionTurn = {
  */
 export function parseSessionTurns(
   id: string, opts: { after?: number; limit?: number; tailBytes?: number } = {},
-): { found: boolean; cwd?: string; turns: SessionTurn[] } {
+): { found: boolean; cwd?: string; turns: SessionTurn[]; window?: TurnWindow } {
   const { after = 0, limit = 200, tailBytes = TURNS_TAIL_BYTES } = opts
   const hit = sessionFiles(ALL_HISTORY_DAYS).find(f => f.id === id)
   if (!hit) return { found: false, turns: [] }
 
+  let budget = tailBytes
+  let read = readWindow(hit, budget, after, limit)
+  /*
+   * Grow the window when it produced no conversation at all.
+   *
+   * Measured, on two of thirteen sessions running on this box at the time:
+   * `a7e08487` and `4653a7c3` both rendered an *empty page*. Their last 256KB
+   * held 60 assistant records and 42 user records and not one `text` block in
+   * any of them — every record was `thinking`, `tool_use` or `tool_result`,
+   * because both sessions had been running tools for the whole window. The
+   * parse was correct and the answer was a lie: a blank conversation under a
+   * row that said 14 turns.
+   *
+   * A bigger read is the honest first move, because the prose is there, it is
+   * just further back. It only happens when the window came back empty and only
+   * on a first load, so the poll — which asks with `after` set and expects to
+   * find nothing most of the time — never pays for it.
+   */
+  while (
+    read.turns.length === 0 && read.records > 0 && after === 0 &&
+    budget < TURNS_MAX_TAIL_BYTES && budget < read.size
+  ) {
+    budget = Math.min(TURNS_MAX_TAIL_BYTES, budget * 4)
+    read = readWindow(hit, budget, after, limit)
+  }
+  if (!read.ok) return { found: false, turns: [] }
+
+  return {
+    found: true,
+    cwd: read.cwd,
+    turns: read.turns,
+    window: { bytes: budget, ofBytes: read.size, records: read.records, tools: read.tools },
+  }
+}
+
+/**
+ * What a read of one window found, including what it found that is not prose.
+ *
+ * The page needs this to tell the two empties apart. "Nothing has happened yet"
+ * and "twenty-three tool calls have happened and none of them said anything"
+ * are different facts about a session, and only one of them is a reason to
+ * worry.
+ */
+export type TurnWindow = {
+  /** Bytes of the transcript this answer was read from. */
+  bytes: number
+  /** Bytes in the whole transcript. */
+  ofBytes: number
+  /** Conversation records seen in the window, prose or not. */
+  records: number
+  /** Tool calls seen in the window. */
+  tools: number
+}
+
+function readWindow(
+  hit: SessionFile, budget: number, after: number, limit: number,
+): { ok: boolean; size: number; cwd?: string; turns: SessionTurn[]; records: number; tools: number } {
+  let size = 0
+  try { size = statSync(hit.path).size } catch { /* the read below reports it */ }
+
   let text: string
-  try { text = readTail(hit.path, tailBytes) } catch { return { found: false, turns: [] } }
+  try { text = readTail(hit.path, budget) } catch {
+    return { ok: false, size, turns: [], records: 0, tools: 0 }
+  }
 
   const turns: SessionTurn[] = []
   let cwd: string | undefined
   let pending: string[] = []
+  let records = 0
+  let tools = 0
+  let lastTs = 0
 
   for (const line of text.split('\n')) {
     if (line.length < 12 || line.charCodeAt(0) !== 123 /* { */) continue
@@ -553,6 +728,7 @@ export function parseSessionTurns(
     if (d.type !== 'user' && d.type !== 'assistant') continue
     if (d.isSidechain) continue
     if (d.cwd) cwd = d.cwd
+    records++
 
     const content = d.message?.content
     let body = ''
@@ -563,16 +739,17 @@ export function parseSessionTurns(
       for (const block of content) {
         if (!block || typeof block !== 'object') continue
         if (block.type === 'text' && typeof block.text === 'string') body += block.text
-        else if (block.type === 'tool_use' && block.name) pending.push(String(block.name))
+        else if (block.type === 'tool_use' && block.name) { pending.push(String(block.name)); tools++ }
         else if (block.type === 'tool_result') isToolResult = true
       }
     }
     if (isToolResult && !body.trim()) continue
 
-    body = (d.type === 'user' ? cleanPrompt(body) : body)?.trim() ?? ''
+    body = (d.type === 'user' ? readableTurn(body) : body).trim()
+    const ts = Date.parse(d.timestamp ?? '') || hit.mtime
+    if (ts > lastTs) lastTs = ts
     if (!body) continue
 
-    const ts = Date.parse(d.timestamp ?? '') || hit.mtime
     if (ts <= after) { pending = []; continue }
 
     turns.push({
@@ -584,8 +761,52 @@ export function parseSessionTurns(
     pending = []
   }
 
-  return { found: true, cwd, turns: turns.slice(-limit) }
+  /*
+   * Tool calls that never reached a turn still happened.
+   *
+   * `pending` rides to the next turn that has prose in it, which is right while
+   * the session keeps talking and wrong at the end of the file: a session that
+   * is mid-run has called eight tools since its last sentence, and dropping
+   * those on the floor is how a page that is watching live work shows nothing
+   * moving. It is emitted as a turn with no text — the reader draws it as the
+   * tools chip alone, which is exactly what it is.
+   */
+  if (pending.length && lastTs > after) {
+    turns.push({ role: 'assistant', text: '', ts: lastTs, tools: pending })
+  }
+
+  return { ok: true, size, cwd, turns: turns.slice(-limit), records, tools }
 }
+
+/**
+ * A user turn as something to read, rather than as a title.
+ *
+ * `cleanPrompt` is the title function — it strips every angle-bracketed thing,
+ * collapses all whitespace to single spaces and returns one line, which is
+ * exactly right for a row and destroys a message. Running it over transcript
+ * bodies meant every prompt he had ever typed rendered on the session page as a
+ * single unbroken line: fenced code with its newlines gone, lists run together,
+ * and `<Thing />` in a sentence about React silently deleted. Claude's own turns
+ * kept their formatting, so the asymmetry was visible on every screen and looked
+ * like a styling bug.
+ *
+ * What is genuinely not his — the harness envelopes Claude Code wraps around a
+ * prompt — is still cut, because he did not type those and they are the reason
+ * a caveat about local commands used to open half the conversations on this box.
+ */
+function readableTurn(text: string): string {
+  const stripped = text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .replace(/<local-command-[a-z-]+>[\s\S]*?<\/local-command-[a-z-]+>/g, '')
+    .replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '')
+    .replace(/^Caveat:[\s\S]*?response\.?\s*/i, '')
+
+  // A brief Wake wrote is the message he sent, so it is shown rather than
+  // dropped — see `briefDigest`, and see `cleanPrompt`, which returns null here
+  // and used to take the whole turn with it.
+  return (briefDigest(stripped) ?? stripped).replace(/\n{3,}/g, '\n\n').trim()
+}
+
 
 /**
  * One session, by id, over all of history.
@@ -605,7 +826,14 @@ export function getSession(id: string): SessionRow | null {
 
 /* ------------------------------ live sessions ----------------------------- */
 
-export type LiveSession = { pid: number; name: string | null; cwd: string; startedAt: number }
+export type LiveSession = {
+  pid: number
+  name: string | null
+  cwd: string
+  startedAt: number
+  /** A `claude -p` run: real, running, and nothing a person can type into. */
+  headless: boolean
+}
 
 /**
  * The sessions running on this box right now.
@@ -619,25 +847,100 @@ export type LiveSession = { pid: number; name: string | null; cwd: string; start
  * else in it; writing to another process's control socket is a way to start
  * work, and Wake starts nothing.
  */
-export function liveSessions(): Map<string, LiveSession> {
-  const out = new Map<string, LiveSession>()
-  let entries: string[]
-  try { entries = readdirSync(`${CLAUDE_HOME}/sessions`) } catch { return out }
+/**
+ * Whether a pid is a process that still exists.
+ *
+ * Signal 0 is the standard "does this exist and may I signal it" probe — no
+ * signal is delivered, so nothing about the process changes. `EPERM` means it
+ * exists and belongs to somebody else, which is still alive; only `ESRCH` means
+ * gone.
+ *
+ * This is the check the live-session read never made, and it is what the whole
+ * Sessions surface rests on. Claude Code removes its own `sessions/<pid>.json`
+ * on a clean exit and cannot remove it on a crash, an OOM kill or a `kill -9` —
+ * so without this, one hard-killed session is a row that claims to be running
+ * for as long as the file sits there, `isSessionActive` says yes, and every gate
+ * in the product that asks "is this a conversation or a corpse" gets the wrong
+ * answer. That is precisely the bug `listActiveSessions` was written to end,
+ * arriving through the one door it left open.
+ */
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'EPERM'
+  }
+}
 
+/**
+ * What the live-session read actually found, including the ways it found
+ * nothing.
+ *
+ * An empty Sessions list has three completely different causes — Claude Code
+ * has never run here, nothing is running right now, or the directory Wake reads
+ * is not there — and the list rendered all three as the same blank page. This
+ * is the shape that lets a caller tell them apart; `liveSessions()` remains the
+ * map, because almost every caller only wants the map.
+ */
+export type LiveScan = {
+  /** Whether `~/.claude/sessions` could be read at all. */
+  readable: boolean
+  sessions: Map<string, LiveSession>
+  /** Files naming a pid that is gone. Claude Code cannot clean these up itself. */
+  stale: number
+}
+
+export function scanLiveSessions(): LiveScan {
+  const sessions = new Map<string, LiveSession>()
+  let entries: string[]
+  try { entries = readdirSync(`${CLAUDE_HOME}/sessions`) } catch { return { readable: false, sessions, stale: 0 } }
+
+  let stale = 0
   for (const e of entries) {
     if (!e.endsWith('.json')) continue
     let d: any
     try { d = JSON.parse(readFileSync(`${CLAUDE_HOME}/sessions/${e}`, 'utf8')) } catch { continue }
     if (!d?.sessionId) continue
-    out.set(String(d.sessionId), {
-      pid: Number(d.pid) || 0,
+    const pid = Number(d.pid) || 0
+    if (!pidAlive(pid)) { stale++; continue }
+    sessions.set(String(d.sessionId), {
+      pid,
       name: typeof d.name === 'string' ? d.name : null,
       cwd: typeof d.cwd === 'string' ? d.cwd : '',
       startedAt: Number(d.startedAt) || 0,
+      /*
+       * Headless, as far as this machine can tell.
+       *
+       * `claude -p` writes the same per-process file an interactive session
+       * does, so a fetch run, an SDK agent and a session he is typing into are
+       * indistinguishable in that directory — and thirteen of them were on this
+       * box at once, all listed as sessions he could open. He cannot: there is
+       * no terminal to attach to and no composer to type into, and `send`
+       * refuses them one tap later with a sentence about tmux.
+       *
+       * `/proc/<pid>/cmdline` is the only place the difference is written down.
+       * It is Linux-only and Wake is a Linux user unit; anywhere else this reads
+       * `false`, which is the old behaviour rather than a new wrong answer.
+       */
+      headless: isHeadless(pid),
     })
   }
-  return out
+  return { readable: true, sessions, stale }
 }
+
+/** Whether the process behind a live session is a `--print` run with no terminal. */
+function isHeadless(pid: number): boolean {
+  try {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')
+    return argv.includes('--print') || argv.includes('-p')
+  } catch {
+    return false
+  }
+}
+
+export const liveSessions = (): Map<string, LiveSession> => scanLiveSessions().sessions
 
 /* -------------------------------- deletion -------------------------------- */
 
@@ -736,10 +1039,23 @@ export function sessionExcerpt(id: string, maxChars = 12_000): { found: boolean;
   }
 
   const text = lines.join('\n\n')
+  if (text.length <= maxChars) return { found: true, cwd, text }
+  /*
+   * The cut says so, and it says which end it kept.
+   *
+   * This used to be a bare `slice(-maxChars)`. The most recent exchange is the
+   * one a brief needs — "where did this get to" is the whole reason a session is
+   * ever attached to one — so keeping the end is right; saying nothing about it
+   * was not. A session reading a quote that begins mid-sentence has no way to
+   * know whether the sentence before it mattered, and `renderItem` then cut the
+   * *other* end of the same string, so a brief could carry the middle of a
+   * conversation while announcing only one of the two cuts.
+   */
   return {
     found: true,
     cwd,
-    text: text.length > maxChars ? text.slice(-maxChars) : text,
+    text: `[Wake kept the last ${maxChars.toLocaleString()} characters of this conversation and dropped ` +
+      `${(text.length - maxChars).toLocaleString()} before it.]\n\n${text.slice(-maxChars)}`,
   }
 }
 

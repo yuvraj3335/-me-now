@@ -51,11 +51,22 @@ const userTurn = (cwd: string, text: string, at: string) => ({
 })
 
 /** Claude Code marks a session live by writing one file per process. */
+/**
+ * A live session file, naming a pid that is genuinely running.
+ *
+ * `process.pid` rather than a made-up number, and that is not decoration.
+ * `liveSessions()` now checks the pid exists before believing the file, because
+ * Claude Code cannot remove its own `sessions/<pid>.json` when it is killed —
+ * so a hard-killed session used to stay "running" in this list forever, which
+ * is the exact corpse-handed-over bug this whole surface was written to end,
+ * coming in through the one door left open. A fixture with an invented pid
+ * would now be testing the stale case while claiming to test the live one.
+ */
 function markLive(pid: number, sessionId: string, cwd: string) {
   mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
   writeFileSync(
     `${CLAUDE_HOME}/sessions/${pid}.json`,
-    JSON.stringify({ pid, sessionId, cwd, startedAt: Date.now(), name: 'a live one' }),
+    JSON.stringify({ pid: process.pid, sessionId, cwd, startedAt: Date.now(), name: 'a live one' }),
   )
 }
 
@@ -319,5 +330,146 @@ describe('a transcript read as a conversation', () => {
     // allowed — but says so, which is what stops the composer offering to send.
     const dead = await call(`/sessions/${DEAD}/turns?after=0`)
     expect((await dead.json() as { active: boolean }).active).toBe(false)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * A conversation read as something a person can read.
+ * ------------------------------------------------------------------------- */
+
+describe('what the reader does to a turn on its way to the page', () => {
+  const SHAPED = uuid(10)
+  const BUSY = uuid(11)
+  const SHAPE_REPO = '/Users/me/work/alive'
+
+  /** The brief `renderPack` writes, near enough for the marker to fire. */
+  const WAKE_BRIEF = [
+    '# Acme sync stopped',
+    '',
+    '## What this is',
+    '',
+    'A brief from Wake, my personal command centre. It concerns the **truto** repository.',
+    '',
+    '## What I need',
+    '',
+    'OBJECTIVE. Take this report to a root cause and a safe reply.',
+    '',
+    '## Context — 2 objects',
+    '',
+    'quoted things',
+    '',
+    '---',
+    '',
+    'Packed by Wake at 2026-08-31T10:00:00.000Z · template `customer-incident`',
+  ].join('\n')
+
+  const MULTILINE = [
+    'Two things, and the second is code:',
+    '',
+    '1. the sync stopped',
+    '2. here is the failing call',
+    '',
+    '```ts',
+    'const r = await client.list<Contact>({ limit: 50 })',
+    '```',
+  ].join('\n')
+
+  beforeAll(() => {
+    write(SHAPE_REPO, SHAPED, [
+      { type: 'user', cwd: SHAPE_REPO, timestamp: '2026-08-31T11:00:00.000Z', message: { role: 'user', content: WAKE_BRIEF } },
+      { type: 'assistant', cwd: SHAPE_REPO, timestamp: '2026-08-31T11:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'reading it' }] } },
+      { type: 'user', cwd: SHAPE_REPO, timestamp: '2026-08-31T11:00:02.000Z', message: { role: 'user', content: MULTILINE } },
+      { type: 'user', cwd: SHAPE_REPO, timestamp: '2026-08-31T11:00:03.000Z', message: { role: 'user', content: '<system-reminder>ignore this</system-reminder>and keep this' } },
+    ])
+
+    // A session that has been running tools and saying nothing — which on this
+    // machine was two of the thirteen live sessions, both rendering as a blank
+    // page under a row claiming double-figure turns.
+    write(SHAPE_REPO, BUSY, [
+      { type: 'user', cwd: SHAPE_REPO, timestamp: '2026-08-31T12:00:00.000Z', message: { role: 'user', content: 'go' } },
+      ...Array.from({ length: 6 }, (_, i) => ([
+        {
+          type: 'assistant', cwd: SHAPE_REPO, timestamp: `2026-08-31T12:0${i}:01.000Z`,
+          message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'tool_use', name: `Tool${i}`, input: {} }] },
+        },
+        {
+          type: 'user', cwd: SHAPE_REPO, timestamp: `2026-08-31T12:0${i}:02.000Z`,
+          message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] },
+        },
+      ])).flat(),
+    ])
+  })
+
+  /**
+   * The message that started the session is the message the page must show.
+   *
+   * A session opened from Wake has the brief as its first user turn, and the
+   * reader ran that through `cleanPrompt` — the *title* function, which returns
+   * `null` when the whole text is a Wake brief. So the turn was dropped, and the
+   * conversation opened with Claude's answer to a question that was not on the
+   * screen. That is the one loop this product exists to serve, rendered as a
+   * reply to nothing.
+   */
+  test('a session started from a brief shows the brief, not nothing', () => {
+    const { turns } = parseSessionTurns(SHAPED)
+    const first = turns[0]!
+    expect(first.role).toBe('user')
+    expect(first.text, 'the opening brief was dropped').toContain('A Wake brief')
+    expect(first.text).toContain('Acme sync stopped')
+    // Its orders, because that is the part worth re-reading.
+    expect(first.text).toContain('Take this report to a root cause')
+    // Not the whole 700-character document, and not Wake's own footer.
+    expect(first.text).not.toContain('Packed by Wake at')
+    expect(first.text.length).toBeLessThan(WAKE_BRIEF.length)
+  })
+
+  /**
+   * `cleanPrompt` collapses all whitespace to single spaces and deletes every
+   * angle-bracketed thing, which is exactly right for a one-line row title and
+   * destroys a message. Running it over transcript bodies rendered every prompt
+   * he had ever typed as one unbroken line — fenced code with its newlines
+   * gone, lists run together — while Claude's turns kept their shape, so the
+   * asymmetry was visible on every screen and read as a styling bug.
+   */
+  test('a message keeps its lines and its code', () => {
+    const t = parseSessionTurns(SHAPED).turns.find(x => x.text.includes('Two things'))!
+    expect(t.text, 'newlines were collapsed').toContain('\n')
+    expect(t.text).toContain('```ts')
+    expect(t.text).toContain('const r = await client.list<Contact>({ limit: 50 })')
+  })
+
+  test('but the harness envelope he did not type is still cut', () => {
+    const t = parseSessionTurns(SHAPED).turns.find(x => x.text.includes('keep this'))!
+    expect(t.text).not.toContain('system-reminder')
+    expect(t.text).not.toContain('ignore this')
+  })
+
+  /**
+   * Tool calls that never reach a turn still happened.
+   *
+   * `pending` rides to the next turn that has prose in it, which is right while
+   * the session keeps talking and wrong at the end of the file: a session
+   * mid-run has called eight tools since its last sentence, and dropping them
+   * is how a page watching live work shows nothing moving.
+   */
+  test('a session that is working shows that it is working', () => {
+    const r = parseSessionTurns(BUSY)
+    const last = r.turns[r.turns.length - 1]!
+    expect(last.role).toBe('assistant')
+    expect(last.text, 'a tool-only turn should carry no prose').toBe('')
+    expect(last.tools.length, 'the tools since the last sentence were dropped').toBeGreaterThan(0)
+    // And the window is reported, so a page with nothing to draw can say which
+    // kind of nothing it has rather than "nothing has been said yet".
+    expect(r.window!.records).toBeGreaterThan(10)
+    expect(r.window!.tools).toBe(6)
+  })
+
+  test('the route carries the window to the page', async () => {
+    const r = await call(`/sessions/${BUSY}`)
+    const body = await r.json() as { window: { records: number; tools: number } | null; excerpt?: string }
+    expect(body.window?.tools).toBe(6)
+    // And no longer carries an excerpt: a second full pass over a 512KB tail,
+    // for a field nothing in the browser has ever read.
+    expect(body.excerpt).toBeUndefined()
   })
 })

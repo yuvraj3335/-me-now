@@ -323,7 +323,11 @@ describe('archiving a session', () => {
     mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
     writeFileSync(
       `${CLAUDE_HOME}/sessions/${pid}.json`,
-      JSON.stringify({ pid, sessionId, cwd: PREFIX_CWD, startedAt: Date.now() }),
+      // `process.pid`, not the argument: `liveSessions()` verifies the pid is a
+      // process that exists, because a killed session cannot clean up its own
+      // file and used to stay "running" forever. The argument still names the
+      // *file*, which is what these tests are varying.
+      JSON.stringify({ pid: process.pid, sessionId, cwd: PREFIX_CWD, startedAt: Date.now() }),
     )
   }
 
@@ -519,7 +523,9 @@ describe('deleting a session', () => {
     mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
     writeFileSync(
       `${CLAUDE_HOME}/sessions/4242.json`,
-      JSON.stringify({ pid: 4242, sessionId: id, cwd: '/Users/me/work/doomed', startedAt: Date.now() }),
+      // A real pid, so this is a session that is genuinely running. See the
+      // note on `markLiveAs` above.
+      JSON.stringify({ pid: process.pid, sessionId: id, cwd: '/Users/me/work/doomed', startedAt: Date.now() }),
     )
   }
 
@@ -596,4 +602,126 @@ describe('the delete route is gated', () => {
     }
     mkdirSync(`${CLAUDE_HOME}/file-history/${uuid(300)}`, { recursive: true })
   }
+})
+
+/* ---------------------------------------------------------------------------
+ * The tail reader, which is where a session quietly becomes less than it is.
+ * ------------------------------------------------------------------------- */
+
+describe('reading the tail of a transcript', () => {
+  /**
+   * A single JSONL record larger than the tail budget.
+   *
+   * Not hypothetical. Claude Code writes one record per line and a large tool
+   * result is one line: on this machine, of 117 transcripts, seven throw away
+   * more than 40KB of a 96KB list-tail as a partial first line and the worst
+   * throws away 92KB of 96KB. What survived that read parsed to no cwd, no
+   * branch, no last prompt and no turns — so the row rendered as `Session in
+   * -home-yuvraj-work-truto`, and `?repo=truto` dropped it, because the filter
+   * was matching against the flattened directory name the transcript never got
+   * to correct.
+   *
+   * The reader grows its window when the discard eats the budget, so the facts
+   * come back. This test is about the facts, not about the number of bytes.
+   */
+  const BLOATED = uuid(200)
+  const BLOATED_CWD = '/Users/me/work/bloated'
+
+  beforeAll(() => {
+    const real = {
+      type: 'user', cwd: BLOATED_CWD, gitBranch: 'feat/huge', version: '2.1.252',
+      message: { role: 'user', content: 'the only thing anybody said' },
+    }
+    // One enormous tool result, written after the only real turn, so a naive
+    // tail read lands inside it and drops everything.
+    const huge = {
+      type: 'user', cwd: BLOATED_CWD,
+      message: { role: 'user', content: [{ type: 'tool_result', content: 'x'.repeat(400_000) }] },
+    }
+    write(flatten(BLOATED_CWD), BLOATED,
+      [real, real, huge, { type: 'last-prompt', lastPrompt: 'the only thing anybody said' }]
+        .map(l => JSON.stringify(l)).join('\n'), 1)
+  })
+
+  test('a record bigger than the tail budget does not erase the session', () => {
+    const s = getSession(BLOATED)!
+    expect(s, 'the session vanished entirely').toBeTruthy()
+    expect(s.cwd, 'fell back to the flattened directory name').toBe(BLOATED_CWD)
+    expect(s.branch).toBe('feat/huge')
+    expect(s.lastPrompt).toContain('the only thing anybody said')
+  })
+
+  test('and it is still findable by the repository it ran in', () => {
+    const found = listAllSessions({ repo: 'bloated', limit: 50 }).map(r => r.id)
+    expect(found, 'a repo filter lost it').toContain(BLOATED)
+  })
+
+  test('a tool result is not a turn he took', () => {
+    // The count used to be user *records*, and Claude Code files every tool
+    // result as one — so a single question that ran thirty tools read as
+    // thirty-one turns, in the list and in the brief's `turns_in_view`.
+    const s = getSession(BLOATED)!
+    expect(s.turns, 'tool results are being counted as turns').toBe(2)
+    expect(s.tools).toBe(1)
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Live means a process, not a file that says so.
+ * ------------------------------------------------------------------------- */
+
+describe('what counts as running', () => {
+  const GHOST = uuid(201)
+  const REAL = uuid(202)
+
+  const mark = (pid: number, sessionId: string) => {
+    mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
+    writeFileSync(
+      `${CLAUDE_HOME}/sessions/${pid}.json`,
+      JSON.stringify({ pid, sessionId, cwd: PREFIX_CWD, startedAt: Date.now() }),
+    )
+  }
+
+  /**
+   * A pid that cannot be running.
+   *
+   * `/proc/sys/kernel/pid_max` is 4,194,304 by default and this is above every
+   * plausible ceiling, so it is a number no process can hold.
+   */
+  const DEAD_PID = 0x7ffffffe
+
+  beforeAll(() => {
+    mark(DEAD_PID, GHOST)
+    mark(process.pid, REAL)
+  })
+  afterAll(() => {
+    rmSync(`${CLAUDE_HOME}/sessions/${DEAD_PID}.json`, { force: true })
+    rmSync(`${CLAUDE_HOME}/sessions/${process.pid}.json`, { force: true })
+  })
+
+  /**
+   * The one door left open by the pass that ended "Wake handed him a corpse".
+   *
+   * Claude Code removes its own `sessions/<pid>.json` on a clean exit and
+   * cannot remove it after a `kill -9`, an OOM kill or a crash. Everything in
+   * this product that asks "is this a conversation or a transcript" reads that
+   * directory — the list, the picker, `isSessionActive`, the send route — so
+   * one hard-killed session used to be a row that claimed to be running until
+   * somebody noticed the file.
+   */
+  test('a session file naming a dead pid is not a running session', () => {
+    const live = liveSessions()
+    expect(live.has(GHOST), 'a stale per-process file was believed').toBe(false)
+    expect(live.has(REAL), 'a genuinely live session was dropped').toBe(true)
+  })
+
+  test('the list refuses to offer the ghost', async () => {
+    const r = await call('/sessions')
+    const body = await r.json() as { sessions: Array<{ id: string }>; reading: boolean; stale: number }
+    expect(body.sessions.map(s => s.id)).not.toContain(GHOST)
+    // And it says the question was answerable, which is the difference between
+    // "nothing is running" and "Wake cannot see what is running".
+    expect(body.reading).toBe(true)
+    expect(body.stale, 'the stale file was not counted').toBeGreaterThan(0)
+  })
 })
