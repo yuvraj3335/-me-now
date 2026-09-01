@@ -4,28 +4,99 @@
 #
 # The box is behind Cloudflare Access and accepts no inbound connections, so
 # deployment is pull-based rather than pushed from CI. A timer runs this every
-# minute; it does nothing at all unless origin/main has actually moved, which
-# makes the common case one `git fetch` and no more.
+# minute; the usual tick is one `git fetch`, one `curl` and no more.
 #
 # The order matters. Fetch, then check out, then verify, then restart. A build
 # that fails leaves the previous dist/ in place and the service untouched, so a
 # bad push costs a red log line rather than a dark screen on someone's phone.
+#
+# ── The question this script asks, and the one it used to ask ───────────────
+#
+# It used to compare `HEAD` to `origin/main` and exit when they matched. That is
+# "has origin moved relative to my checkout", and it is not the same question as
+# "does this box need redeploying" — the two agree only while every commit
+# arrives from somewhere else.
+#
+# They stopped agreeing the first time somebody committed *in the deploy
+# checkout* and pushed. `HEAD` equals `origin/main` on the very first
+# comparison, so the script exited before it fetched a thing, let alone built
+# one: `dist/` stayed stale, the unit kept running its old process, and this
+# timer reported success every sixty seconds while doing nothing at all. Which
+# is worse than failing, because there is nothing to notice.
+#
+# The same hole swallowed a second case that the rollback below was written to
+# prevent and did not. Verification passes, the ERR trap is cleared, and then
+# the *build* fails — `exit 1` leaves `HEAD` on the new commit with an old
+# `dist/` and an old process, and from that moment `HEAD` equals `origin/main`
+# forever, so the next tick and every tick after it exits 0 in silence.
+#
+# So the trigger is now the honest question: **is the process that is running
+# the commit that is checked out?** Only the server can answer half of it, so it
+# says which commit it booted on — `/healthz` carries `commit`, see
+# `src/server/version.ts` — and this compares that to `HEAD`. Origin still
+# decides *what to check out*; it no longer decides whether to deploy.
+#
+# What that buys beyond the bug: a hand `systemctl restart` after an edit, a
+# unit that crash-looped back up on an older image, and a `bun src/server/
+# index.ts` left running in a terminal are all now states this timer notices and
+# corrects, and none of them were before.
 set -euo pipefail
 
 REPO="${WAKE_REPO_DIR:-$HOME/work/wake}"
 BRANCH="${WAKE_DEPLOY_BRANCH:-main}"
 BUN="${WAKE_BUN:-$HOME/.bun/bin/bun}"
+HEALTH="${WAKE_HEALTH_URL:-http://127.0.0.1:8585/healthz}"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/wake"
 
 cd "$REPO"
+
+# What the running process says it booted on.
+#
+# An unreachable server, a `commit` this build does not carry, and a `null` all
+# come back as the empty string, and every one of them means "cannot tell" —
+# which is read as "deploy". A redundant build is the cheap error here and a
+# missed one is the expensive error, so the uncertainty resolves that way on
+# purpose. It is also correct on its own terms: a server that is down needs a
+# restart, and restarting it is what this script does.
+running_sha=$(curl -fsS --max-time 5 "$HEALTH" 2>/dev/null \
+  | sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p' || true)
+# For log lines. `${var:0:8}` is a substring and cannot also carry a default, so
+# the two are separated rather than spelled as one clever expansion that a shell
+# rejects at runtime and `bash -n` does not catch.
+running_short="${running_sha:0:8}"
+[ -n "$running_short" ] || running_short="unreachable"
 
 git fetch --quiet origin "$BRANCH"
 
 local_sha=$(git rev-parse HEAD)
 remote_sha=$(git rev-parse "origin/$BRANCH")
 
-if [ "$local_sha" = "$remote_sha" ]; then
+# Nothing to check out and nothing to correct: the common tick, and it stays
+# silent. Both halves have to hold — the checkout is on origin *and* the process
+# is on the checkout — which is the whole of the fix.
+if [ "$local_sha" = "$remote_sha" ] && [ "$local_sha" = "$running_sha" ]; then
   exit 0
 fi
+
+# A commit that has already failed here, not retried into the ground.
+#
+# The old script rolled back on failure so the next tick would see the move
+# again and report again. That rollback is wrong now — when `HEAD` was already
+# at origin there is nowhere to roll back *to* — so the loop is bounded here
+# instead. A transient failure (a network blip during `bun install`, a full
+# disk) clears within the window and is retried; a genuinely broken commit costs
+# six verification runs an hour rather than sixty, and says so once.
+mkdir -p "$STATE"
+failed_file="$STATE/deploy-failed"
+retry_after=${WAKE_DEPLOY_RETRY_SEC:-600}
+if [ -f "$failed_file" ]; then
+  read -r failed_sha failed_at < "$failed_file" || true
+  if [ "${failed_sha:-}" = "$remote_sha" ] \
+     && [ $(( $(date +%s) - ${failed_at:-0} )) -lt "$retry_after" ]; then
+    exit 0
+  fi
+fi
+mark_failed() { echo "$remote_sha $(date +%s)" > "$failed_file"; }
 
 # Different is not the same as behind, and the difference matters.
 #
@@ -45,17 +116,25 @@ fi
 # answers exactly that — HEAD is contained in origin, so a fast-forward is real.
 if ! git merge-base --is-ancestor HEAD "origin/$BRANCH"; then
   # Ahead is a normal state while working and resolves itself on the next push,
-  # so it is reported once and is not a failure. Diverged is not normal, and
-  # nothing here can fix it.
+  # so it is not a failure. Diverged is not normal, and nothing here can fix it.
   if git merge-base --is-ancestor "origin/$BRANCH" HEAD; then
-    echo "wake-deploy: ${local_sha:0:8} is ahead of origin/$BRANCH - nothing to deploy"
+    # It now says what the *consequence* is, which is the sentence that was
+    # missing while this was silently the reason nothing shipped. "Nothing to
+    # deploy" was true of the checkout and said nothing about the box, and the
+    # box is what somebody is refreshing on their phone.
+    echo "wake-deploy: ${local_sha:0:8} is ahead of origin/$BRANCH - not deploying unpushed work; the box is serving $running_short"
     exit 0
   fi
   echo "wake-deploy: ${local_sha:0:8} and origin/$BRANCH have diverged - refusing to deploy" >&2
   exit 1
 fi
 
-echo "wake-deploy: ${local_sha:0:8} -> ${remote_sha:0:8}"
+# Why this tick is doing anything, in the terms the trigger actually used.
+if [ "$local_sha" != "$remote_sha" ]; then
+  echo "wake-deploy: ${local_sha:0:8} -> ${remote_sha:0:8}"
+else
+  echo "wake-deploy: checkout is ${local_sha:0:8}; the running process is $running_short - redeploying"
+fi
 
 # Refuse a dirty tree, and refuse it BEFORE anything else happens.
 #
@@ -120,7 +199,25 @@ git merge --ff-only "origin/$BRANCH"
 # The box then sat on unverified code until something restarted the unit, at
 # which point it booted a commit that had never passed a check. Rolling back
 # means the next tick sees the move again, tries again, and logs again.
-trap 'echo "wake-deploy: ${remote_sha:0:8} failed verification — rolling back to ${local_sha:0:8}" >&2; git reset --hard "$local_sha" >/dev/null 2>&1 || true' ERR
+# Back out of the merge if the commit does not survive verification — and only
+# if there *was* a merge.
+#
+# The old trap reset --hard to `local_sha` unconditionally, on the assumption
+# that a deploy always moves HEAD. It does not any more: the common case now is
+# a commit made in this checkout and pushed, where HEAD was already at origin
+# and the merge is a no-op. Resetting there is at best pointless and at worst a
+# reset of the working tree for no reason. So the rollback is conditional on
+# having moved, and the failure marker is what stops the retry loop in the case
+# where there is nowhere to go back to.
+rollback() {
+  echo "wake-deploy: ${remote_sha:0:8} failed verification" >&2
+  mark_failed
+  if [ "$local_sha" != "$remote_sha" ]; then
+    echo "wake-deploy: rolling back to ${local_sha:0:8}" >&2
+    git reset --hard "$local_sha" >/dev/null 2>&1 || true
+  fi
+}
+trap rollback ERR
 
 "$BUN" install --frozen-lockfile
 "$BUN" run typecheck
@@ -148,15 +245,52 @@ if [ -d dist ]; then
 fi
 
 if ! "$BUN" run build; then
-  echo "wake-deploy: build failed on ${remote_sha:0:8} — restoring the previous dist/"
+  echo "wake-deploy: build failed on ${remote_sha:0:8} — restoring the previous dist/" >&2
   if [ -d dist.prev ]; then
     rm -rf dist
     mv dist.prev dist
   fi
+  # Marked, which it never was. This is the branch that used to poison the
+  # trigger permanently: verification had passed, the ERR trap was cleared, and
+  # `exit 1` left HEAD on the new commit with an old dist/ and an old process —
+  # after which `local_sha` equalled `remote_sha` on every later tick and the
+  # timer exited 0 in silence forever. The new trigger notices it on the next
+  # tick regardless; the marker is what keeps it from rebuilding every minute.
+  mark_failed
   exit 1
 fi
 
 rm -rf dist.prev
 
 systemctl --user restart wake
-echo "wake-deploy: restarted on ${remote_sha:0:8}"
+
+# Confirmed, not announced.
+#
+# "restarted on <sha>" was a claim about a command that had been *issued*, which
+# is the same class of statement as the one this whole script was rewritten to
+# stop making. The unit can fail to come back — a bad .env, a port still held, a
+# crash on boot — and the old line said it had deployed anyway. So it waits for
+# the process to say which commit it booted on, and reports what it actually
+# finds.
+deployed=""
+for _ in $(seq 1 30); do
+  deployed=$(curl -fsS --max-time 2 "$HEALTH" 2>/dev/null \
+    | sed -n 's/.*"commit":"\([0-9a-f]\{40\}\)".*/\1/p' || true)
+  [ -n "$deployed" ] && break
+  sleep 1
+done
+
+if [ "$deployed" = "$remote_sha" ]; then
+  rm -f "$failed_file"
+  echo "wake-deploy: live on ${remote_sha:0:8}"
+elif [ -n "$deployed" ]; then
+  # It came back on something else, which means the checkout moved under it or
+  # something restarted it in between. Worth a line rather than silence; the
+  # next tick will correct it.
+  echo "wake-deploy: restarted, but the box reports ${deployed:0:8} and the checkout is ${remote_sha:0:8}" >&2
+  exit 1
+else
+  echo "wake-deploy: restarted on ${remote_sha:0:8} but it never answered $HEALTH — check: systemctl --user status wake" >&2
+  mark_failed
+  exit 1
+fi

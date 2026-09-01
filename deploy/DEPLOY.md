@@ -43,10 +43,24 @@ systemctl --user restart wake
 
 ## Updating
 
-Nothing, normally. A timer on the box checks `origin/main` every minute and
-redeploys when it moves — backing the database up, fast-forwarding, and running
-typecheck, tests and the build *before* it restarts anything. A failing build
-leaves the running version alone.
+Nothing, normally. A timer on the box checks every minute and redeploys when the
+running process is not on the checked-out commit — backing the database up,
+fast-forwarding, and running typecheck, tests and the build *before* it restarts
+anything. A failing build leaves the running version alone.
+
+**What it triggers on, and why it is not "origin moved".** It used to be, and
+that comparison has a hole in it you can walk through without noticing. Commit
+in *this* checkout — which is what an agent working on the box does — and push,
+and `HEAD` already equals `origin/main` by the time the timer looks. The script
+exited immediately: `dist/` stayed stale, the unit kept its old process, and the
+timer reported success every sixty seconds while doing nothing at all.
+
+So the trigger is now `/healthz` → `commit`, which is the sha the *running
+process* booted on, compared against `HEAD`. Origin still decides what gets
+checked out; it no longer decides whether to deploy. That also catches a hand
+`systemctl restart` after an edit, a unit that crash-looped back onto an older
+image, and a `bun src/server/index.ts` left running in a terminal — none of
+which the old comparison could see.
 
 Install it once:
 
@@ -63,8 +77,25 @@ systemctl --user list-timers wake-deploy.timer
 journalctl --user -u wake-deploy -f
 ```
 
-It is quiet by design: a run where `origin/main` has not moved logs nothing at
-all. To deploy by hand, or to see why one failed:
+It is quiet by design: a run where the box is already on the checked-out commit
+logs nothing at all. When it does act it says which of the two reasons it was:
+
+```
+wake-deploy: 1620242b -> 8ac41f3d                                  # origin moved
+wake-deploy: checkout is 8ac41f3d; the running process is 1620242b - redeploying
+wake-deploy: live on 8ac41f3d                                      # confirmed, not assumed
+```
+
+That last line waits for the unit to come back and say which commit it booted
+on. It used to read `restarted on <sha>`, which was a claim about a command that
+had been *issued* — a unit that failed to come back was reported as deployed.
+
+A commit that fails verification is recorded and not retried for ten minutes
+(`WAKE_DEPLOY_RETRY_SEC`), so a genuinely broken push costs six runs an hour
+rather than sixty. Pushing a fix clears it immediately, because the marker is
+keyed on the sha.
+
+To deploy by hand, or to see why one failed:
 
 ```bash
 ~/work/wake/deploy/wake-deploy.sh
@@ -79,7 +110,7 @@ happen here.
 ```bash
 systemctl --user status wake
 journalctl --user -u wake -f          # one line per request, plus each poll summary
-curl -s localhost:8585/healthz        # card count and uptime
+curl -s localhost:8585/healthz        # commit, card count and uptime
 ```
 
 A healthy boot looks like:
@@ -87,8 +118,14 @@ A healthy boot looks like:
 ```
 workspace: 43 repos, 28 skills indexed
 hand-off: https://claude.ai/new
+wake listening on http://127.0.0.1:8585  (public: …)  commit 8ac41f3d
 ingest: 22 groups (+0 new) · slack=14 github=4 gmail=0 sentry=0 claude=18
 ```
+
+The commit is on the boot line and on `/healthz` because it is the first thing
+worth checking when you suspect a stale deploy, and because the deploy timer
+reads it. `curl -s localhost:8585/healthz` against `git rev-parse HEAD` is the
+whole of "is the box running what I pushed".
 
 There is no key to check and no binary to find: "Open in Claude" is a link, so
 the only thing that can be wrong with it is `WAKE_HANDOFF_URL`.

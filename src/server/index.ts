@@ -10,6 +10,7 @@ import { HOST, PORT, POLL_INTERVAL_MS, PUBLIC_URL, REMINDER_TICK_MS, IS_DEV } fr
 import { ingest } from './ingest'
 import { runReminders } from './push'
 import { db } from './db'
+import { BOOT_COMMIT, bootCommitShort } from './version'
 
 const ROOT = new URL('../..', import.meta.url).pathname.replace(/\/$/, '')
 const DIST = join(ROOT, 'dist')
@@ -33,9 +34,22 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
+/**
+ * Liveness, and the one fact the deploy script cannot work out for itself.
+ *
+ * `commit` is the sha this *process* booted on — see `version.ts`. It is here
+ * rather than under `/api` on purpose: `wake-deploy.sh` reads it every minute,
+ * `/healthz` is already the unauthenticated liveness probe, and a deploy check
+ * that had to hold a session cookie would be a deploy check that stops working
+ * the day Access changes.
+ *
+ * `null` means the process cannot tell, which the script reads as "deploy" —
+ * erring towards a redundant build rather than towards a missed one.
+ */
 app.get('/healthz', c =>
   c.json({
     ok: true,
+    commit: BOOT_COMMIT,
     cards: (db.query(`SELECT COUNT(*) AS n FROM cards WHERE gone = 0`).get() as any).n,
     uptime: Math.round(process.uptime()),
   }),
@@ -171,7 +185,9 @@ const b = boot()
 console.log(`workspace: ${b.repos} repos, ${b.skills} skills indexed`)
 console.log(`claude code: ${b.terminal}`)
 
-console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})${IS_DEV ? '  [dev]' : ''}`)
+// The commit is on the boot line as well as on `/healthz`, because the first
+// place anybody looks when they suspect a stale deploy is the log.
+console.log(`wake listening on http://${HOST}:${PORT}  (public: ${PUBLIC_URL})  commit ${bootCommitShort()}${IS_DEV ? '  [dev]' : ''}`)
 
 /**
  * 255 is Bun's ceiling and 60 was not enough.
