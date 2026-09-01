@@ -35,12 +35,12 @@
     The utilities emit `var(--color-x)`, so overriding the variable in a scoped
     selector re-themes the whole app without a second set of classes.
   */
-  --color-ink-950: #020203;
-  --color-ink-900: #040406;
-  --color-ink-850: #101014;
-  --color-ink-800: #1a1a20;
-  --color-ink-700: #1e1e25;
-  --color-ink-600: #33333d;
+  --color-ink-950: #010104;
+  --color-ink-900: #050509;
+  --color-ink-850: #20212f;
+  --color-ink-800: #272937;
+  --color-ink-700: #2c2e3e;
+  --color-ink-600: #4d4d61;
 
   /*
     Two structural tokens, and the single most load-bearing change in this file.
@@ -49,16 +49,19 @@
     ~1.00:1 — invisible — which is why Settings rendered four bordered cards in
     dark and zero in light from the identical component. `rule` is the hairline
     between rows; `edge` is the border of a panel, a rail or a control. Neither
-    may ever be used as a `color`: they are not text, they are structure, and at
-    1.58:1 the `·` separators that used to be painted in `ink-600` were the only
-    elements in the product that failed contrast.
+    may ever be used as a `color`: they are not text, they are structure.
+
+    Both carry the page's blue rather than being neutral greys, for the same
+    reason the page does — see the note over `--color-ink-900` below. A grey
+    hairline drawn across a tinted surface is the one line on the screen that is
+    not made of the same material as everything around it.
   */
-  --color-rule: #33333e;
-  --color-edge: #454558;
+  --color-rule: #3f3f4d;
+  --color-edge: #50506a;
 
   --color-fg:      #f2f2f5;
-  --color-fg-dim:  #c4c4d0;
-  --color-fg-mute: #9e9eac;
+  --color-fg-dim:  #cfcfda;
+  --color-fg-mute: #b0b0be;
 
   /*
     The accent is two tokens, because one colour cannot do both jobs.
@@ -72,11 +75,11 @@
   */
   --color-accent:      #e9a23b;
   --color-accent-ink:  #e9a23b;
-  --color-accent-soft: #3a2a12;
+  --color-accent-soft: #402d10;
   --color-on-accent:   #14141a;
   /* The dim behind a sheet. Dark in both themes: a scrim that went white in
      light mode would brighten the page instead of receding it. */
-  --color-scrim:       #08080a;
+  --color-scrim:       #05050a;
 
   /*
     Two row grounds, because a row has more states than the ink scale has steps.
@@ -87,8 +90,22 @@
     see the note over `rowStateClass` in `primitives.tsx` for why one is a hue
     and the other is a lightness.
   */
-  --color-row-new: #1b1509;
-  --color-row-sel: #22232f;
+  --color-row-new: #312919;
+  --color-row-sel: #2d3049;
+
+  /*
+    Two surface tokens rather than two `--glass-*` variables, and the reason is
+    the cascade rather than taste: these are the only two rungs of the material
+    that a component needs as a *hover* state, and Tailwind cannot put a variant
+    on a hand-written class. `hover:glass-raise` generates nothing. `bg-raise`
+    and `hover:bg-raise` are real utilities, and `.glass-raise` / `.glass-well`
+    read the same token, so the resting form and the hover form cannot drift.
+
+    `raise` is a control standing on a surface; `well` is a field pressed into
+    one. See the ladder note over `.glass` below.
+  */
+  --color-raise: rgb(164 186 255 / 0.10);
+  --color-well:  rgb(0 0 12 / 0.26);
 
   --color-src-slack:  #c2a3e8;
   --color-src-github: #9db1ce;
@@ -123,9 +140,9 @@
     `wont_do` were literally the same token, so two of the five were not merely
     hard to tell apart but identical.
 
-    So each status gets a hue, spent twice: on the glyph, and on a 14% wash
-    behind the chip. A wash rather than a saturated pill because the row is
-    still mostly text, and five solid pills down a column is a paint chart.
+    So each status gets a hue, spent twice: on the glyph, and on a wash behind
+    the chip. A wash rather than a saturated pill because the row is still mostly
+    text, and five solid pills down a column is a paint chart.
 
     None of these is amber. Amber is unread, the badge, and the one primary
     button, and it stays scarce — `in_progress` takes sky instead, which is the
@@ -134,11 +151,11 @@
     `done` is `ok`'s green and `drop` is a rose held deliberately dimmer than
     `bad`: "I decided not to" is not an error, and must not read as one.
   */
-  --color-status-idle:   #8a8a96;
+  --color-status-idle:   #9c9ca9;
   --color-status-live:   #6aa6e8;
   --color-status-review: #b58ee0;
   --color-status-done:   #6bd39a;
-  --color-status-drop:   #c47a7a;
+  --color-status-drop:   #d08787;
 
   /*
     Seven sizes, replacing nineteen.
@@ -238,55 +255,56 @@
     color-scheme: dark;
 
     /*
-      The page is near-black now, and that is what makes the material possible.
+      The page is a blue-black now, and that one character is most of the fix.
 
-      #0a0a0c was the right page for a flat design: every surface was the same
-      ink and depth came from a hairline. Under glass the page is the thing
-      everything else floats *over*, and a translucent row over #0a0a0c composited
-      to #1d1b1d — where `fg-mute` measured 5.7:1 against a stated floor of 7 and
-      `status-idle` 4.6:1 against 5.5. The row could not be lifted and the tokens
-      could not be dimmed, so the page went down instead.
+      #040406 was a *colourless* page, and a colourless page is a page a
+      translucent surface can pick nothing up from. White over neutral is grey at
+      every alpha — so the tint, the two ambient washes and the specular edge
+      were all spending themselves on lightness alone, and the material that
+      resulted was a flat grey lift. Not glass. Grey.
 
-      Every other ground here is unchanged, deliberately. Hover moved one step
-      (#17171c is now *below* a resting row, so it read as a dip rather than a
-      lift), and nothing else did — which is what makes the whole scheme
-      verifiable: every token measures the same or better against its own worst
-      ground than it did before this change. The numbers are in the block above
-      `--glass-card-tint`.
+      So the hue starts at the bottom of the stack, where it is cheapest: #050509
+      is one level brighter than the page it replaces and carries four levels of
+      blue. Everything composited over it inherits that, including the parts of
+      the screen the ambient washes do not reach — which, before this pass, was
+      most of the screen. See `.ambient::before`.
+
+      The rest of the ladder moved with it. A resting row is now a real pane
+      rather than a 13-level grey rectangle: page → row is 11.3 in CIE L*, where
+      it was 3.8. iOS's own grouped cell over black is 10. The numbers for every
+      ground are in the block above `--glass-card-tint`, and `material.test.ts`
+      re-derives all of them from these values rather than trusting the comment.
     */
-    --color-ink-950: #020203;
-    --color-ink-900: #040406;   /* the page */
-    --color-ink-850: #101014;   /* panels, sheets, inputs, code blocks */
-    --color-ink-800: #1a1a20;   /* row hover, button hover — one step up from #17171c */
-    --color-ink-700: #1e1e25;   /* row keyboard focus, pressed */
-    --color-ink-600: #33333d;   /* scrollbars and grabbers only — never text */
+    --color-ink-950: #010104;
+    --color-ink-900: #050509;   /* the page */
+    --color-ink-850: #20212f;   /* an opaque panel — and the fallback for `.glass` */
+    --color-ink-800: #272937;   /* row hover, button hover */
+    --color-ink-700: #2c2e3e;   /* row keyboard focus, pressed */
+    --color-ink-600: #4d4d61;   /* scrollbars and grabbers only — never text */
     /*
       The two row grounds, and the one number that decides whether they work.
 
       Every state a row can be in used to be drawn out of the same three ink
-      steps, and those steps are 8% apart in luminance — `ink-800` (hover) and
-      `ink-700` (pressed) measure 1.08:1 against each other, which is not a
-      difference anybody sees at a glance across a 20-row table. That is the
-      whole reason a selected row and a hovered row looked identical: they were
-      not merely assigned the same token, there was no *third* token they could
-      have been assigned that would have read as different.
+      steps, and those steps were 8% apart in luminance — `ink-800` (hover) and
+      `ink-700` (pressed) measured 1.08:1 against each other, which is not a
+      difference anybody sees at a glance across a 20-row table.
 
       So these two are not another rung of the same ladder. `row-sel` is a real
-      lightness step — 15% above hover, cool, and it means "this is the row the
-      pane is showing". `row-new` is the same lightness as hover and a different
-      HUE, because "something arrived here" is not a degree of the same thing as
-      "your pointer is here"; it is a different fact and it gets a different
-      channel. Warm reads as new without spending the accent, which is the point:
-      forty unread rows may not be forty amber marks.
+      lightness step — cool, and it means "this is the row the pane is showing".
+      `row-new` is the same lightness as hover and a different HUE, because
+      "something arrived here" is not a degree of the same thing as "your pointer
+      is here"; it is a different fact and it gets a different channel. Warm reads
+      as new without spending the accent, which is the point: forty unread rows
+      may not be forty amber marks.
 
-      The floors this file states are measured against the PAGE, and every row
-      state has always eroded them a little — `fg-mute` on the existing `ink-800`
-      hover is 6.5:1, not 7.2:1. These hold that same line: `fg-mute` measures
-      6.6:1 on `row-new` and 5.7:1 on `row-sel`, and the title, which is `fg` and
-      `fg-dim`, stays above 13:1 and 8:1 on both.
+      Both are measured against a resting row rather than against the page, since
+      that is what they are a step away from: `row-new` and hover both land 4.2
+      L* above it, `row-sel` 7.9. Every text and mark token still clears the
+      attended-ground floors on all four — 6:1 and 4.5:1, which is the erosion
+      this file has always accepted for a row you are pointing at.
     */
-    --color-row-new: #1b1509;   /* 6.6:1 for fg-mute — warm, same lightness as hover */
-    --color-row-sel: #22232f;   /* 5.7:1 for fg-mute — cool, 15% above hover */
+    --color-row-new: #312919;   /* warm, and the same lightness as hover */
+    --color-row-sel: #2d3049;   /* cool, and a real step above it */
 
     /*
       The one thing in the product that casts a shadow, and why it is not in
@@ -298,142 +316,208 @@
       draws a rectangle rather than a raised thing. It is declared here and not
       in `@theme` deliberately — a `--color-*` there would generate `bg-shadow`
       and `text-shadow` utilities, and this is not a colour anything may be
-      painted in. It is only ever read by `.raised`.
+      painted in. It is only ever read by `.raised` and by `.glass`.
     */
-    --color-shadow: rgb(0 0 0 / 0.55);
+    --color-shadow: rgb(0 0 0 / 0.62);
 
 
     /* The structure the whole design leans on, and it was too faint to be it.
-       `rule` measured 1.32:1 dark and 1.21:1 light against the page — 21 of 255
-       levels in light, which is why light mode compensated with white cards on
-       grey and why "hairlines, not boxes" was not actually a system. The floors,
-       in both themes: rule >= 1.5:1, edge >= 1.9:1. Every ratio is measured. */
-    /* Both lifted one notch, and the notch is measured against the *card*
-       rather than the page — a border on a resting row is the commonest place
-       either of them is drawn now, and the row's ground is lighter than the
-       page. On the card: rule 1.52:1, edge 2.03:1. On the page they are 1.64
-       and 2.19. Floors unchanged: rule >= 1.5, edge >= 1.9. */
-    --color-rule: #33333e;
-    --color-edge: #454558;
-
-    --color-fg:      #f2f2f5;   /* 17.0:1 on a card, 16.9:1 on the page */
-    --color-fg-dim:  #c4c4d0;   /* 11.0:1 on a card */
-    /* 7.2:1 on a card. Three levels up from #9b9baa, which measured 6.9:1 there
-       — under this file's own 7:1 floor for text read to decide. The page it
-       was picked against is no longer the ground it is usually read on. */
-    --color-fg-mute: #9e9eac;
-
-    --color-accent:      #e9a23b;
-    --color-accent-ink:  #e9a23b;  /* 9.1:1 on the page */
-    --color-accent-soft: #3a2a12;
-    --color-on-accent:   #14141a;  /* 8.5:1 on the accent */
-    --color-scrim:       #08080a;
+       The floors, in both themes: rule >= 1.5:1, edge >= 1.9:1, measured against
+       a resting ROW rather than the page — a border on a row is much the
+       commonest place either of them is drawn, and a row's ground is lighter
+       than the page. On the card: rule 1.55:1, edge 2.07:1. Both carry the
+       page's blue rather than being neutral: a grey hairline across a tinted
+       surface is the one line on screen made of a different material. */
+    --color-rule: #3f3f4d;
+    --color-edge: #50506a;
 
     /*
-      Liquid glass. Floating surfaces only — see `.glass` for the rule.
+      The ink ladder, lifted with the ground it is read on.
 
-      Four values rather than one, because a translucent panel is a material and
-      not a colour: what it is tinted with, how far it blurs what is behind it,
-      how much it lifts that colour back up, and the bright edge along its top.
+      This is the honest half of the trade the material asks for, and the half
+      that was skipped last time. A translucent row sits on a lighter ground than
+      the flat one it replaced, so holding a 7:1 floor with a fixed ink means the
+      only way to keep the floor is to drain the ground — which is exactly what
+      happened, and exactly why everything read grey. Lift the ground and the ink
+      goes with it.
 
-      `tint` is 0.78 and not lower, and that number is a contrast floor rather
-      than a taste. #27 put every text token above 4.5:1 against its own ground,
-      and a panel you can see through has no fixed ground. So it was measured
-      through the composite rather than reasoned about: at 0.78, `fg` on this
-      panel is **17.2:1** over the page and **11.3:1** with the amber accent
-      directly behind it, which is the brightest thing on the desk and therefore
-      the worst case. Both clear the floor with room. Thin the tint much further
-      and that stops being true, so this number is not free to drift.
+      What it cost: three tokens moved and nothing else did. `fg-mute` and the
+      two quietest status hues were the only ones anywhere near their floors;
+      every other token in the file clears the new ground untouched.
+    */
+    --color-fg:      #f2f2f5;   /* 14.4:1 on a resting row */
+    --color-fg-dim:  #cfcfda;   /* 10.2:1 */
+    --color-fg-mute: #b0b0be;   /*  7.2:1 — against this file's 7:1 floor */
 
-      The blur is what makes the rest safe: 24px is enough that whatever shows
+    --color-accent:      #e9a23b;
+    --color-accent-ink:  #e9a23b;  /* 7.4:1 on a row */
+    --color-accent-soft: #402d10;  /* 6.1:1 for accent-ink on it */
+    --color-on-accent:   #14141a;  /* 8.5:1 on the accent */
+    --color-scrim:       #05050a;
+
+    /*
+      Liquid glass, and it is a material rather than a colour: what it is tinted
+      with, how far it blurs what is behind it, how much it lifts that colour
+      back up, and the bright edge along its top.
+
+      `tint` is 0.86 and not thinner, and that number is a contrast floor rather
+      than a taste. A panel you can see through has no fixed ground of its own,
+      so it was measured through the composite rather than reasoned about: at
+      0.86 a sheet opened over the desk lands on #222332, which is one rung above
+      a row and where every text and mark token still clears this file's resting
+      floors. Thin it and a sheet drifts up past the row it opened over, and the
+      quietest three tokens go under.
+
+      The blur is what makes the rest safe: 30px is enough that whatever shows
       through is a low-frequency wash rather than legible shapes, so text never
       sits on an edge. `saturate` is the part that makes it read as glass and not
       as fog — blurring alone greys the colour out, and lifting it back is what
       Apple's own material does.
+
+      `sheen` is new. It is the diagonal highlight a real pane catches across its
+      face, painted as one linear-gradient on the panel's own background-image;
+      it is what stops a large surface from reading as a flat rectangle of tint.
+      It is on `.glass` only — a panel is big enough to show a gradient and pads
+      its text away from the bright corner. A row is neither.
     */
-    --glass-tint: rgb(18 18 24 / 0.72);
-    --glass-blur: 30px;
-    --glass-sat:  180%;
+    --glass-tint:  rgb(34 35 50 / 0.86);
+    --glass-blur:  30px;
+    --glass-sat:   180%;
+    --glass-sheen: rgb(198 212 255 / 0.055);
     /* The specular line along the top edge. One pixel, inset, never a border. */
-    --glass-edge: rgb(255 255 255 / 0.14);
+    --glass-edge: rgb(198 212 255 / 0.24);
 
     /*
-      Three weights of the same material, and the third is the load-bearing one.
+      Five weights of the same material, and the middle three are the ones that
+      do the work.
 
       `bar` is a strip that content scrolls *under* — the phone tab bar, a sticky
       table head, the filter row. It is thinner and blurs harder than a panel,
       because the thing behind it is moving and a thin tint over a moving page is
       how you can tell the strip is in front rather than painted on.
 
-      `card` is a row, a chip, a cell: content, not chrome. It has a tint and a
-      specular edge and **no blur at all**, and that is a performance decision
+      `card` is a row, a cell, a list item: content, not chrome. It has a tint and
+      a specular edge and **no blur at all**, and that is a performance decision
       before it is an aesthetic one. `backdrop-filter` re-samples everything
       behind the element on every composited frame; at fifty rows on a phone that
       is fifty full-viewport reads per frame and the list stops tracking the
-      thumb. What buys the look back is the ambient ground below — a translucent
-      fill over a coloured wash genuinely picks the colour up, so the row reads
-      as a pane of glass while costing one ordinary paint. This is also what iOS
-      does: the material is on the chrome, not on every cell.
+      thumb. What buys the look back is the ambient ground below and the blue in
+      the page — a translucent fill over a coloured ground genuinely picks the
+      colour up, so the row reads as a pane of glass while costing one ordinary
+      paint. This is also what iOS does: the material is on the chrome, not on
+      every cell.
+
+      `raise` and `well` are new, and they are what was actually missing. A chip
+      inside a row wearing the *same* tint as the row it sits on is not a control
+      on a surface, it is a rectangle drawn on one — which is most of why the
+      half-converted app read as flat even where the material had landed. `raise`
+      is a control resting on a card or a panel; `well` is a field or a track
+      pressed into one, and it inverts the specular pair (shade along the top,
+      highlight along the bottom) because that is what a recess does to light.
 
       `--glass-lens` is the dark line along a surface's *bottom* inside edge.
-      Together with the highlight on top it is what makes 1px of border read as
-      a thickness rather than as an outline — a real pane catches light on the
-      edge nearest the source and shades on the one away from it.
+      Together with the highlight on top it is what makes 1px of border read as a
+      thickness rather than as an outline — a real pane catches light on the edge
+      nearest the source and shades on the one away from it.
     */
-    --glass-bar-tint:  rgb(10 10 14 / 0.62);
-    --glass-bar-blur:  22px;
+    --glass-bar-tint:  rgb(20 21 34 / 0.66);
+    --glass-bar-blur:  24px;
     /*
-      2%, and the number is a contrast budget rather than a taste.
-      
-      A resting row composites to #111014. Measured there: `fg` 17.0:1,
-      `fg-dim` 11.0:1, `fg-mute` 7.2:1, and the weakest mark in the product —
-      `status-idle` — 5.6:1, against floors of 7 and 5.5. At 4.5% the row landed
-      on #251f25 and three of those dropped under. The specular edge is what
-      makes up the difference visually, which is why it is stronger here than
-      the tint: an edge costs no contrast at all, because nothing is read on it.
+      11%, cool, and both halves of that are the point.
+
+      A resting row composites to #1f202f — a blue-slate pane, 11.3 L* above the
+      page, where the 2% neutral white this replaces reached 3.8 and had no hue
+      at all to reach it with. Measured on that ground: `fg` 14.4:1, `fg-dim`
+      10.2:1, `fg-mute` 7.2:1, and the weakest mark in the product,
+      `status-idle`, 5.6:1 — against floors of 7 and 5.5.
+
+      The tint is rgb(150 175 255) rather than white because contrast is a
+      *luminance* ratio and chroma is therefore free: at a fixed lightness, the
+      bluer the tint, the more colour the surface has for nothing. That is the
+      whole trick this file was missing, and it is why the row can be both
+      visibly a pane and above its floors at the same time.
     */
-    --glass-card-tint: rgb(255 255 255 / 0.020);
-    --glass-card-edge: rgb(255 255 255 / 0.07);
-    --glass-lens:      rgb(0 0 0 / 0.30);
+    --glass-card-tint:  rgb(150 175 255 / 0.11);
+    --glass-card-edge:  rgb(198 212 255 / 0.13);
+    --color-raise:      rgb(164 186 255 / 0.10);
+    --glass-raise-edge: rgb(206 220 255 / 0.17);
+    --color-well:       rgb(0 0 12 / 0.26);
+    --glass-lens:       rgb(0 0 0 / 0.45);
+    /*
+      What separates two rows that are against each other, which is not the same
+      thing in the two themes and is why this is a token.
+
+      In dark the separator is the material's own pair: the lens shade along the
+      bottom of the upper row and the specular highlight along the top of the
+      lower one. Measured on a resting row, those composite to #11121a and
+      #35374a — 1.60:1 against each other, above this file's 1.5:1 floor for a
+      hairline, and reading as two panes laid against one another rather than as
+      a line drawn between them.
+
+      In light that pair is invisible and the floor is missed outright: the
+      highlight is white on a white pane, and the lens at the alpha a light theme
+      can carry is 1.15:1. So light uses `rule` — the hairline token, which is
+      already picked and already measured for exactly this job. Same rule, two
+      materials, and the test measures the pair rather than either line alone.
+    */
+    --glass-sep:        rgb(0 0 0 / 0.45);
+    /*
+      What a status chip's wash is mixed *into*, and why it is not `transparent`.
+
+      A chip used to be its own hue at 14% over whatever it sat on, with the
+      same hue as its text. That is a wash made of the ink, so every point of
+      alpha it gains is a point of contrast the word on it loses — measured on a
+      resting row, the five chips ran 4.6:1 to 6.5:1 against this file's 5.5:1
+      floor for a mark, and the two quietest were the two furthest under.
+
+      Mixing into a dark well instead of into the surface breaks that coupling:
+      the ground goes *down* while the ink stays put, so the same 17% of hue now
+      measures 5.5:1 to 7.9:1. What it costs is separation from the row — a dark
+      tinted capsule on a dark row is only 1.1:1 — and that is paid back by
+      `statusRing`, a 1px outline in the hue at 38%, which is 2.0:1 or better
+      against the row and costs no contrast at all because nothing is read on it.
+    */
+    --status-well: #0b0c16;
 
     /*
       The ambient ground, and the only reason any of the above reads as glass.
 
-      A translucent surface over a flat near-black page is a slightly lighter
-      near-black rectangle — there is nothing behind it to show through, so the
-      material has nothing to be made of. These two washes are what it refracts:
-      one cool, one warm, both fixed, both far enough apart that a panel crossing
-      the screen changes colour as it goes.
+      Two washes, one cool and one warm, fixed to the viewport. They are what a
+      translucent surface refracts, and before this pass they did not reach it:
+      modelled across a 390×844 screen, the two gradients as they were written
+      delivered an average of 0.10 of one wash's alpha and a *minimum of zero* —
+      the middle of a phone screen, which is where the rows are, got no ambient
+      at all. The alphas were not the whole problem; the geometry was. Both are
+      fixed here and in `.ambient::before`, which now covers the viewport with a
+      minimum of 0.84 washes and an average of 1.02.
 
       They are held at 7% and under, and that ceiling is a contrast floor rather
-      than taste. The page is measured for `fg-mute` at 7.2:1; at these alphas
-      the brightest point of the composite is about `#111117`, where `fg-mute`
-      still measures 6.9:1 — inside the erosion this file already accepts for a
-      hovered row. Raise them and that stops being true.
+      than taste: every token above is measured through the composite of both at
+      full strength, which is a stronger ground than any real pixel gets.
     */
-    --ambient-1: rgb(96 116 220 / 0.035);
-    --ambient-2: rgb(226 158 74 / 0.022);
+    --ambient-1: rgb(80 100 250 / 0.045);
+    --ambient-2: rgb(245 150 60 / 0.035);
 
-    --color-src-slack:  #c2a3e8;
-    --color-src-github: #9db1ce;
-    --color-src-gmail:  #e29d99;
-    --color-src-sentry: #dd9ab0;
+    --color-src-slack:  #c2a3e8;   /* 7.4:1 on a row */
+    --color-src-github: #9db1ce;   /* 7.4:1 */
+    --color-src-gmail:  #e29d99;   /* 7.3:1 */
+    --color-src-sentry: #dd9ab0;   /* 7.1:1 */
     /* Not a hue, on purpose. Claude Code sessions are ~90% of this desk, and
        #dcb28e sat 12 degrees from the accent — 18 glyphs plus 18 dots plus a
        chip made 38 amber-adjacent marks on a screen whose budget is three, so
        the accent meant nothing there. The dominant row type has to be the
        quietest mark on the page: it recedes rather than competing. */
-    --color-src-claude: #a3a3b0;   /* 7.9:1, and no hue at all */
+    --color-src-claude: #a3a3b0;   /* 6.5:1, and no hue at all */
 
-    --color-ok:   #6bd39a;      /* 10.8:1 */
+    --color-ok:   #6bd39a;      /* 8.7:1 */
     /* Visibly not the accent. `warn` and `accent-ink` were byte-identical in
        both themes, so the one place the product reports a broken source painted
        it in the colour reserved for "this one". A redder orange. It carries two
        things and only two: the Slack entitlement line in Settings, and the
        `In review` status glyph — the one status that is a claim about somebody
        else's attention rather than about his own. */
-    --color-warn: #ee8b45;      /*  7.9:1 */
-    --color-bad:  #ef9494;      /*  8.7:1 */
+    --color-warn: #ee8b45;      /*  6.4:1 */
+    --color-bad:  #ef9494;      /*  7.2:1 */
     /* Ink on a filled `bad` surface — the danger button. `bad` is a text colour
        everywhere else, and a destructive control that is only red *text* is
        indistinguishable from a disabled one. */
@@ -441,12 +525,14 @@
     --color-on-bad: #14141a;    /*  7.6:1 on bad */
 
     /* Five statuses, five hues — see the note in `@theme`. All above this
-       file's 5.5:1 floor for a mark that carries meaning on its own. */
-    --color-status-idle:   #8a8a96;  /*  5.8:1 — neutral, an empty ring */
-    --color-status-live:   #6aa6e8;  /*  7.8:1 — sky. Deliberately not amber. */
-    --color-status-review: #b58ee0;  /*  7.5:1 — violet */
-    --color-status-done:   #6bd39a;  /* 10.8:1 — `ok`'s green */
-    --color-status-drop:   #c47a7a;  /*  6.0:1 — rose, dimmer than `bad` #ef9494 */
+       file's 5.5:1 floor for a mark that carries meaning on its own, measured
+       on a resting row. `idle` and `drop` are the two that moved with the
+       ground; the other three cleared it where they were. */
+    --color-status-idle:   #9c9ca9;  /*  5.6:1 — neutral, an empty ring */
+    --color-status-live:   #6aa6e8;  /*  6.3:1 — sky. Deliberately not amber. */
+    --color-status-review: #b58ee0;  /*  6.1:1 — violet */
+    --color-status-done:   #6bd39a;  /*  8.7:1 — `ok`'s green */
+    --color-status-drop:   #d08787;  /*  5.6:1 — rose, dimmer than `bad` #ef9494 */
   }
 
   /* Light. The ink scale inverts — "raised" becomes lighter-than-page, so the
@@ -454,174 +540,179 @@
   :root[data-theme='light'] {
     color-scheme: light;
 
+    /*
+      The page carries colour now, and the card is the only near-white thing on
+      it.
+
+      #eceef3 was a cool grey with near-white cards on top: grey on grey, 5.5 in
+      CIE L* between the page and a row, and no chroma anywhere for the material
+      to be made of. Two changes, and they pull in opposite directions on
+      purpose. The page steps down to #e3e7f2 — deeper, so a white pane lifts off
+      it by 7.6 L* — and the ambient washes over it get strong enough to be seen,
+      so the page reads as a tinted field rather than as a flat sheet of grey.
+      Measured at the corners: #dae0f1 under the cool wash, #e3e3e9 under the
+      warm one. That travel across the page is what the cards refract.
+
+      Every ratio was re-measured against this. Three tokens moved with it —
+      `fg-dim`, `fg-mute` and three of the darker marks — because light mode's
+      attended row grounds are *darker* than its resting one, which is the
+      direction that costs contrast here.
+    */
     --color-ink-950: #14141a;   /* still dark: it is the scrim and the button ink */
-    /* The page steps down so a near-white card lifts off it. #f7f7f9 was
-       1.01:1 against the card, i.e. the same colour: the panes were invisible
-       and only their borders said a row was an object. Every ratio was
-       re-measured against this — no text or mark token moved. */
-    --color-ink-900: #eceef3;
-    --color-ink-850: #ffffff;
-    --color-ink-800: #eeeef2;
-    --color-ink-700: #e5e6ec;
-    --color-ink-600: #c2c2ce;
-    /* See the dark block. Warm and cool, one step off the page each way; the
+    --color-ink-900: #e3e7f2;   /* the page */
+    --color-ink-850: #ffffff;   /* an opaque panel */
+    --color-ink-800: #e4e7f1;   /* row hover, button hover */
+    --color-ink-700: #dbdfeb;   /* row keyboard focus, pressed */
+    --color-ink-600: #b3b6c6;   /* scrollbars and grabbers only — never text */
+    /* See the dark block. Warm and cool, one step off the card each way; the
        shadow is far weaker here because a shadow on an off-white page is read
        at a fraction of the alpha it needs on a near-black one. */
-    --color-row-new: #faf2e4;
-    --color-row-sel: #e2e6f2;
-    --color-shadow: rgb(20 20 26 / 0.14);
+    --color-row-new: #faf0da;
+    --color-row-sel: #dee4f8;
+    --color-shadow: rgb(20 20 26 / 0.16);
 
 
-    --color-rule: #c8c8d3;      /* 1.55:1 — was #e2e2e8 at 1.21:1, i.e. invisible */
-    --color-edge: #b2b2c1;      /* 1.96:1 — was #d2d2dc at 1.40:1 */
+    --color-rule: #c1c4d2;      /* 1.70:1 on a resting row */
+    --color-edge: #a6a8bb;      /* 2.31:1 */
 
-    --color-fg:      #16161a;   /* 16.9:1 */
-    --color-fg-dim:  #4a4a55;   /*  8.2:1 */
-    --color-fg-mute: #5c5c69;   /*  6.1:1 — was #6b6b78 at 4.9:1 */
+    --color-fg:      #16161a;   /* 16.9:1 on a resting row */
+    --color-fg-dim:  #454550;   /*  8.9:1 on a row, 6.8:1 on the darkest ambient */
+    --color-fg-mute: #4b4b55;   /*  7.9:1 on a row, 6.0:1 on the darkest ambient */
 
     /* The surface amber is unchanged — a bright button with dark ink reads the
        same in both themes. Only the TEXT amber darkens, because #e9a23b on
        white is 2.0:1. Do not "simplify" this back to one token. */
     --color-accent:      #e9a23b;
-    --color-accent-ink:  #8a5300;  /* 6.0:1 on the page */
-    --color-accent-soft: #fdf1dd;
+    --color-accent-ink:  #784500;  /* 7.3:1 on a row, 5.5:1 on the darkest ambient */
+    --color-accent-soft: #fbeed6;
     --color-on-accent:   #241703;  /* 8.1:1 on the accent */
     --color-scrim:       #14141a;
 
-    /* Liquid glass, light. Same four values, inverted ground — see the dark
-       block for what each one is and why `tint` cannot go much thinner. The
-       specular edge is near-white here because the panel is lighter than the
-       page rather than darker, so the highlight sits on top of it rather than
-       inside it. */
-    --glass-tint: rgb(255 255 255 / 0.72);
-    --glass-blur: 30px;
-    --glass-sat:  180%;
-    --glass-edge: rgb(255 255 255 / 0.85);
+    /* Liquid glass, light. The same values, inverted ground — see the dark block
+       for what each one is and why `tint` cannot go much thinner. The specular
+       edge is near-white here because the panel is lighter than the page rather
+       than darker, so the highlight sits on top of it rather than inside it. */
+    --glass-tint:  rgb(255 255 255 / 0.78);
+    --glass-blur:  30px;
+    --glass-sat:   180%;
+    --glass-sheen: rgb(255 255 255 / 0.55);
+    --glass-edge:  rgb(255 255 255 / 0.90);
 
-    /* The same three weights, inverted ground — see the dark block for what each
+    /* The same five weights, inverted ground — see the dark block for what each
        one is. The card tint is white rather than a lift, because here a panel is
-       *lighter* than the page; the lens line stays dark but far weaker, for the
-       reason `--color-shadow` is weaker in this theme. */
-    --glass-bar-tint:  rgb(255 255 255 / 0.72);
-    --glass-bar-blur:  22px;
-    /* Near-white, unlike the 2% lift the dark theme uses, and for the same reason
-       inverted: here a card is *lighter* than its page, so the tint is most of the
-       object rather than a hint of one. 0.92 rather than 1.0 keeps it a material —
-       fully opaque and the ambient wash stops reaching it at all. Measured on the
-       resulting #fdfdfe: every token clears light mode's own floors. */
-    --glass-card-tint: rgb(255 255 255 / 0.92);
-    --glass-card-edge: rgb(255 255 255 / 0.90);
-    --glass-lens:      rgb(20 20 26 / 0.06);
+       *lighter* than its page; the lens line stays dark but far weaker, for the
+       reason `--color-shadow` is weaker in this theme. 0.94 rather than 1.0
+       keeps it a material: fully opaque and the ambient wash stops reaching it
+       at all. `raise` is the one weight that inverts completely — a control on a
+       white card cannot be whiter, so it is a *tinted* lift rather than a bright
+       one, and `well` is the same recess it is in dark. */
+    --glass-bar-tint:  rgb(255 255 255 / 0.76);
+    --glass-bar-blur:  24px;
+    --glass-card-tint:  rgb(255 255 255 / 0.94);
+    --glass-card-edge:  rgb(255 255 255 / 0.92);
+    --color-raise:      rgb(66 88 190 / 0.055);
+    --glass-raise-edge: rgb(255 255 255 / 0.85);
+    --color-well:       rgb(26 28 48 / 0.05);
+    --glass-lens:       rgb(20 20 26 / 0.07);
+    /* See the dark block: here the specular pair cannot draw a separator on a
+       white pane, so the hairline token does it. 1.70:1 on a resting row. */
+    --glass-sep:        #c1c4d2;
+    /* See the dark block. Here the "well" is white, because a light chip is a
+       pale tint of its hue rather than a dark one; the arithmetic and the floor
+       are identical. */
+    --status-well: #ffffff;
 
-    /* The ambient ground, warmer and weaker: an off-white page shows a wash at a
-       fraction of the alpha a near-black one needs, and `fg-mute` has 6.1:1 here
-       rather than 7.2:1 to spend. Measured at the brightest point of the
-       composite, `fg-mute` holds 5.9:1. */
-    --ambient-1: rgb(96 116 220 / 0.026);
-    --ambient-2: rgb(226 158 74 / 0.020);
+    /* The ambient ground. Stronger than it was, and it can be: light mode's
+       floors are measured on a near-white card, which the washes barely reach,
+       so what they cost is paid on the *page* — where nothing is read that is
+       not also read on a card. Measured at the composite of both at full
+       strength, every token still clears this theme's floors. */
+    --ambient-1: rgb(64 88 214 / 0.060);
+    --ambient-2: rgb(232 140 44 / 0.050);
 
-    --color-src-slack:  #6d3fa0;
-    --color-src-github: #3c5680;
-    --color-src-gmail:  #a83b36;
-    --color-src-sentry: #9c3459;
-    --color-src-claude: #4f4f59;   /* 7.6:1 — see the dark block */
+    --color-src-slack:  #653a96;
+    --color-src-github: #37507a;
+    --color-src-gmail:  #952921;
+    --color-src-sentry: #8f2b4f;
+    --color-src-claude: #4a4a54;   /* see the dark block */
 
-    --color-ok:   #0d6038;      /* 7.1:1 — was #157f4d at 4.7:1, under this file's own floor */
-    --color-warn: #8f3300;      /* 7.4:1 — and a different hue from accent-ink #8a5300 */
-    --color-bad:  #b3261e;      /* 6.5:1 */
+    --color-ok:   #0d6038;      /* 7.4:1 */
+    --color-warn: #8f3300;      /* 7.7:1 — and a different hue from accent-ink */
+    --color-bad:  #a2160e;      /* 7.4:1 */
     --color-on-ok:  #ffffff;    /* 7.4:1 on ok */
     --color-on-bad: #ffffff;    /* 6.7:1 on bad */
 
-    /* The same five hues darkened onto an off-white page. The dark values are
-       2:1 or worse here, which is the failure `--color-accent-ink` exists to
-       prevent, so these are picked against #f7f7f9 rather than converted. */
-    --color-status-idle:   #5c5c69;  /* 6.2:1 */
-    --color-status-live:   #155a9e;  /* 6.6:1 */
-    --color-status-review: #6d3fa0;  /* 6.8:1 */
-    --color-status-done:   #0d6038;  /* 7.1:1 — `ok`'s green */
-    --color-status-drop:   #99423c;  /* 6.1:1 — still dimmer than `bad` #b3261e */
+    /* The same five hues darkened onto a tinted page. The dark values are 2:1 or
+       worse here, which is the failure `--color-accent-ink` exists to prevent,
+       so these are picked against this theme's own grounds rather than
+       converted. */
+    --color-status-idle:   #4f4f59;  /* 7.4:1 */
+    --color-status-live:   #14528f;  /* 7.4:1 */
+    --color-status-review: #653a96;  /* 7.4:1 */
+    --color-status-done:   #0d6038;  /* 7.4:1 — `ok`'s green */
+    --color-status-drop:   #893530;  /* 7.5:1 — still dimmer than `bad` #a2160e */
   }
 
   /* No explicit choice: follow the system. Identical to the block above by
-     construction — a test compares them value for value, because "System" and
-     "Light" rendering differently on one machine is the failure this prevents. */
+     construction — `material.test.ts` compares them declaration for
+     declaration, because "System" and "Light" rendering differently on one
+     machine is the failure this prevents. Every value here is a copy; the
+     reasoning for all of them is in the explicit light block above. */
   @media (prefers-color-scheme: light) {
     :root:not([data-theme]) {
       color-scheme: light;
 
       --color-ink-950: #14141a;
-      /* The page steps down so a near-white card lifts off it. #f7f7f9 was
-         1.01:1 against the card, i.e. the same colour: the panes were invisible
-         and only their borders said a row was an object. Every ratio was
-         re-measured against this — no text or mark token moved. */
-      --color-ink-900: #eceef3;
+      --color-ink-900: #e3e7f2;
       --color-ink-850: #ffffff;
-      --color-ink-800: #eeeef2;
-      --color-ink-700: #e5e6ec;
-      --color-ink-600: #c2c2ce;
-    --color-row-new: #faf2e4;
-    --color-row-sel: #e2e6f2;
-    --color-shadow: rgb(20 20 26 / 0.14);
-
-
-      --color-rule: #c8c8d3;
-      --color-edge: #b2b2c1;
-
-      --color-fg:      #16161a;
-      --color-fg-dim:  #4a4a55;
-      --color-fg-mute: #5c5c69;
-
-      --color-accent:      #e9a23b;
-      --color-accent-ink:  #8a5300;
-      --color-accent-soft: #fdf1dd;
-      --color-on-accent:   #241703;
-      --color-scrim:       #14141a;
-
-      /* Liquid glass, light — the same values as the explicit light block. */
-      --glass-tint: rgb(255 255 255 / 0.72);
+      --color-ink-800: #e4e7f1;
+      --color-ink-700: #dbdfeb;
+      --color-ink-600: #b3b6c6;
+      --color-row-new: #faf0da;
+      --color-row-sel: #dee4f8;
+      --color-shadow: rgb(20 20 26 / 0.16);
+      --color-rule: #c1c4d2;
+      --color-edge: #a6a8bb;
+      --color-fg: #16161a;
+      --color-fg-dim: #454550;
+      --color-fg-mute: #4b4b55;
+      --color-accent: #e9a23b;
+      --color-accent-ink: #784500;
+      --color-accent-soft: #fbeed6;
+      --color-on-accent: #241703;
+      --color-scrim: #14141a;
+      --glass-tint: rgb(255 255 255 / 0.78);
       --glass-blur: 30px;
-      --glass-sat:  180%;
-      --glass-edge: rgb(255 255 255 / 0.85);
-
-      /* The same three weights, inverted ground — see the dark block for what each
-         one is. The card tint is white rather than a lift, because here a panel is
-         *lighter* than the page; the lens line stays dark but far weaker, for the
-         reason `--color-shadow` is weaker in this theme. */
-      --glass-bar-tint:  rgb(255 255 255 / 0.72);
-      --glass-bar-blur:  22px;
-      /* Near-white, unlike the 2% lift the dark theme uses, and for the same reason
-         inverted: here a card is *lighter* than its page, so the tint is most of the
-         object rather than a hint of one. 0.92 rather than 1.0 keeps it a material —
-         fully opaque and the ambient wash stops reaching it at all. Measured on the
-         resulting #fdfdfe: every token clears light mode's own floors. */
-      --glass-card-tint: rgb(255 255 255 / 0.92);
-      --glass-card-edge: rgb(255 255 255 / 0.90);
-      --glass-lens:      rgb(20 20 26 / 0.06);
-
-      /* The ambient ground, warmer and weaker: an off-white page shows a wash at a
-         fraction of the alpha a near-black one needs, and `fg-mute` has 6.1:1 here
-         rather than 7.2:1 to spend. Measured at the brightest point of the
-         composite, `fg-mute` holds 5.9:1. */
-      --ambient-1: rgb(96 116 220 / 0.026);
-      --ambient-2: rgb(226 158 74 / 0.020);
-
-      --color-src-slack:  #6d3fa0;
-      --color-src-github: #3c5680;
-      --color-src-gmail:  #a83b36;
-      --color-src-sentry: #9c3459;
-      --color-src-claude: #4f4f59;
-
-      --color-ok:   #0d6038;
+      --glass-sat: 180%;
+      --glass-sheen: rgb(255 255 255 / 0.55);
+      --glass-edge: rgb(255 255 255 / 0.90);
+      --glass-bar-tint: rgb(255 255 255 / 0.76);
+      --glass-bar-blur: 24px;
+      --glass-card-tint: rgb(255 255 255 / 0.94);
+      --glass-card-edge: rgb(255 255 255 / 0.92);
+      --color-raise: rgb(66 88 190 / 0.055);
+      --glass-raise-edge: rgb(255 255 255 / 0.85);
+      --color-well: rgb(26 28 48 / 0.05);
+      --glass-lens: rgb(20 20 26 / 0.07);
+      --glass-sep: #c1c4d2;
+      --status-well: #ffffff;
+      --ambient-1: rgb(64 88 214 / 0.060);
+      --ambient-2: rgb(232 140 44 / 0.050);
+      --color-src-slack: #653a96;
+      --color-src-github: #37507a;
+      --color-src-gmail: #952921;
+      --color-src-sentry: #8f2b4f;
+      --color-src-claude: #4a4a54;
+      --color-ok: #0d6038;
       --color-warn: #8f3300;
-      --color-bad:  #b3261e;
-      --color-on-ok:  #ffffff;
+      --color-bad: #a2160e;
+      --color-on-ok: #ffffff;
       --color-on-bad: #ffffff;
-
-      --color-status-idle:   #5c5c69;
-      --color-status-live:   #155a9e;
-      --color-status-review: #6d3fa0;
-      --color-status-done:   #0d6038;
-      --color-status-drop:   #99423c;
+      --color-status-idle: #4f4f59;
+      --color-status-live: #14528f;
+      --color-status-review: #653a96;
+      --color-status-done: #0d6038;
+      --color-status-drop: #893530;
     }
   }
 }
@@ -658,7 +749,24 @@
 
   body {
     margin: 0;
-    background: var(--color-ink-900);
+    /*
+      No background here, and that is the whole reason the ambient wash is
+      visible at all.
+
+      `html` carries the page colour and, being the root element, propagates it
+      to the canvas — so the page is painted before anything else, exactly as
+      before. `body` used to repeat it, and repeating it was fatal: CSS paints a
+      stacking context in the order (1) the context's own background, (2) its
+      NEGATIVE z-index children, (3) the backgrounds of its in-flow block
+      descendants. `.ambient::before` is `z-index: -1`, so it is step 2 and
+      `body`'s background is step 3 — the wash was painted and then covered over,
+      on every route, in both themes, since the day the material landed. Sampled
+      on the deployed page at 390px: every pixel of the ground read exactly
+      `--color-ink-900`, whatever the ambient alphas said.
+
+      That is why raising those alphas never worked and never could have. There
+      was no bug in the numbers; there was a bug in the paint order.
+    */
     color: var(--color-fg);
     font-family: var(--font-sans);
     font-size: 14px;
@@ -1006,51 +1114,64 @@
   }
 
   /*
-    Liquid glass, and the two rules that keep it from becoming glassmorphism.
-
-    This reverses "no glass", which stood for two releases and which the comment
-    above `.raised` still argued for. It was asked for by name, and the ban is
-    gone rather than worked around.
+    Liquid glass, in five weights, and the three rules that keep it from becoming
+    glassmorphism.
 
     **Depth is relative, so not everything may be glass.** The material reads as
-    depth precisely because there is a ground it is floating over. The earlier
-    version of this rule said "floating surfaces only" and drew the line at
-    dismissibility; the line is drawn at *chrome versus content* now, which is
-    wider — a row, a chip and a cell are glass too — but it is still a line, and
-    the page ground under all of it never is.
+    depth precisely because there is a ground it is floating over. The line is
+    drawn at *chrome versus content* — a row, a chip and a cell are glass too —
+    but it is still a line, and the page ground under all of it never is.
 
     **The blur is rationed, and that is the whole of the phone's smoothness.**
     `backdrop-filter` makes the compositor re-sample everything behind the
     element on every frame it paints. One of those on a fixed bar is free; fifty
     of them on a scrolling list is a list that stops tracking the thumb, which is
-    the exact complaint this work started from. So there are three weights and
-    only two of them blur — see `--glass-card-tint` for why the third does not
-    need to.
+    the exact complaint this work started from. So of the five weights below only
+    two blur, and neither of those is ever worn by a row.
+
+    **Elevation is a ladder, and every rung has to be a different rung.** This is
+    the rule the half-finished version of this material broke, and breaking it is
+    most of why the app read as flat even where the material had landed: a chip
+    inside a row wore `.glass-card`, which is the row's own tint, so the control
+    and the surface it sat on were the same colour and the nesting said nothing.
+    Bottom to top: `.glass-well` (a field pressed into a surface), the surface
+    itself, `.glass-card` (a row on the page), `.glass-raise` (a control on a
+    row or a panel), `.glass-bar` (chrome the page scrolls under), `.glass` (a
+    panel floating over everything). A surface may hold something one rung above
+    it or one rung below it; it may not hold its own rung.
 
     **The edge is a highlight, not a border.** `inset 0 1px 0` along the top and
     `inset 0 -1px 0` along the bottom: the specular line a real pane catches on
     the edge nearest the light, and the shade on the edge away from it. Between
-    them 1px of border reads as a thickness. Panels keep `border-edge` as well;
-    the highlight sits inside it.
+    them 1px of border reads as a thickness. `.glass-well` inverts the pair,
+    because that is what a recess does to the same light. Insets follow
+    `border-radius`, so the highlight turns the corner instead of stopping at it
+    — which is why the radii were re-scaled when this material arrived.
 
     **`-webkit-` is not optional.** iOS Safari has never shipped the unprefixed
     property, and this product is read on a phone.
 
     **And it degrades to the opaque token.** Firefox with the pref off, an old
     WebView, a device that refuses the filter under memory pressure: without the
-    fallback the panel is 72% transparent with no blur, which is not a softer
+    fallback the panel is 78% transparent with no blur, which is not a softer
     version of this, it is unreadable text over live content. `@supports` makes
     that a different rendering rather than a broken one.
   */
   .glass {
-    background: var(--glass-tint);
+    background-color: var(--glass-tint);
+    /* The diagonal sheen. One gradient, painted on the panel's own background,
+       running from the corner nearest the light. A large surface with a single
+       flat tint on it is a rectangle of colour; this is what makes it a pane.
+       It is on `.glass` alone — a panel is big enough to show a gradient and
+       pads its text away from the bright corner. A row is neither. */
+    background-image: linear-gradient(152deg, var(--glass-sheen), transparent 46%);
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
     box-shadow:
       inset 0 1px 0 0 var(--glass-edge),
       inset 0 -1px 0 0 var(--glass-lens),
       0 1px 2px var(--color-shadow),
-      0 16px 40px -12px var(--color-shadow);
+      0 24px 60px -18px var(--color-shadow);
   }
 
   /*
@@ -1069,22 +1190,24 @@
     elevation it needs.
   */
   .glass-bar {
-    background: var(--glass-bar-tint);
+    background-color: var(--glass-bar-tint);
     -webkit-backdrop-filter: blur(var(--glass-bar-blur)) saturate(var(--glass-sat));
     backdrop-filter: blur(var(--glass-bar-blur)) saturate(var(--glass-sat));
   }
 
   /*
-    Content: a row, a card, a chip, a cell. **No blur, on purpose.**
+    Content: a row, a card, a cell, a list item. **No blur, on purpose.**
 
     This is the weight that does the most work and costs the least, and the
-    reason it costs nothing is the ambient ground. A 4.5% white fill over a flat
-    near-black page is a flat, slightly-lighter rectangle. The same fill over
-    `--ambient-1`/`--ambient-2` picks the wash up and changes colour across the
-    screen — which is what the eye reads as translucency. So the row genuinely
-    is showing what is behind it; it is just that what is behind it is a
-    gradient and not a live re-sample, and at a row's size and opacity there is
-    no difference a person can see.
+    reason it costs nothing is what is underneath it. A neutral white fill over a
+    flat near-black page is a flat, slightly-lighter rectangle — which is exactly
+    what shipped, and exactly what "it all reads grey" was describing. The same
+    fill *tinted*, over a page that has blue in it and two ambient washes that
+    actually reach the middle of the screen, picks the colour up and changes
+    across the viewport. That is what the eye reads as translucency. So the row
+    genuinely is showing what is behind it; it is just that what is behind it is
+    a gradient and not a live re-sample, and at a row's size there is no
+    difference a person can see.
 
     What there is a difference in: fifty of these paint in one pass. Fifty
     `backdrop-filter`s do not.
@@ -1112,14 +1235,52 @@
     product's main list.
 
     So the split is by *responsibility* rather than by strength. `rowStateClass`
-    owns the fill — including the resting one, which is now the card tint rather
-    than nothing — and this owns the specular pair, which nothing else ever sets.
-    The two compose because they touch different properties.
+    owns the fill — including the resting one, which is the card tint — and this
+    owns the specular pair, which nothing else ever sets. The two compose because
+    they touch different properties.
   */
   .glass-edge {
     box-shadow:
       inset 0 1px 0 0 var(--glass-card-edge),
       inset 0 -1px 0 0 var(--glass-lens);
+  }
+
+  /*
+    A control resting ON a card or a panel: a chip, a status pill, a select, a
+    segmented option, a secondary button, the hovered row of a menu.
+
+    The rung that was missing. Everything at this level used to wear
+    `.glass-card` — the row's own tint — so a chip on a row was the row's colour
+    on the row, and the only thing saying it was a control at all was its border.
+    Fifty of those is a page of outlines. One rung up is a real object sitting on
+    a real surface, and it costs one more `background-color`.
+
+    No blur here either, for the same reason `.glass-card` has none: these appear
+    two and three to a row.
+  */
+  .glass-raise {
+    background-color: var(--color-raise);
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-raise-edge),
+      inset 0 -1px 0 0 var(--glass-lens);
+  }
+
+  /*
+    A field or a track pressed INTO a surface: a text input, a textarea, a code
+    block, a progress bar's groove, a scroll region with its own ground.
+
+    The specular pair is inverted — shade along the top, highlight along the
+    bottom — because that is what the same light does to a recess, and it is the
+    single cheapest cue there is for "you type here" versus "you press this".
+    The tint is a darkening in both themes, so a well is always below whatever
+    holds it, and text inside one is always on a ground at least as good as the
+    surface's own.
+  */
+  .glass-well {
+    background-color: var(--color-well);
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-lens),
+      inset 0 -1px 0 0 var(--glass-card-edge);
   }
 
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
@@ -1145,6 +1306,27 @@
     `contain: strict` and the explicit `will-change` promote it once, to its own
     layer, where it is one texture the compositor reuses for the life of the
     page.
+
+    **The geometry, which is what was actually broken.** The two gradients used
+    to be `80vw 60vh at 12% -8%` and `70vw 55vh at 92% 108%`, fading out at 70%
+    of their own radius. Modelled across a 390×844 screen on an 8px grid, that
+    delivered an average of **0.10** of one wash's alpha and a **minimum of
+    zero**: both ellipses died well before the middle of the phone, which is
+    where every row in the product is. So the material had nothing to refract
+    over most of the screen, whatever the alphas said — and no amount of raising
+    them would have fixed it, because there was no gradient there to raise.
+
+    Wider, pushed further off-screen, and stopped past 100% so the ray still
+    carries colour where it leaves the viewport. The same model now reads a
+    minimum of **0.84** and an average of **1.02** washes, at every viewport from
+    390×844 to 1280×800: the whole screen is lit, the two hues meet in the middle
+    and the corners stay distinct. A colour stop beyond 100% is ordinary CSS —
+    the percentage is a position on the gradient ray, not a clamp — and it costs
+    nothing extra to raster because the layer is still only viewport-sized.
+
+    `material.test.ts` measures every token through **both washes at full
+    strength**, which is still stronger than any real pixel: pass there and every
+    pixel passes.
   */
   .ambient::before {
     content: '';
@@ -1153,8 +1335,8 @@
     z-index: -1;
     pointer-events: none;
     background:
-      radial-gradient(80vw 60vh at 12% -8%,  var(--ambient-1), transparent 70%),
-      radial-gradient(70vw 55vh at 92% 108%, var(--ambient-2), transparent 70%);
+      radial-gradient(160vw 140vh at 0% -25%,   var(--ambient-1), transparent 135%),
+      radial-gradient(155vw 135vh at 100% 125%, var(--ambient-2), transparent 135%);
     will-change: transform;
     contain: strict;
   }
@@ -1192,9 +1374,10 @@
     .glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
     .glass-bar { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
     .glass-scrim { -webkit-backdrop-filter: none; backdrop-filter: none; }
-    /* `.glass-card` is not listed, and that is not an omission: it never blurred,
-       so there is nothing here to give back. The ambient ground stays too — it
-       is a static gradient, not motion. */
+    /* `.glass-card`, `.glass-raise` and `.glass-well` are not listed, and that is
+       not an omission: none of them ever blurred, so there is nothing here to
+       give back. The ambient ground stays too — it is a static gradient, not
+       motion. */
   }
 
   /*
@@ -1291,6 +1474,36 @@
   .row-skip {
     content-visibility: auto;
     contain-intrinsic-size: auto 76px;
+  }
+
+  /*
+    A table row, as a pane of glass, without giving up the table.
+
+    Two layouts show the same rows and they want different shapes. The phone
+    list makes each row its own floating card with a gap between them, which is
+    right where a row is a touch target and there are eight on screen. A table
+    is a different object: twenty rows, four columns holding one x down the page,
+    and 6px of air between each pair is 120px of a laptop screen spent on
+    nothing plus a column that no longer reads as a column.
+
+    So the table keeps its density and gets the material anyway — by making the
+    SEPARATOR the material instead of adding one. Each row carries the same
+    specular pair every other surface does: a highlight along its top edge and
+    the lens shade along its bottom. Stacked, that reads exactly as panes of
+    glass laid against each other, which is what they are, and it *replaces*
+    `border-b border-rule` rather than joining it — the old hairline plus a new
+    highlight would have been two lines per row and would have striped the table.
+
+    It goes on the cells and not on the `<tr>` because a row under
+    `border-collapse` paints neither its own border nor its own box-shadow in
+    any engine — the same constraint that put the keyboard cursor in a
+    background gradient two rules below. A `<td>` is an ordinary block box and
+    takes both.
+  */
+  .row-pane > td {
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-card-edge),
+      inset 0 -1px 0 0 var(--glass-sep);
   }
 
   /*

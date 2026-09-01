@@ -232,7 +232,7 @@ export function Sync({ source }: { source: SourceName | null }): JSX.Element {
   const chevron = 'hit relative inline-flex items-center justify-center h-8 pl-1 pr-2 text-sm '
     + 'rounded-control rounded-l-none transition-colors duration-100 '
     + 'disabled:opacity-40 disabled:pointer-events-none '
-    + 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'
+    + 'text-fg-mute hover:text-fg-dim hover:bg-raise'
 
   return (
     <span className="flex items-center gap-3 min-w-0">

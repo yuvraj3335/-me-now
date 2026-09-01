@@ -351,7 +351,7 @@ export function TaskSheet({
                   className="relative rounded-chip px-3 py-2 text-sm leading-relaxed"
                   style={{
                     background: `color-mix(in oklab, ${color ?? 'var(--color-fg-mute)'} 12%, var(--color-ink-800))`,
-                    boxShadow: `inset 2px 0 0 ${color ?? 'var(--color-fg-mute)'}`,
+                    boxShadow: `inset 2px 0 0 ${color ?? 'var(--color-fg-mute)'}, inset 0 1px 0 0 var(--glass-card-edge), inset 0 -1px 0 0 var(--glass-lens)`,
                   }}>
                   <span className="whitespace-pre-wrap text-fg-dim pr-5">{body}</span>
                   <button onClick={() => setPending(p => p.filter((_, j) => j !== i))}
@@ -367,7 +367,7 @@ export function TaskSheet({
                   className="group relative rounded-chip px-3 py-2 text-sm leading-relaxed"
                   style={{
                     background: `color-mix(in oklab, ${n.color ?? 'var(--color-accent)'} 12%, var(--color-ink-800))`,
-                    boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}`,
+                    boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}, inset 0 1px 0 0 var(--glass-card-edge), inset 0 -1px 0 0 var(--glass-lens)`,
                   }}>
                   {/*
                     Editable in place: click the text, type, blur to save. A note
@@ -449,8 +449,8 @@ function More({
         onClick={onToggle}
         aria-expanded={open}
         className="hit relative w-full flex items-center justify-between gap-2 text-left
-                   min-h-8 px-2 py-1.5 rounded-control border border-edge text-sm font-medium
-                   text-fg-dim hover:bg-ink-800 transition-colors duration-100"
+                   min-h-8 px-2 py-1.5 rounded-control glass-raise border border-edge text-sm font-medium
+                   text-fg-dim hover:brightness-125 transition-colors duration-100"
       >
         <span>More</span>
         <ChevronDown size={13} aria-hidden
@@ -619,7 +619,7 @@ export function TaskRead({
               className="rounded-chip px-3 py-2 text-sm leading-relaxed"
               style={{
                 background: `color-mix(in oklab, ${n.color ?? 'var(--color-accent)'} 12%, var(--color-ink-800))`,
-                boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}`,
+                boxShadow: `inset 2px 0 0 ${n.color ?? 'var(--color-accent)'}, inset 0 1px 0 0 var(--glass-card-edge), inset 0 -1px 0 0 var(--glass-lens)`,
               }}>
               <span className="whitespace-pre-wrap text-fg-dim">{n.body}</span>
             </div>
@@ -728,8 +728,8 @@ function TimeField({
           aria-expanded={open}
           aria-label={`${label} — ${stated}`}
           className="hit relative w-full flex items-center justify-between gap-2 text-left
-                     min-h-8 px-2 py-1.5 rounded-control border border-edge text-sm font-medium
-                     hover:bg-ink-800 transition-colors duration-100"
+                     min-h-8 px-2 py-1.5 rounded-control glass-raise border border-edge text-sm font-medium
+                     hover:brightness-125 transition-colors duration-100"
         >
           <span className={wordClass}>{stated}</span>
           <ChevronDown size={13} aria-hidden

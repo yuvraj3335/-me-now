@@ -45,6 +45,9 @@ const luminance = ([r, g, b]: RGB) => {
   return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
 }
 
+/** CIE L*, which is perceptually uniform where a contrast ratio is not. */
+const lstar = (Y: number) => (Y > 0.008856 ? 116 * Math.cbrt(Y) - 16 : 903.3 * Y)
+
 const contrast = (a: RGB, b: RGB) => {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
   return (hi + 0.05) / (lo + 0.05)
@@ -96,12 +99,29 @@ const rgbOf = (scope: string, name: string): RGB => {
 /* ------------------------------- the grounds ------------------------------- */
 
 /**
- * Every ground a token can be read on, worst case.
+ * Every ground a token can be read on, worst case, split by what the file is
+ * allowed to charge each of them.
  *
- * `ambient` stacks BOTH washes, which is stronger than anything on screen — they
- * are radial gradients at opposite corners, each fading out at 70% of its
- * radius, so nowhere gets the full sum. Measuring the impossible case is the
- * point: pass here and every real pixel passes.
+ * RESTING is a surface you read on while nothing is happening: the page itself,
+ * a row at rest, a field, a panel. Those carry the file's full stated floors,
+ * because that is the commonest read in the product.
+ *
+ * ATTENDED is a surface that has been lifted *because* you are on it — hover,
+ * the keyboard cursor, the selected row, a row with something new on it, and a
+ * control raised off a card. A lift costs contrast by construction, and this
+ * file has always accepted an erosion there and written the numbers down; what
+ * it did not have was a floor under the erosion. It does now: one rung below
+ * the resting floor for text, and 4.5:1 for a mark.
+ *
+ * `ambient` stacks BOTH washes at full strength. That is stronger than any real
+ * pixel — modelled on an 8px grid across a 390×844 viewport the two gradients
+ * sum to 1.02 washes on average and 0.84 at their weakest point, never 2.0 —
+ * and measuring the impossible case is the point: pass here and every real pixel
+ * passes.
+ *
+ * `panel` is the composite a `Sheet` or a `Menu` actually lands on, which is
+ * `--glass-tint` over a ROW, not the opaque `ink-850` fallback on its own. A
+ * sheet opens over the desk; the desk is rows. Both are measured.
  */
 function grounds(scope: string) {
   const page = colour(scope, '--color-ink-900')
@@ -109,16 +129,22 @@ function grounds(scope: string) {
     rgbOf(scope, '--ambient-2'), alphaOf(scope, '--ambient-2'),
     over(rgbOf(scope, '--ambient-1'), alphaOf(scope, '--ambient-1'), page),
   )
-  const card = over(
-    rgbOf(scope, '--glass-card-tint'), alphaOf(scope, '--glass-card-tint'), ambient,
-  )
+  const tint = (name: string, on: RGB) => over(rgbOf(scope, name), alphaOf(scope, name), on)
+  const card = tint('--glass-card-tint', ambient)
   return {
-    page, ambient, card,
-    panel: colour(scope, '--color-ink-850'),
-    hover: colour(scope, '--color-ink-800'),
-    pressed: colour(scope, '--color-ink-700'),
-    rowNew: colour(scope, '--color-row-new'),
-    rowSel: colour(scope, '--color-row-sel'),
+    resting: {
+      page, ambient, card,
+      well: tint('--color-well', card),
+      panel: tint('--glass-tint', card),
+      opaquePanel: colour(scope, '--color-ink-850'),
+    },
+    attended: {
+      raise: tint('--color-raise', card),
+      hover: colour(scope, '--color-ink-800'),
+      pressed: colour(scope, '--color-ink-700'),
+      rowNew: colour(scope, '--color-row-new'),
+      rowSel: colour(scope, '--color-row-sel'),
+    },
   }
 }
 
@@ -132,22 +158,6 @@ const MARKS = [
   '--color-src-slack', '--color-src-github', '--color-src-gmail',
   '--color-src-sentry', '--color-src-claude',
 ] as const
-
-/**
- * The flat scheme this replaced, as the regression floor.
- *
- * Not "what looks fine" — what the product actually delivered before the
- * material existed. Every token has to measure at least this well against its
- * own worst ground, or the glass has been paid for with legibility.
- */
-const FLAT_DARK = {
-  page: '#0a0a0c', panel: '#101014', hover: '#17171c',
-  pressed: '#1e1e25', rowNew: '#1b1509', rowSel: '#22232f',
-}
-const FLAT_LIGHT = {
-  page: '#f7f7f9', panel: '#ffffff', hover: '#eeeef2',
-  pressed: '#e5e6ec', rowNew: '#faf2e4', rowSel: '#e2e6f2',
-}
 
 describe('the material is rationed, which is what makes it fast', () => {
   const rule = (name: string) => {
@@ -268,9 +278,9 @@ describe('a row is a pane, and the pane holds its own drawer', () => {
 })
 
 describe.each([
-  ['dark', DARK, FLAT_DARK, 7],
-  ['light', LIGHT, FLAT_LIGHT, 6],
-] as const)('%s: the material never costs legibility', (name, scope, flat, textFloor) => {
+  ['dark', DARK, 7, 6],
+  ['light', LIGHT, 6, 5],
+] as const)('%s: the material never costs legibility', (name, scope, textFloor, attendedText) => {
   /*
    * Which way "attended to" points, which is not the same in the two themes.
    *
@@ -282,33 +292,88 @@ describe.each([
    */
   const lifts = name === 'dark'
   const g = grounds(scope)
-  const all = Object.values(g)
-  const flatGrounds = Object.values(flat).map(hex)
+  const MARK_FLOOR = 5.5
+  const ATTENDED_MARK = 4.5
 
-  test('a resting row clears this file\'s own floors', () => {
-    // The commonest read in the product: body text on a row nobody is pointing
-    // at. This is the ground the material actually created, so it is the one
-    // that has to clear the stated floor rather than merely not regress.
-    for (const t of TEXT) {
-      const r = contrast(colour(scope, t), g.card)
-      expect(r, `${t} on a resting row is ${r.toFixed(2)}:1, under ${textFloor}:1`)
-        .toBeGreaterThanOrEqual(textFloor)
-    }
-    for (const t of MARKS) {
-      const r = contrast(colour(scope, t), g.card)
-      expect(r, `${t} on a resting row is ${r.toFixed(2)}:1, under 5.5:1`)
-        .toBeGreaterThanOrEqual(5.5)
+  /*
+   * WHAT THIS REPLACED, AND WHY IT HAD TO GO.
+   *
+   * There used to be a second assertion here, "no token reads worse on any
+   * ground than it did without the material", measured against a hard-coded copy
+   * of the flat scheme this design replaced. It read as a safety net and it was
+   * really a ceiling: the brightest flat ground was `#22232f`, so the rule said
+   * *no ground in the new scheme may ever be brighter than the old selected row*
+   * — which, with hover, pressed, new and selected all having to stack ABOVE a
+   * resting row, left the resting row nowhere to go. The only way to satisfy it
+   * was to keep the row a 2% lift over a colourless page, and that is precisely
+   * the "flat grey, dull, washed out" the material was supposed to end. A test
+   * that pins a new design to the numbers of the one it replaces is not
+   * measuring legibility, it is measuring sameness.
+   *
+   * So it is gone, and what replaces it is stronger rather than looser: every
+   * token now has to clear an ABSOLUTE floor on EVERY ground it can be read on,
+   * not merely on the resting row, and not merely better than some scheme that
+   * no longer exists. Two tiers, because a lifted row genuinely does cost
+   * contrast and this file has always said so — it just never had a floor under
+   * how much.
+   */
+  test('every token clears this file\'s floors on every resting ground', () => {
+    for (const [gn, ground] of Object.entries(g.resting)) {
+      for (const t of TEXT) {
+        const r = contrast(colour(scope, t), ground)
+        expect(r, `${t} on ${gn} is ${r.toFixed(2)}:1, under ${textFloor}:1`)
+          .toBeGreaterThanOrEqual(textFloor)
+      }
+      for (const t of MARKS) {
+        const r = contrast(colour(scope, t), ground)
+        expect(r, `${t} on ${gn} is ${r.toFixed(2)}:1, under ${MARK_FLOOR}:1`)
+          .toBeGreaterThanOrEqual(MARK_FLOOR)
+      }
     }
   })
 
-  test('and no token reads worse on any ground than it did without the material', () => {
-    for (const t of [...TEXT, ...MARKS]) {
-      const c = colour(scope, t)
-      const before = Math.min(...flatGrounds.map(b => contrast(c, b)))
-      const after = Math.min(...all.map(b => contrast(c, b)))
-      expect(after, `${t} fell from ${before.toFixed(2)}:1 to ${after.toFixed(2)}:1`)
-        .toBeGreaterThanOrEqual(before - 0.01)
+  test('and holds one rung below it on a ground that was lifted to be attended to', () => {
+    for (const [gn, ground] of Object.entries(g.attended)) {
+      for (const t of TEXT) {
+        const r = contrast(colour(scope, t), ground)
+        expect(r, `${t} on ${gn} is ${r.toFixed(2)}:1, under ${attendedText}:1`)
+          .toBeGreaterThanOrEqual(attendedText)
+      }
+      for (const t of MARKS) {
+        const r = contrast(colour(scope, t), ground)
+        expect(r, `${t} on ${gn} is ${r.toFixed(2)}:1, under ${ATTENDED_MARK}:1`)
+          .toBeGreaterThanOrEqual(ATTENDED_MARK)
+      }
     }
+  })
+
+  /*
+   * Two rows against each other have to be two rows.
+   *
+   * The table dropped `border-b border-rule` when the material arrived — the
+   * separator became the material's own pair, a lens shade along the bottom of
+   * one row and a specular highlight along the top of the next, which is how
+   * stacked panes of glass actually read. That works in dark and is invisible in
+   * light, where the highlight is white on a white pane and the lens is 1.15:1:
+   * measured on the built page, the light table read as one continuous white
+   * block with six titles in it.
+   *
+   * So the bottom line is `--glass-sep`, which is the material's lens in dark
+   * and the `rule` hairline in light, and this measures the widest step the
+   * three surfaces make between them rather than any one line against the card —
+   * because in dark neither line clears the floor on its own and the pair
+   * clearly does, and in light it is the other way round.
+   */
+  test('two rows against each other are visibly two rows', () => {
+    const card = g.resting.card
+    const tint = (name: string) => over(rgbOf(scope, name), alphaOf(scope, name), card)
+    const top = tint('--glass-card-edge')
+    const sep = token(scope, '--glass-sep').startsWith('#')
+      ? colour(scope, '--glass-sep')
+      : tint('--glass-sep')
+    const best = Math.max(contrast(top, sep), contrast(top, card), contrast(sep, card))
+    expect(best, `the line between two rows is ${best.toFixed(2)}:1, under 1.5:1 — the table reads as one block`)
+      .toBeGreaterThanOrEqual(1.5)
   })
 
   test('the structural tokens still draw an edge on a row', () => {
@@ -316,8 +381,8 @@ describe.each([
     // hairline that cannot be seen is a design leaning on nothing. They are
     // measured on the CARD, because a border on a resting row is now the
     // commonest place either of them is drawn.
-    const r = contrast(colour(scope, '--color-rule'), g.card)
-    const e = contrast(colour(scope, '--color-edge'), g.card)
+    const r = contrast(colour(scope, '--color-rule'), g.resting.card)
+    const e = contrast(colour(scope, '--color-edge'), g.resting.card)
     expect(r, `rule on a row is ${r.toFixed(2)}:1, under 1.5:1`).toBeGreaterThanOrEqual(1.5)
     expect(e, `edge on a row is ${e.toFixed(2)}:1, under 1.9:1`).toBeGreaterThanOrEqual(1.9)
   })
@@ -327,15 +392,75 @@ describe.each([
     // happened: `ink-800` was picked as a lift above the flat page, and once a
     // resting row had a ground of its own the same value was *below* it — so
     // pointing at a row dimmed it.
-    expect(contrast(g.card, g.page), 'a row is the same colour as the page it floats on')
+    const { card, page } = g.resting
+    expect(contrast(card, page), 'a row is the same colour as the page it floats on')
       .toBeGreaterThan(1.02)
     const moved = lifts
-      ? luminance(g.hover) - luminance(g.card)
-      : luminance(g.card) - luminance(g.hover)
+      ? luminance(g.attended.hover) - luminance(card)
+      : luminance(card) - luminance(g.attended.hover)
     expect(moved, `hover moves the wrong way for ${name}: a pointer dims the row it is on`)
       .toBeGreaterThan(0)
-    expect(contrast(g.hover, g.card), 'hover is the resting ground, so pointing at a row does nothing')
+    expect(contrast(g.attended.hover, card), 'hover is the resting ground, so pointing at a row does nothing')
       .toBeGreaterThan(1.05)
+  })
+
+  /*
+   * A row has to be a PANE, not a shade.
+   *
+   * This is the assertion the last pass did not have and the one that would have
+   * caught what shipped. Contrast ratio is a terrible judge of two nearly-black
+   * surfaces — `#040406` against `#111014` is 1.081:1, and so is `#050509`
+   * against a row three times further away from it — because the ratio is
+   * dominated by the +0.05 flare term at that end of the scale. CIE L* is not:
+   * it is perceptually uniform, and it says the old row stood 3.8 above its page
+   * where iOS's own grouped cell over black stands 10.
+   *
+   * 7 is the floor, and it is deliberately below 10: the number that matters is
+   * the WORST-lit row, and this measures the modelled worst case, where both
+   * ambient washes are at full strength and cancelling none of the lift.
+   */
+  test('and it is a pane by the only measure that can see one', () => {
+    const dL = lstar(luminance(g.resting.card)) - lstar(luminance(g.resting.page))
+    expect(Math.abs(dL), `a row stands ${dL.toFixed(1)} L* off its page — under 7, which is a shade, not a pane`)
+      .toBeGreaterThanOrEqual(7)
+  })
+
+  /*
+   * And the surface has to have COLOUR in it.
+   *
+   * The other half of what shipped: `--glass-card-tint` was `rgb(255 255 255 /
+   * 0.02)` over a `#040406` page, and a colourless fill over a colourless ground
+   * composites to grey at every alpha there is. No amount of tuning the number
+   * was ever going to fix that, which is why the last pass kept raising it and
+   * kept getting grey.
+   *
+   * Contrast is a *luminance* ratio and chroma costs it nothing, so a tinted
+   * surface is strictly free next to a neutral one of the same lightness. There
+   * is therefore no excuse for a neutral material, and this refuses one. Two
+   * separate things are checked because they fail separately:
+   *
+   *   THE PAGE, in both themes, because it is what everything else is composited
+   *   over and a colourless page leaves the material nothing to be made of.
+   *
+   *   THE TINT ITSELF in dark, where a row is a translucent lift and its colour
+   *   can only come from the tint. Light mode is exempt on purpose and not by
+   *   omission: there a card is a near-opaque WHITE pane over a tinted page,
+   *   which is what iOS does too, and forcing chroma into it would produce a
+   *   grey card on a grey page — the exact complaint, in the other theme.
+   *
+   * Measured as the spread between channels in 0–255, which is crude, and the
+   * crudeness is the point: it catches `rgb(255 255 255 / a)` and nothing else.
+   */
+  test('and it has colour in it rather than being a grey lift', () => {
+    const pageSpread = Math.max(...g.resting.page) - Math.min(...g.resting.page)
+    expect(pageSpread, `the page composites to a neutral grey (channel spread ${pageSpread.toFixed(1)}) — there is no hue for the material to pick up`)
+      .toBeGreaterThanOrEqual(3)
+    if (name === 'dark') {
+      const tint = rgbOf(scope, '--glass-card-tint')
+      const spread = Math.max(...tint) - Math.min(...tint)
+      expect(spread, `--glass-card-tint is a neutral white (channel spread ${spread}) — a row can only ever come out grey`)
+        .toBeGreaterThanOrEqual(40)
+    }
   })
 
   test('the ambient wash stays a wash', () => {
@@ -346,4 +471,22 @@ describe.each([
         .toBeLessThanOrEqual(0.07)
     }
   })
+})
+
+/*
+ * The two light blocks are one block, written twice.
+ *
+ * `:root[data-theme='light']` and the `prefers-color-scheme` fallback have to
+ * agree value for value: "System" and "Light" rendering differently on the same
+ * machine is a bug nobody would think to look for, and the file has claimed for
+ * a while that a test enforced this. None did. This is it.
+ */
+test('System and Light are the same theme', () => {
+  const decls = (scope: string) =>
+    [...scope.matchAll(/(--[\w-]+):\s*([^;]+?)\s*(?:\/\*[^*]*\*\/\s*)?;/g)]
+      .map(m => `${m[1]}: ${m[2]!.split('/*')[0]!.trim()}`)
+  const explicit = decls(LIGHT)
+  const system = decls(block(':root:not([data-theme])'))
+  expect(system, 'the system-preference light theme drifted from the explicit one')
+    .toEqual(explicit)
 })

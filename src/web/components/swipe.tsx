@@ -57,7 +57,7 @@ import {
   axisFor, clampSwipe, openSwipeKey, setOpenSwipe, snapSwipe,
   SWIPE_ENGAGE_PX, SWIPE_SPRING, swipeWidth, useOpenSwipe, type SwipeAxis,
 } from '../lib/swipe'
-import { statusColor, statusWash } from './status'
+import { statusColor, statusRing, statusWash } from './status'
 import { STATUS_LABEL, type CardStatus } from '../lib/types'
 
 /** Whether a picker option is one of the five, or something else entirely. */
@@ -682,7 +682,14 @@ export function SwipeDrawer({
        * the rule is about the drawer and not about any one action in it.
        */
       onClick={e => e.stopPropagation()}
-        className="absolute top-0 -bottom-px right-0 z-10 flex items-stretch bg-ink-800 w-max"
+        /* `.glass`, and it is the one place in this component that blurs.
+           The picker is a floating surface — it opens over the row, it is
+           dismissible, and it is the only thing on screen while it is up — which
+           is exactly what the panel weight is for. One element, mounted only
+           while a drawer is actually open, so the rationing rule is intact: this
+           is never fifty of anything. It was `bg-ink-800`, the row-hover token,
+           which made the picker the same colour as the row underneath it. */
+        className="absolute top-0 -bottom-px right-0 z-10 flex items-stretch glass w-max"
         role="group"
         aria-label="Status"
       >
@@ -715,8 +722,16 @@ export function SwipeDrawer({
               // The wash marks the current one. `aria-pressed` says it too, but
               // a picker whose selected item is only announced is a picker he
               // cannot check at a glance, which is the state he is in here.
+              /* The wash marks the current one, and the ring is what makes it
+                 legible at a glance mid-swipe: `statusWash` mixes into a well
+                 rather than into the surface, so the chip's ground moves away
+                 from its ink instead of toward it. See `status.tsx`. */
               style={st
-                ? { color: statusColor(st), background: on ? statusWash(st) : undefined }
+                ? {
+                    color: statusColor(st),
+                    background: on ? statusWash(st) : undefined,
+                    boxShadow: on ? `inset 0 0 0 1px ${statusRing(st)}` : undefined,
+                  }
                 : undefined}
               className={`min-w-11 px-1 sm:px-2 text-sm font-medium whitespace-nowrap transition-colors duration-100
                 ${hue ? (on ? 'font-semibold' : 'opacity-80 hover:opacity-100')
@@ -799,7 +814,12 @@ function SwipeButton({
        * a four-action drawer does not cover the whole of a 375px row.
        */
       style={{ width: w }}
-      className={`shrink-0 flex items-center justify-center text-sm font-medium
+      /* `glass-edge` on a solid fill, which is what the two filled `Button`
+         variants already do: the specular pair is what makes a block of colour
+         read as a piece of the same material rather than as a rectangle painted
+         on top of one. Four of these sit against each other inside the row's own
+         14px corner, and without the highlight the strip is four flat swatches. */
+      className={`shrink-0 flex items-center justify-center text-sm font-medium glass-edge
         transition-[filter] duration-100 hover:brightness-110 ${TONE[tone]}`}
     >
       {label}

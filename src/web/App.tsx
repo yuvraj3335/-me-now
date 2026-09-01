@@ -228,7 +228,7 @@ export default function App() {
         <button
           onClick={() => setPalette(true)}
           className="mt-auto inline-flex items-center gap-2 h-8 px-3 rounded-control text-xs
-                     text-fg-mute hover:text-fg-dim hover:bg-ink-800 transition-colors duration-100"
+                     text-fg-mute hover:text-fg-dim hover:bg-raise transition-colors duration-100"
           title="Command palette"
         >
           <kbd className="font-sans">⌘K</kbd>
@@ -438,7 +438,7 @@ function NavItem({
     <button onClick={onClick}
       className={`press relative w-full flex items-center gap-3 h-9 px-3 rounded-control text-sm text-left
         transition-colors duration-100
-        ${active ? 'text-fg font-medium' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}>
+        ${active ? 'text-fg font-medium' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}>
       {active && (
         <motion.span
           aria-hidden

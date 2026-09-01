@@ -405,7 +405,13 @@ export function SessionPage({ id }: { id: string | null }) {
 
   return (
     <div className="flex flex-col" style={{ height }}>
-      <header className="shrink-0">
+      {/* `.glass-bar`: a strip pinned above a scrolling region, with the
+          transcript passing under its bottom edge — which is the condition the
+          thin blurred weight exists for, whether the pinning is `sticky` or, as
+          here, a `shrink-0` flex sibling of the scrollport. `bleed-x` so the
+          strip reaches the page edges: 16px of un-tinted gutter either side of a
+          glass bar is the tell that it is painted on rather than in front. */}
+      <header className="shrink-0 bleed-x glass-bar">
         <div className="flex items-center gap-2 h-11">
           <button
             onClick={() => navigate(ROOT)}
@@ -414,7 +420,7 @@ export function SessionPage({ id }: { id: string | null }) {
             // which is how a small button acquires a page-sized target that eats
             // every tap on the route.
             className="hit relative shrink-0 inline-flex items-center gap-1 h-8 -ml-1 px-1 rounded-control
-                       text-sm text-fg-mute hover:text-fg hover:bg-ink-800 transition-colors duration-100"
+                       text-sm text-fg-mute hover:text-fg hover:bg-raise transition-colors duration-100"
           >
             <ChevronLeft size={16} />
             Sessions
@@ -561,7 +567,10 @@ export function SessionPage({ id }: { id: string | null }) {
           before a delete — and a field offering to send a message to it would
           be a control that cannot work, under an error saying so. */}
       {!err && (
-      <div className="shrink-0 pt-2 pb-3 border-t border-rule">
+      /* The composer is chrome the conversation scrolls under, and it is the
+         one strip on this page a thumb lives on. Same weight as the sheet
+         footer and the tab bar. */
+      <div className="shrink-0 pt-2 pb-3 bleed-x glass-bar border-t border-edge">
         {refused && <p className="pb-2 text-sm text-bad leading-snug">{refused}</p>}
 
         {id && !active && starting ? (
@@ -617,7 +626,7 @@ export function SessionPage({ id }: { id: string | null }) {
                   aria-label="Add context"
                   title="Add context"
                   className="hit relative shrink-0 inline-flex items-center justify-center h-11 w-9
-                             rounded-control text-fg-mute hover:text-fg hover:bg-ink-800
+                             rounded-control text-fg-mute hover:text-fg hover:bg-raise
                              transition-colors duration-100"
                 >
                   <Plus size={18} />
@@ -625,7 +634,7 @@ export function SessionPage({ id }: { id: string | null }) {
               )}
             />
 
-            <div className="grow min-w-0 flex items-end gap-1 rounded-control border border-edge glass-card px-2">
+            <div className="grow min-w-0 flex items-end gap-1 rounded-control border border-edge glass-well px-2">
               <textarea
                 ref={field}
                 value={text}
@@ -727,7 +736,12 @@ function Turn({ turn }: { turn: SessionTurn }) {
   const mine = turn.role === 'user'
   return (
     <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] min-w-0 ${mine ? 'rounded-panel bg-ink-800 px-3 py-2' : ''}`}>
+      {/* Mine is a raised pane; Claude's is the page. The asymmetry is the
+          point and it is unchanged — a long answer in a bubble is a long grey
+          slab — but the bubble itself is now a piece of the material rather
+          than a rectangle of `ink-800`, which is the row-hover token and made
+          every message I sent look like a row somebody was pointing at. */}
+      <div className={`max-w-[80%] min-w-0 ${mine ? 'glass-raise rounded-panel px-3 py-2' : ''}`}>
         <div className={`text-base leading-[1.7] ${mine ? 'text-fg' : 'text-fg-dim'}`}>
           <Prose text={turn.text} />
         </div>
@@ -760,9 +774,9 @@ function Tools({ names }: { names: string[] }) {
   return (
     <button
       onClick={() => setOpen(true)}
-      className="hit relative mt-1 inline-flex items-center h-6 px-2 rounded-control
-                 border border-edge text-xs text-fg-mute
-                 hover:text-fg-dim hover:bg-ink-800 transition-colors duration-100"
+      className="hit relative mt-1 inline-flex items-center h-6 px-2 rounded-chip
+                 glass-raise border border-edge text-xs text-fg-mute
+                 hover:text-fg-dim hover:brightness-125 transition-colors duration-100"
     >
       {names.length} tool{names.length === 1 ? '' : 's'}
     </button>
@@ -786,7 +800,7 @@ function Prose({ text }: { text: string }) {
       {text.split('```').map((block, i) => (
         i % 2
           ? (
-            <pre key={i} className="my-2 overflow-x-auto rounded-control bg-ink-850 p-2
+            <pre key={i} className="my-2 overflow-x-auto rounded-control glass-well p-2
                                     font-mono text-sm text-fg-dim">
               {block.replace(/^[\w-]*\n/, '')}
             </pre>
@@ -902,7 +916,7 @@ function SessionSheet({
               rel="noreferrer"
               className="hit relative flex items-center justify-between gap-3 h-11 px-2 -mx-2
                          rounded-control text-sm text-fg-dim
-                         hover:text-fg hover:bg-ink-800 transition-colors duration-100"
+                         hover:text-fg hover:bg-raise transition-colors duration-100"
             >
               New chat in the Claude app
               <span className="shrink-0 text-fg-mute">not this session</span>

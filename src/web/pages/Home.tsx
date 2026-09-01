@@ -968,7 +968,7 @@ export function Home() {
           role="separator" aria-orientation="vertical" aria-label="Resize the detail pane"
           onPointerDown={onGrab} onPointerMove={onDrag}
           onPointerUp={onRelease} onPointerCancel={onRelease}
-          className="grabber absolute -left-[3px] top-0 h-full w-[6px] z-20 hover:bg-ink-600"
+          className="grabber absolute -left-[3px] top-0 h-full w-[6px] z-20 hover:bg-edge"
         />
         {shown && (
           /*

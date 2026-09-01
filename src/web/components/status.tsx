@@ -43,16 +43,38 @@ const STATUS_MARK: Record<CardStatus, Mark> = {
 export const statusColor = (status: CardStatus) => STATUS_MARK[status].color
 
 /**
- * The wash behind a chip: the status' own hue at 14%, over whatever surface the
- * chip happens to sit on.
+ * The wash behind a chip: the status' own hue at 17%, mixed into a well rather
+ * than into the surface underneath.
  *
- * `oklab` rather than `srgb` because mixing a saturated violet toward
- * transparent in sRGB greys it out on the way, and the whole point of the chip
- * is that the hue survives at low alpha. 14% is the highest value at which the
- * five washes still read as *behind* the text rather than as five buttons.
+ * The old version mixed toward `transparent`, so the chip's ground was its own
+ * ink diluted with whatever it sat on — and a wash made of the ink is a wash
+ * that spends contrast on every point of alpha it gains. Measured on a resting
+ * row the five chips ran 4.6:1 to 6.5:1 against this file's own 5.5:1 floor,
+ * and the two quietest statuses were the two furthest under it.
+ *
+ * `--status-well` breaks the coupling: dark in the dark theme, white in the
+ * light one, so the ground moves away from the ink instead of toward it. The
+ * same 17% of hue now measures 5.5:1 to 7.9:1 in dark and 5.8:1 to 6.2:1 in
+ * light. See the note over the token in `styles.css`.
+ *
+ * `oklab` rather than `srgb` because mixing a saturated violet through sRGB
+ * greys it out on the way, and the whole point of the chip is that the hue
+ * survives at low alpha.
  */
 export const statusWash = (status: CardStatus) =>
-  `color-mix(in oklab, ${STATUS_MARK[status].color} 14%, transparent)`
+  `color-mix(in oklab, ${STATUS_MARK[status].color} 17%, var(--status-well))`
+
+/**
+ * The 1px outline that makes the chip an object.
+ *
+ * A dark tinted capsule on a dark row measures 1.1:1 against it, which is not a
+ * shape anybody sees at arm's length — that is what the well costs. This is what
+ * pays it back, and it is free: nothing is ever read on a 1px ring, so its
+ * contrast budget is zero. 38% of the hue is 2.0:1 or better against a resting
+ * row for all five, which is above even the `edge` floor.
+ */
+export const statusRing = (status: CardStatus) =>
+  `color-mix(in oklab, ${STATUS_MARK[status].color} 38%, transparent)`
 
 /**
  * The two statuses whose rows read as struck through wherever a title is drawn
@@ -104,7 +126,17 @@ export function StatusChip({
       className={`inline-flex items-center gap-1.5 rounded-full whitespace-nowrap ${
         size === 'md' ? 'px-2.5 py-1.5 text-base' : 'px-2 py-0.5 text-sm'
       } ${className}`}
-      style={{ background: statusWash(status), color: STATUS_MARK[status].color }}
+      /* The ring is a `box-shadow` and not a `border`, so it costs no layout:
+         adding a border here would move every chip's text by a pixel and change
+         the height of a row that was measured without one. The second, inner
+         shadow is the same specular line the rest of the material carries —
+         a capsule with a highlight on its top edge reads as a raised object
+         rather than as a coloured rectangle. */
+      style={{
+        background: statusWash(status),
+        color: STATUS_MARK[status].color,
+        boxShadow: `inset 0 0 0 1px ${statusRing(status)}, inset 0 1px 0 0 var(--glass-card-edge)`,
+      }}
     >
       <StatusGlyph status={status} size={size === 'md' ? 15 : 13} />
       {STATUS_LABEL[status]}

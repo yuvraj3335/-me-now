@@ -147,7 +147,7 @@ export function Palette({
                 placeholder="Go to, or do…"
                 className="flex-1 bg-transparent outline-none text-base text-fg placeholder:text-fg-mute"
               />
-              <kbd className="text-xs text-fg-mute px-1.5 py-0.5 rounded bg-ink-800">esc</kbd>
+              <kbd className="text-xs text-fg-mute px-1.5 py-0.5 rounded-chip glass-raise">esc</kbd>
             </div>
 
             <div ref={listRef} className="max-h-[52vh] overflow-y-auto py-1.5">
@@ -166,7 +166,7 @@ export function Palette({
                       onMouseEnter={() => setSel(i)}
                       onClick={() => { onClose(); c.run() }}
                       className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors
-                        ${i === sel ? 'bg-ink-800' : 'hover:bg-ink-800/60'}`}
+                        ${i === sel ? 'bg-raise' : 'hover:bg-raise'}`}
                     >
                       <span className="text-fg-mute shrink-0">{c.icon}</span>
                       <span className="text-sm text-fg truncate">{c.label}</span>

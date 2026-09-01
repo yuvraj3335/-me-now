@@ -628,7 +628,7 @@ export function StatusPicker({
         aria-label={of ? `Status — ${STATUS_LABEL[value]} — ${of}` : `Status — ${STATUS_LABEL[value]}`}
         title={`Status — ${STATUS_LABEL[value]}`}
         className="hit relative inline-flex items-center gap-0.5 min-w-0 max-w-full
-                   rounded-full transition-colors duration-100 hover:bg-ink-800"
+                   rounded-full transition-colors duration-100 hover:bg-raise"
       >
         <StatusChip status={value} />
         <ChevronDown size={13} aria-hidden
@@ -660,8 +660,8 @@ export function StatusPicker({
                  one painted would take the taps. `styles.css` states that rule
                  for menu rows in so many words. */
               className={`w-full min-h-11 flex items-center gap-2 px-2 text-left outline-none
-                          transition-colors duration-100 hover:bg-ink-800 focus-visible:bg-ink-800
-                          ${s === value ? 'bg-ink-800' : ''}`}
+                          transition-colors duration-100 hover:bg-raise focus-visible:bg-raise
+                          ${s === value ? 'bg-raise' : ''}`}
             >
               <StatusChip status={s} size="md" />
               {/* The tick is not decoration. A wash behind a chip says which
@@ -720,7 +720,12 @@ export function CardRow({
          be `bg-ink-800` — the same token as hover — so the row the pane was
          showing became invisible the moment the pointer was anywhere near the
          table. See `rowStateClass`. */
-      className={`group cursor-pointer border-b border-rule
+      /* `row-pane` rather than `border-b border-rule`: the separator IS the
+         material now — a specular highlight along the top of every row and the
+         lens shade along the bottom, which stacked reads as panes of glass laid
+         against one another. Keeping both would have been two lines per row.
+         See `.row-pane` in `styles.css` for why it is painted on the cells. */
+      className={`group cursor-pointer row-pane
         ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
       {/* A settled card keeps its title legible and struck through rather than
@@ -849,7 +854,7 @@ function DueCell({ card, onDue, children }: {
           onChange={e => onDue(card, fromLocalInput(e.target.value ? `${e.target.value}T${clock}` : ''))}
           onBlur={() => setEditing(false)}
           onKeyDown={e => { if (e.key === 'Escape' || e.key === 'Enter') setEditing(false) }}
-          className="w-full h-7 px-1 rounded-control border border-edge bg-transparent
+          className="w-full h-7 px-1 rounded-control border border-edge glass-well
                      text-sm text-fg outline-none"
         />
       </td>
@@ -866,7 +871,7 @@ function DueCell({ card, onDue, children }: {
         /* `relative`, or the touch box lands on `<main>` — a `<td>` is not a
            positioned ancestor, so a 30px control would claim the whole page. */
         className={`hit relative w-full h-7 px-1 text-left rounded-control truncate
-                    transition-colors duration-100 hover:bg-ink-700
+                    transition-colors duration-100 hover:bg-raise
                     ${overdue ? 'text-sm text-bad tnum' : words ? ROW_META : 'text-sm text-fg-mute'}`}
       >
         {words ?? '—'}
@@ -1153,7 +1158,8 @@ export function CardLine({
       style={{ ...swipe.bind.style, WebkitTouchCallout: 'none' }}
       onClick={tap.onClick}
       aria-selected={selected}
-      className={`cursor-pointer border-b border-rule
+      /* See `CardRow`: the row's own specular pair replaces the hairline. */
+      className={`cursor-pointer row-pane
         ${rowStateClass({ selected, focused, unseen })}`}
     >
       {/*
@@ -1564,8 +1570,22 @@ function RowCard({
        * needs the fixed height hint that the class carries, which is why it goes
        * on the `<li>` and not on the `<ul>`.
        */
+      /*
+       * `px-3`, which the row did not have and every other list in the product
+       * does: Mail's thread row is `px-3 py-2`, a session is `p-3`, a task is
+       * padded by its own body. This one was flush, which was right while a row
+       * was a strip of page between two hairlines and is wrong now that it is a
+       * visible pane — a title starting on the pane's own left border reads as
+       * text that has overflowed rather than as text that is inside something.
+       *
+       * It does move the desk's content 12px in from the page x, which the pad
+       * note in `styles.css` argues against. That rule was written for a flat
+       * page where an inset was decoration; inside a pane it is the pane's
+       * padding, every other list already spends it, and the alternative is one
+       * list in the product that looks like the pane forgot to hold it.
+       */
       className={`press-row row-skip relative cursor-pointer overflow-hidden
-        rounded-card border border-edge glass-edge py-2
+        rounded-card border border-edge glass-edge px-3 py-2
         ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
       <SwipeDrawer

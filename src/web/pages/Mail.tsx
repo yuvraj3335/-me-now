@@ -124,9 +124,17 @@ export function Mail() {
             </div>
           </div>
 
-          {/* No fill and no off-token radius: `bg-ink-850` is pure white in
-              light mode, so this was a white box on a grey page. */}
-          <div className="mt-2 flex items-center gap-2 h-8 border-b border-rule">
+          {/* A well, which is what a search field is.
+
+              The note this replaces refused a fill on the measurement that
+              `bg-ink-850` is pure white in light mode, so the field was a white
+              box on a grey page — a true objection to that token, and it left
+              the one control on this surface a thumb is most likely to reach for
+              drawn as a glyph and a hairline. `.glass-well` is the token that
+              was missing: it darkens in both themes rather than lightening in
+              one, so the field is a recess on light and dark alike, and the
+              inverted specular pair says "you type here" without a border. */}
+          <div className="mt-2 flex items-center gap-2 h-8 px-2 rounded-control glass-well border border-edge">
             <Search size={13} className="text-fg-mute shrink-0" />
             <input
               value={q}
@@ -178,7 +186,7 @@ export function Mail() {
               ))}
               {state.accounts.length > 1 && (
                 <>
-                  <span className="w-px bg-ink-700 mx-1 shrink-0" />
+                  <span className="w-px bg-rule mx-1 shrink-0" />
                   <Chip active={account === 'all'} onClick={() => setAccount('all')}>All</Chip>
                   {state.accounts.map(a => (
                     <Chip key={a.address} active={account === a.address} onClick={() => setAccount(a.address)}>
@@ -633,7 +641,7 @@ function MessageView({
           {message.attachments.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
               {message.attachments.map((a, i) => (
-                <span key={i} className="inline-flex items-center gap-2 h-8 px-2 rounded-control bg-ink-800 text-sm text-fg-mute">
+                <span key={i} className="inline-flex items-center gap-2 h-8 px-2 rounded-control glass-raise text-sm text-fg-mute">
                   <Paperclip size={11} />
                   {a.filename}
                   {a.size ? <span className="tnum">{Math.round(a.size / 1024)}kb</span> : null}

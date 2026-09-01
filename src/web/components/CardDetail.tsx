@@ -275,7 +275,15 @@ export function CardDetail({
           labelled row on the fact grid the panel already uses, so they read as
           properties of the card rather than as a toolbar bolted to it.
         */}
-        <div className="mt-2 border-b border-rule">
+        {/* One pane holding the three controls, the way the thread below is one
+            pane holding its messages. It was a run of hairlines drawn straight
+            on the pane's ground, which is the flat-document shape this pass
+            exists to end — and it mattered most here, since the detail is the
+            one surface the reader is doing nothing on but reading. `-mx-1 px-3`
+            keeps the labels within a pixel or two of the x they had, because
+            this column is 320px at its narrowest and every one of them was
+            measured. */}
+        <div className="mt-2 -mx-1 px-3 glass-card rounded-card border border-edge">
           {/* No `mark`. The slot is still rendered — the empty 20px keeps this
               control on the same x as Priority's and Due's below it — but the
               glyph that used to sit in it is now inside the chip two pixels to
@@ -326,8 +334,8 @@ export function CardDetail({
               aria-label={`Due date — ${card.due_at === null ? 'none set' : wallClock(card.due_at)}`}
               title={card.due_at === null ? undefined : wallClock(card.due_at)}
               className="hit relative w-full inline-flex items-center justify-between gap-2
-                         h-8 px-2 rounded-control border border-edge text-sm font-medium
-                         text-fg-dim hover:text-fg hover:bg-ink-800
+                         h-8 px-2 rounded-control glass-raise border border-edge text-sm font-medium
+                         text-fg-dim hover:text-fg hover:brightness-125
                          transition-colors duration-100"
             >
               {/* The pane's own words for a time — the same `wallClock` the
@@ -459,8 +467,23 @@ export function CardDetail({
         touching and never overlapping — the same arithmetic the `Open in
         browser` link below already spends `mt-6` on.
       */}
-      <div className="shrink-0 border-t border-rule pad-x py-3">
-        <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:flex sm:items-center sm:gap-2">
+      {/* A bar, not a block: the card scrolls under it and it is flush against
+          the bottom of the pane, which is exactly what the thin blurred weight
+          is for.
+
+          `sm:flex-wrap` is a bug fix rather than a treatment. Four `nowrap`
+          buttons in a `sm:flex` row need about 420px and the detail pane is 400
+          at its default width on a 1280px laptop — measured, with `Done` clipped
+          by the pane's own right edge and no way to reach it.
+
+          The row gap is spelled separately from the column gap because a
+          wrapped row is two rows of 44px touch collars: `sm:gap-2` alone would
+          have set both to 8px, and the note above this one is four paragraphs
+          on why 8px between two rows of these buttons puts `Done` under the
+          collar of the button above it. 12px is two collars touching and never
+          overlapping, at every width. */}
+      <div className="shrink-0 border-t border-edge pad-x py-3 glass-bar">
+        <div className="grid grid-cols-2 gap-x-2 gap-y-3 sm:flex sm:flex-wrap sm:items-center sm:gap-x-2 sm:gap-y-3">
           {external && (
             <a
               href={app ?? href}
@@ -468,7 +491,7 @@ export function CardDetail({
               rel="noreferrer"
               className="relative inline-flex items-center justify-center rounded-control
                          whitespace-nowrap transition-colors duration-100 hit h-8 px-3 text-sm gap-2
-                         bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700"
+                         glass-raise border border-edge text-fg font-medium hover:brightness-125"
             >
               {/*
                 Named for where it goes, whenever this pane is also offering a
@@ -542,7 +565,7 @@ export function CardDetail({
         {app && (
           <a href={href} target="_blank" rel="noreferrer"
             className="hit relative mt-6 -ml-2 inline-flex items-center h-8 px-2 rounded-control
-                       text-sm text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                       text-sm text-fg-mute hover:text-fg-dim hover:bg-raise
                        transition-colors duration-100">
             Open in browser
           </a>
@@ -583,7 +606,7 @@ function ShowAll({ open, onToggle }: { open: boolean; onToggle: () => void }) {
       onClick={onToggle}
       aria-expanded={open}
       className="mt-1 -ml-2 px-2 inline-flex items-center min-h-11 rounded-control
-                 text-sm text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                 text-sm text-fg-mute hover:text-fg-dim hover:bg-raise
                  transition-colors duration-100"
     >
       {open ? 'Less' : 'Show all'}
@@ -644,7 +667,14 @@ function Thread({
         {total > 0 && <span className={`${EYEBROW} tnum`}>{total}</span>}
         {partial && <span className={EYEBROW}>partial</span>}
       </div>
-      <ol>
+      {/* The thread is one pane with the messages ruled inside it, not twenty
+          lines of text ruled against the page. It is the same shape a section of
+          Settings takes and the same shape a run of rows takes anywhere else in
+          the product: a surface, then structure on it. Twenty hairlines drawn
+          straight onto the ground is the flat-document look this pass exists to
+          end, and this column is where it was most visible — the pane beside the
+          desk is the one place the reader is doing nothing but reading. */}
+      <ol className="glass-card rounded-card border border-edge px-3">
         {lines.map(l => (
           <ThreadRow key={l.key} line={l} fresh={isFreshLine(l, baseline)} full={full} />
         ))}
@@ -657,8 +687,15 @@ function Thread({
 function ThreadRow({ line, fresh, full }: { line: ThreadLine; fresh: boolean; full: boolean }) {
   return (
     <li
-      className={`py-2 border-b border-rule last:border-0
-        ${line.tagged ? 'border-l-2 border-l-accent pl-3' : ''}`}
+      /* `-mx-3 px-3` puts the row back on the pane's full width, so a tagged
+         line's ground and its accent bar reach the pane's edge instead of
+         floating 12px inside it. The warm ground is `row-new`, which is the
+         token that already means "something here is addressed to you" on every
+         list in the product — the accent bar alone said it in 2px at the far
+         left of a 400px column, which is the width of a thumb away from where
+         the eye actually is. */
+      className={`-mx-3 px-3 py-2 border-b border-rule last:border-0
+        ${line.tagged ? 'bg-row-new border-l-2 border-l-accent' : ''}`}
     >
       <div className="flex items-baseline gap-2 text-sm text-fg-mute">
         <span className="text-fg-dim truncate">{line.who ?? 'someone'}</span>
@@ -850,7 +887,7 @@ function Facts({ card, author }: {
   // which a reader is scanning rather than reading. So prose wraps to two lines
   // and a formatted value keeps the single elided one it has always had.
   return (
-    <div className="mt-6 border-b border-rule">
+    <div className="mt-6 -mx-1 px-3 glass-card rounded-card border border-edge">
       {rows.map(([k, v]) => (
         <Row key={k} label={k}>
           {typeof v === 'string'

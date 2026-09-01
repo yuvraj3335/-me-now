@@ -483,7 +483,7 @@ export function Pulse() {
       {/* Three numbers, one baseline, and each names the window it was measured
           over, because the range control moves them. Two columns on a phone, so
           nothing wraps to three lines. */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 gap-6 py-4">
+      <section className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 py-4">
         <Stat value={a.pace.period} label={`tasks done · ${period}`}
           foot={a.pace.delta === null
             ? `against ${a.pace.previous} before`
@@ -527,7 +527,7 @@ export function Pulse() {
           here too, and says that day's number: it has a value, so an em dash
           would be the one thing on this page that is not true. */}
       {quiet.length > 0 && (
-        <section className="mt-8">
+        <section className="mt-4 sm:mt-6 glass-card rounded-card border border-edge px-3">
           {quiet.map(p => (
             <div key={p.title} className="flex items-baseline gap-2 h-11 border-b border-rule last:border-0">
               <h2 className="text-eyebrow uppercase text-fg-mute">{p.title}</h2>
@@ -565,7 +565,13 @@ function Stat({
 }: { value: number | string; label: string; foot?: string }) {
   const still = useStill()
   return (
-    <div>
+    /* A tile, not a floating number. Three bare numbers on a bare page is what
+       this page was, and on a phone it read as an unstyled document rather than
+       as an instrument. The pane is the row weight — a stat tile is content, not
+       chrome — and the gap between them dropped from 24px to 8px at the same
+       time, because air is the separator only while there is nothing else being
+       one. */
+    <div className="glass-card glass-edge rounded-card border border-edge p-3">
       <motion.div
         initial={still ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         transition={{ type: 'spring', stiffness: 260, damping: 28 }}
@@ -598,7 +604,13 @@ function Panel({
     <motion.section
       /* Spans both columns when the caller says the count is odd, so the last
          row cannot orphan a 470×130 hole beside itself. */
-      className={`mt-8 ${wide ? 'sm:col-span-2' : ''}`}
+      /* The chart sits on a pane too, for the same reason the stat tiles do:
+         a chart drawn straight onto the page has no surface, and this page had
+         eight of them. `p-4` is the one inset — the eyebrow moves inside the
+         pane with the chart it names, since a heading outside a pane that holds
+         its own subject reads as a caption for the gap above it. */
+      className={`mt-4 sm:mt-6 glass-card glass-edge rounded-card border border-edge p-4
+        ${wide ? 'sm:col-span-2' : ''}`}
       initial={still ? false : { opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}

@@ -61,7 +61,7 @@ export function Mic({
          * the brief, and the task composer.
          */
         className={`hit relative p-1.5 rounded-control transition-colors ${
-          listening ? 'text-accent-ink bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-ink-800' : 'text-fg-mute/50'
+          listening ? 'text-accent-ink bg-accent-soft' : supported ? 'text-fg-mute hover:text-fg-dim hover:bg-raise' : 'text-fg-mute/50'
         }`}
       >
         {listening ? (
@@ -81,7 +81,7 @@ export function Mic({
           product, on a radius that is not one of the three tokens. */}
       {note && (
         <p className="absolute right-0 top-8 z-20 w-60 text-sm text-fg-mute
-                      glass-card rounded-panel border border-edge p-2 leading-snug">
+                      glass rounded-panel border border-edge p-2 leading-snug">
           {note}
         </p>
       )}
@@ -211,7 +211,7 @@ export function VoicePlayer({ note, onDelete }: { note: VoiceNote; onDelete?: ()
               el.play().catch(e => setErr((e as Error).message))
             }
           }}
-          className="mt-0.5 p-2 rounded-full bg-ink-800 text-fg-dim hover:text-fg hover:bg-ink-700 transition-colors shrink-0"
+          className="mt-0.5 p-2 rounded-full glass-raise text-fg-dim hover:text-fg hover:brightness-125 transition-colors shrink-0"
         >
           {playing ? <Pause size={13} /> : <Play size={13} className="translate-x-[1px]" />}
         </button>
@@ -230,7 +230,7 @@ export function VoicePlayer({ note, onDelete }: { note: VoiceNote; onDelete?: ()
                 setPos(v)
                 if (audio.current) audio.current.currentTime = v
               }}
-              className="flex-1 h-1 accent-[var(--color-accent)] bg-ink-700 rounded-full appearance-none cursor-pointer"
+              className="flex-1 h-1 accent-[var(--color-accent)] bg-well rounded-full appearance-none cursor-pointer"
               aria-label="Seek"
             />
             <span className="tnum text-sm text-fg-mute shrink-0">

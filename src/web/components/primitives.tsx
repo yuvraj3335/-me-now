@@ -89,13 +89,21 @@ const SIZE: Record<ButtonSize, string> = {
 const VARIANT: Record<ButtonVariant, string> = {
   /* The two filled variants carry the specular pair, which is what makes a
      solid button read as a piece of the same material rather than as a
-     rectangle of colour sitting on top of it. `default` and `ghost` do not:
-     they have no fill for a highlight to sit on, and an inset line on a
-     transparent box draws the box. */
+     rectangle of colour sitting on top of it.
+
+     `secondary` and `default` are `.glass-raise` — a control resting ON the
+     surface, one rung above it. They used to be `.glass-card`, which is the
+     surface's *own* tint: a button on a row painted in the row's colour, so the
+     only thing saying it was pressable was its border. That is the nesting
+     mistake this pass exists to end; see the ladder note in `styles.css`.
+
+     `ghost` still has no fill of its own, deliberately — it is the one variant
+     that is a word rather than an object — and takes the raise on hover, where
+     a shape appearing under the pointer is the affordance. */
   primary: 'bg-accent text-on-accent font-semibold hover:brightness-110 glass-edge',
-  secondary: 'glass-card border border-edge text-fg font-medium hover:brightness-125',
-  default: 'border border-edge text-fg-dim font-medium hover:text-fg hover:bg-ink-800',
-  ghost: 'text-fg-mute font-medium hover:text-fg-dim hover:bg-ink-800',
+  secondary: 'glass-raise border border-edge text-fg font-medium hover:brightness-125',
+  default: 'glass-raise border border-edge text-fg-dim font-medium hover:text-fg hover:brightness-125',
+  ghost: 'text-fg-mute font-medium hover:text-fg-dim hover:bg-raise',
   danger: 'bg-bad text-on-bad font-semibold hover:brightness-110 glass-edge',
 }
 
@@ -155,8 +163,14 @@ export function Segmented<T extends string>({
        to the 32px the group paints — three theme segments measured 30px tall on
        a phone. The fill rounds its own outer corner instead: 5px, which is the
        group's 6px radius less the 1px border it sits inside. */
+    /* A well with a raised segment in it, which is what a segmented control
+       physically is and what iOS draws. It used to be a bordered box with one
+       segment painted `ink-800` — the same token as hover — so the chosen
+       segment and the one under the pointer were the same picture. The group is
+       `.glass-well` (pressed in), the chosen segment `.glass-raise` (standing
+       proud of it), and the two are two rungs apart rather than none. */
     <div role="group" aria-label={ariaLabel}
-      className={`inline-flex h-8 rounded-control border border-edge ${className}`}>
+      className={`glass-well inline-flex h-8 rounded-control border border-edge ${className}`}>
       {options.map((o, i) => (
         <button
           key={o.id}
@@ -166,8 +180,8 @@ export function Segmented<T extends string>({
           className={`hit relative px-3 text-sm font-medium transition-colors duration-100
             first:rounded-l-[5px] last:rounded-r-[5px]
             disabled:opacity-40 disabled:pointer-events-none
-            ${i > 0 ? 'border-l border-edge' : ''}
-            ${value === o.id ? 'bg-ink-800 text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}
+            ${i > 0 ? 'border-l border-rule' : ''}
+            ${value === o.id ? 'glass-raise text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}
         >
           {o.label}
         </button>
@@ -427,7 +441,7 @@ export function Menu<T extends string>({
             aria-expanded={open}
             aria-label={ariaLabel ?? label}
             className="hit press relative inline-flex items-center gap-2 h-8 px-3 rounded-control
-                       border border-edge glass-card text-sm whitespace-nowrap
+                       border border-edge glass-raise text-sm whitespace-nowrap
                        transition-colors duration-100 hover:brightness-125"
           >
             {label && <span className="text-fg-mute shrink-0">{label}</span>}
@@ -475,7 +489,7 @@ export function Menu<T extends string>({
                   className={`menu-row w-full flex items-center gap-3 px-3 text-left text-sm
                     outline-none transition-colors duration-100
                     disabled:opacity-40 disabled:pointer-events-none
-                    hover:bg-ink-800 focus-visible:bg-ink-800
+                    hover:bg-raise focus-visible:bg-raise
                     ${on ? 'text-fg' : 'text-fg-dim'}`}
                 >
                   {/* The column is held whether or not the row is the chosen
@@ -847,13 +861,16 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 /**
  * A field, in the material.
  *
- * `glass-card` rather than `bg-ink-850`: a solid panel-coloured box inside a
- * sheet that is itself glass is the one shape that gives the material away — an
- * opaque rectangle floating on a translucent one. The tint plus the specular
- * pair reads as a well pressed into the surface, which is what a field is.
+ * `.glass-well` and not `.glass-card`, which is the change: a field is a recess,
+ * not a card. `.glass-card` is the tint a ROW wears, so a text input inside a
+ * sheet was painted in the same value as the list behind the sheet — visible as
+ * a box only because of its border. The well darkens instead and inverts the
+ * specular pair, shade along the top and highlight along the bottom, which is
+ * what the same light does to something pressed in. It is the cheapest cue there
+ * is for "you type here" as against "you press this".
  */
 export const inputClass =
-  `w-full glass-card border border-edge rounded-control px-3 py-2 text-base text-fg
+  `w-full glass-well border border-edge rounded-control px-3 py-2 text-base text-fg
    placeholder:text-fg-mute outline-none transition-shadow
    focus:ring-1 focus:ring-accent/50`
 
@@ -888,8 +905,11 @@ export function Select<T extends string>({
   className?: string
 }) {
   return (
-    <span className={`relative inline-flex items-center shrink-0 h-7 rounded-control
-                      border border-edge text-fg-dim hover:text-fg hover:bg-ink-800
+    /* `.glass-raise`: a picker is a control standing on the row, not a hole in
+       it. It was a bare bordered box, so on the desk five of them down a column
+       read as five outlines rather than five controls. */
+    <span className={`glass-raise relative inline-flex items-center shrink-0 h-7 rounded-control
+                      border border-edge text-fg-dim hover:text-fg hover:brightness-125
                       transition-colors duration-100 ${className}`}>
       <select
         aria-label={ariaLabel}
@@ -931,7 +951,7 @@ export function DateField({
 }: { value: number | null; onChange: (ms: number | null) => void; ariaLabel: string }) {
   return (
     <span className="inline-flex items-center gap-2">
-      <span className="relative inline-flex items-center h-8 rounded-control border border-edge
+      <span className="glass-well relative inline-flex items-center h-8 rounded-control border border-edge
                        transition-shadow has-[input:focus]:ring-1 has-[input:focus]:ring-accent/50">
         <input
           type="datetime-local"
@@ -1143,10 +1163,10 @@ export function DateTimePicker({
                   onClick={() => { setCursor(d); pickDay(d) }}
                   className={`cal-cell flex items-center justify-center rounded-control
                     text-sm tnum transition-colors duration-100
-                    ${on ? 'bg-accent text-on-accent font-semibold'
-                      : isToday ? 'text-fg font-medium ring-1 ring-edge hover:bg-ink-800'
-                      : outside ? 'text-fg-mute hover:bg-ink-800'
-                      : 'text-fg-dim hover:bg-ink-800'}`}
+                    ${on ? 'bg-accent text-on-accent font-semibold glass-edge'
+                      : isToday ? 'text-fg font-medium ring-1 ring-edge hover:bg-raise'
+                      : outside ? 'text-fg-mute hover:bg-raise'
+                      : 'text-fg-dim hover:bg-raise'}`}
                 >
                   {d.getDate()}
                 </button>
@@ -1169,7 +1189,7 @@ export function DateTimePicker({
         */}
         <div className="flex items-center gap-3 @md:flex-col @md:items-stretch @md:w-40 shrink-0">
           <span className="text-eyebrow uppercase text-fg-mute shrink-0 @md:mb-1">Time</span>
-          <span className="relative inline-flex items-center h-8 grow @md:grow-0 rounded-control
+          <span className="glass-well relative inline-flex items-center h-8 grow @md:grow-0 rounded-control
                            border border-edge transition-shadow
                            has-[input:focus]:ring-1 has-[input:focus]:ring-accent/50">
             <input
@@ -1296,8 +1316,8 @@ export function Chip({
         ${flexible ? 'min-w-0' : 'shrink-0'}
         disabled:opacity-40 disabled:pointer-events-none
         ${active
-          ? 'glass-card text-fg border border-edge'
-          : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800 border border-transparent'}`}
+          ? 'glass-raise text-fg border border-edge'
+          : 'text-fg-mute hover:text-fg-dim hover:bg-raise border border-transparent'}`}
     >
       {mark ?? (dot && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dot }} />)}
       {children}

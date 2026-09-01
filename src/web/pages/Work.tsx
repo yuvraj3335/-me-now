@@ -1039,8 +1039,8 @@ function TaskDetail({
                 aria-label={`Deadline — ${task.due_at === null ? 'none set' : deadlineWords(task.due_at)}`}
                 title={task.due_at === null ? undefined : deadlineWords(task.due_at)}
                 className="hit relative w-full inline-flex items-center justify-between gap-2
-                           h-8 px-2 rounded-control border border-edge text-sm font-medium
-                           hover:bg-ink-800 transition-colors duration-100"
+                           h-8 px-2 rounded-control glass-raise border border-edge text-sm font-medium
+                           hover:bg-raise transition-colors duration-100"
               >
                 <span className={`truncate ${
                   task.due_at === null ? 'text-fg-mute' : overdue ? 'text-bad' : 'text-fg-dim'}`}>
@@ -1095,9 +1095,14 @@ function TaskDetail({
             {source && (
               <PaneRow label="From">
                 {url?.startsWith('http') ? (
+                  /* `hit relative` — the only control left in the product
+                     without a 44px collar: measured at 18px tall on a phone, in
+                     a pane row where the nearest other target is 26px away, so
+                     a thumb aiming at it either misses or hits nothing. */
                   <a href={url} target="_blank" rel="noreferrer"
                     title={origin?.title ?? task.origin_title ?? undefined}
-                    className="min-w-0 text-sm text-fg-dim hover:text-fg transition-colors duration-100 truncate">
+                    className="hit relative min-w-0 inline-block text-sm text-fg-dim hover:text-fg
+                               transition-colors duration-100 truncate">
                     {SOURCE_LABEL[source] ?? source}
                   </a>
                 ) : (
@@ -1520,7 +1525,7 @@ function GoalRow({
           {g.target_date && <span className="text-sm text-fg-mute">by {shortDate(g.target_date)}</span>}
           <span className="tnum text-sm text-fg-mute">{done}/{linked.length}</span>
         </div>
-        <div className="mt-2 h-1 bg-ink-800 rounded-full overflow-hidden">
+        <div className="mt-2 h-1 glass-well rounded-full overflow-hidden">
           <motion.div
             className="h-full rounded-full"
             style={{ background: color }}

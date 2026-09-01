@@ -255,10 +255,16 @@ export function Settings() {
       {/* An `AUDIT` eyebrow over a single row reading `Audit trail` is one word
           printed twice, eleven pixels apart. A section heading earns its line by
           grouping rows; this is one row, and it says what it opens. */}
-      <section className="mt-6">
+      {/* The bleed is on a wrapper rather than on the button, because a
+          `w-full` element with a negative inline margin keeps its parent's width
+          and so overhangs on one side only — measured: the pane started 16px
+          left of the screen edge and stopped 16px short of the right one. */}
+      <section className="mt-6 -mx-4 sm:mx-0">
         <button
           onClick={() => setAudit(true)}
-          className="w-full flex items-center h-11 border-b border-rule text-left text-base text-fg-dim
+          className="press-row w-full flex items-center h-11 glass-card text-left text-base text-fg-dim
+                     px-4 border-y border-edge
+                     sm:px-3 sm:rounded-card sm:border
                      hover:text-fg transition-colors duration-100"
         >
           <span className="grow">Audit trail</span>
@@ -280,7 +286,36 @@ export function Settings() {
 /* -------------------------------- pieces ---------------------------------- */
 
 /**
- * An eyebrow and rows. There is no wrapper, because there is no card.
+ * An eyebrow, and the rows under it on one pane of glass.
+ *
+ * There used to be no wrapper here at all, and the note above this one argued
+ * for that at length: what it was arguing against was nine `rounded-panel
+ * bg-ink-850` cards in a three-column masonry grid, which is a layout, and it
+ * was right to kill it. A grouped pane is not that. It is one full-width
+ * surface per section, in the page's single column, in the order the sections
+ * already had — the shape iOS Settings has always been, and the shape that lets
+ * this page be made of the same material as everything else in the product.
+ * Flat rows on a bare page was the *other* extreme, and on a phone it read as
+ * an unstyled document.
+ *
+ * The pane is `.glass-card`, which is the row weight, because that is what
+ * these are: a run of rows. Its rows do not each carry the tint again — that
+ * would be the same rung twice — they carry a hairline between them and the
+ * pane's own last-child rule is cancelled, so the run ends on the pane's edge
+ * rather than on a line floating inside it.
+ *
+ * **The pane is full-bleed on a phone and inset above it**, and that is not a
+ * flourish, it is the width. An inset pane with 12px of padding takes 24px out
+ * of every row, and this page has none to give: the note over `Row` spends four
+ * paragraphs recovering eight pixels so that Gmail's `auth 22m` — the one fact
+ * `synced` cannot carry — stays on screen at 375. Measured with a 12px inset,
+ * that row truncated again and the Theme row's value read `light n…`. So below
+ * `sm` the pane reaches both screen edges and pads its own 16px back, which
+ * lands every row on exactly the x it had before the pane existed; it carries a
+ * rule top and bottom instead of a radius, because a corner against a bezel is
+ * a corner nobody sees. From `sm` up there is room, and it becomes what it
+ * looks like: an inset, rounded pane with the eyebrow on the page's x and the
+ * rows stepped in from it.
  *
  * `note` is a caption on the heading's own line, not a paragraph under it: it
  * names the unit the rows below are counted in, which is a fact about the whole
@@ -297,7 +332,13 @@ function Section({
         {title}
         {note && <span className="normal-case tracking-normal"> — {note}</span>}
       </h2>
-      {children}
+      <div className="-mx-4 sm:mx-0">
+        <div className="glass-card px-4 border-y border-edge
+                        sm:px-3 sm:rounded-card sm:border
+                        [&>*:last-child]:border-b-0 [&>:last-child>*:last-child]:border-b-0">
+          {children}
+        </div>
+      </div>
     </section>
   )
 }

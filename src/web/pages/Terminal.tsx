@@ -451,7 +451,7 @@ export function TerminalPage({ id }: { id: string }) {
           // which is how a small button acquires a page-sized target that eats
           // every tap on the route. See the note on `.hit` in styles.css.
           className="hit relative shrink-0 inline-flex items-center justify-center h-8 w-8 rounded-control
-                     text-fg-mute hover:text-fg hover:bg-ink-800 transition-colors duration-100"
+                     text-fg-mute hover:text-fg hover:bg-raise transition-colors duration-100"
         >
           <ChevronLeft size={18} />
         </button>
@@ -609,7 +609,7 @@ function KeyBar({
           // key bar whose targets reach up the page would swallow every tap on
           // the terminal above it.
           className="hit relative shrink-0 min-w-10 h-9 px-2 inline-flex items-center justify-center
-                     rounded-control border border-edge bg-ink-850 text-sm text-fg-dim
+                     rounded-control border border-edge glass-raise text-sm text-fg-dim
                      active:bg-ink-700 transition-colors duration-75"
         >
           {label}
@@ -642,7 +642,7 @@ function SizeKey({
       disabled={disabled}
       onPointerDown={e => { e.preventDefault(); onPress() }}
       className="hit relative shrink-0 w-9 h-9 inline-flex items-center justify-center rounded-control
-                 border border-edge bg-ink-850 text-fg-mute disabled:opacity-40
+                 border border-edge glass-raise text-fg-mute disabled:opacity-40
                  active:bg-ink-700 transition-colors duration-75"
     >
       {children}

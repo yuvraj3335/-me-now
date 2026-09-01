@@ -758,7 +758,7 @@ function LaunchComposer({
              last one. `truncate` stays as the insurance, so a wider font
              degrades the secondary rather than breaking the row. */
           className="inline-flex items-center min-w-0 h-11 -ml-2 px-2 rounded-control
-                     text-sm font-medium text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                     text-sm font-medium text-fg-mute hover:text-fg-dim hover:bg-raise
                      transition-colors duration-100"
         >
           <span className="truncate">New chat in the Claude app</span>
@@ -920,7 +920,7 @@ function PickRow({
           aria-label={`What ${label} is for`}
           title={`What ${label} is for`}
           className="sm:hidden shrink-0 inline-flex items-center justify-center h-11 w-11
-                     rounded-control text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                     rounded-control text-fg-mute hover:text-fg-dim hover:bg-raise
                      transition-colors duration-100"
         >
           <Info size={14} />
@@ -1454,7 +1454,7 @@ function SlackRow({
            which on a picker means opening Slack when he meant to tick the row
            below. A control in a list has no reason to fake its height. */
         className="shrink-0 self-center inline-flex items-center justify-center h-11 w-11
-                   rounded-control text-fg-mute hover:text-fg-dim hover:bg-ink-800
+                   rounded-control text-fg-mute hover:text-fg-dim hover:bg-raise
                    transition-colors duration-100"
       >
         <ArrowUpRight size={14} />
@@ -1512,7 +1512,7 @@ function SlackPasteField({
           see. This field is behind `+ Context` now, so it is no longer in the
           path a fresh open scrolls through and cannot summon the keyboard on
           arrival. */}
-      <div className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-card
+      <div className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-raise
                       grow min-w-0">
         <Link2 size={14} className="text-fg-mute shrink-0" />
         <input
@@ -1631,7 +1631,7 @@ function SkillPicker({
             slot — so revealing it moves nothing below. */}
         <span className="ml-auto">
           {searching ? (
-            <span className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-card">
+            <span className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-raise">
               <Search size={14} className="text-fg-mute shrink-0" aria-hidden />
               <input
                 ref={field}
