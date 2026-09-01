@@ -27,6 +27,34 @@ if [ "$local_sha" = "$remote_sha" ]; then
   exit 0
 fi
 
+# Different is not the same as behind, and the difference matters.
+#
+# This used to deploy on any mismatch. But a mismatch is also what "someone
+# committed on the box and has not pushed yet" looks like — and in that state
+# `merge --ff-only` says "Already up to date" and succeeds, so the script sailed
+# straight past it and went on to verify, build and restart. Every sixty seconds,
+# for as long as the commit sat unpushed.
+#
+# It is also how the rollback further down came to fire on a tree nobody was
+# deploying: the merge was a no-op, the typecheck then ran against uncommitted
+# work in progress, failed, and the trap reset --hard'd that work away. The dirty
+# guard below is the direct fix for the damage; this is the fix for the script
+# having been there at all.
+#
+# So: only move when there is somewhere forward to move to. `--is-ancestor`
+# answers exactly that — HEAD is contained in origin, so a fast-forward is real.
+if ! git merge-base --is-ancestor HEAD "origin/$BRANCH"; then
+  # Ahead is a normal state while working and resolves itself on the next push,
+  # so it is reported once and is not a failure. Diverged is not normal, and
+  # nothing here can fix it.
+  if git merge-base --is-ancestor "origin/$BRANCH" HEAD; then
+    echo "wake-deploy: ${local_sha:0:8} is ahead of origin/$BRANCH - nothing to deploy"
+    exit 0
+  fi
+  echo "wake-deploy: ${local_sha:0:8} and origin/$BRANCH have diverged - refusing to deploy" >&2
+  exit 1
+fi
+
 echo "wake-deploy: ${local_sha:0:8} -> ${remote_sha:0:8}"
 
 # Refuse a dirty tree, and refuse it BEFORE anything else happens.
