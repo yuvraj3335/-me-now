@@ -33,19 +33,32 @@ const isStaleBuild = (e: Error): boolean =>
   /dynamically imported module|Importing a module script failed|error loading dynamically imported/i
     .test(e.message)
 
-async function clearAndReload() {
-  try {
-    if ('caches' in window) {
-      const keys = await caches.keys()
-      await Promise.all(keys.map(k => caches.delete(k)))
+/**
+ * Reload, dropping the caches first — but only when they are the problem.
+ *
+ * The cache and the worker are what make Wake open at all on a dropped
+ * connection, so throwing them away is not free. It is exactly right for a
+ * stale build, where the cached shell IS the fault and a plain reload serves the
+ * same broken page straight back. It is wrong for anything else: a render crash
+ * that has nothing to do with a deploy would cost the offline shell, and
+ * pressing Reload while the tunnel is down would then land on the browser's own
+ * error page — strictly worse than the state it was pressed from.
+ */
+async function clearAndReload(stale: boolean) {
+  if (stale) {
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map(k => caches.delete(k)))
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(regs.map(r => r.unregister()))
+      }
+    } catch {
+      // A blocked cache API is not a reason to refuse to reload; the reload is
+      // the part that might work on its own.
     }
-    if ('serviceWorker' in navigator) {
-      const regs = await navigator.serviceWorker.getRegistrations()
-      await Promise.all(regs.map(r => r.unregister()))
-    }
-  } catch {
-    // A blocked cache API is not a reason to refuse to reload; the reload is
-    // the part that might work on its own.
   }
   window.location.reload()
 }
@@ -64,6 +77,31 @@ export class ErrorBoundary extends Component<Props, State> {
     // Still logged, because the message on screen is deliberately short and the
     // stack is what makes a report actionable.
     console.error('wake: unhandled error', error, info.componentStack)
+  }
+
+  /*
+   * Going somewhere else clears it.
+   *
+   * When this catches, `App` unmounts entirely — no nav, no tab bar, no route
+   * subscription — so the only control on screen is Reload. Browser Back still
+   * works, though, and without this it left the address bar saying `/work` while
+   * the viewport still said something broke: the URL and the screen disagreeing,
+   * with no way to resolve it but a reload.
+   *
+   * Clearing on `popstate` re-mounts `App` at the new route. If the fault is
+   * deterministic it is caught again immediately, which is the honest outcome;
+   * what it stops is a screen that is stuck for a reason that has gone away.
+   */
+  componentDidMount() {
+    window.addEventListener('popstate', this.clear)
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('popstate', this.clear)
+  }
+
+  clear = () => {
+    if (this.state.error) this.setState({ error: null })
   }
 
   render() {
@@ -99,7 +137,7 @@ export class ErrorBoundary extends Component<Props, State> {
           this button.
         */}
         <button
-          onClick={() => void clearAndReload()}
+          onClick={() => void clearAndReload(stale)}
           className="hit relative mt-4 h-10 px-3 rounded-panel bg-accent text-on-accent text-sm font-medium"
         >
           Reload

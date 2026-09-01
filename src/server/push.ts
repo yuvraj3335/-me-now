@@ -86,18 +86,32 @@ async function deliver(p: PushPayload): Promise<Delivery> {
         dropped++
       } else {
         db.query(`UPDATE push_subs SET fail_count = fail_count + 1 WHERE endpoint = ?`).run(s.endpoint)
-        db.query(`DELETE FROM push_subs WHERE endpoint = ? AND fail_count > 8`).run(s.endpoint)
+        // Counted here too: this path also removes the row, and a `dropped`
+        // that only counted the 404/410 case reported fewer devices lost than
+        // were actually lost.
+        const gone = db.query(`DELETE FROM push_subs WHERE endpoint = ? AND fail_count > 8`)
+          .run(s.endpoint)
+        if (gone.changes > 0) dropped++
       }
-      console.warn(`wake: push to ${new URL(s.endpoint).host} failed (${code ?? 'no status'})`)
+      /*
+       * The host, if the endpoint parses — and nothing thrown from in here.
+       *
+       * `POST /push/subscribe` validates only that `endpoint` is truthy, so a
+       * row can hold a string that is not a URL. `new URL()` on that throws a
+       * `TypeError` *out of this catch block*, which rejects the map callback,
+       * which rejects the `Promise.all`, which rejects `deliver()` — and
+       * `runReminders()` is the caller. One malformed row would therefore throw
+       * mid-loop before the `UPDATE reminders` below it ran, so the reminder
+       * stayed due and threw again on the next tick, for ever. A logging line is
+       * not allowed to be the thing that stops reminders working.
+       */
+      let where = 'a device'
+      try { where = new URL(s.endpoint).host } catch { /* not a URL; say so plainly */ }
+      console.warn(`wake: push to ${where} failed (${code ?? 'no status'})`)
     }
   }))
 
   return { devices: subs.length, delivered, dropped }
-}
-
-/** How many devices a push would reach right now. */
-export function pushDeviceCount(): number {
-  return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM push_subs`).get()!.n
 }
 
 /**

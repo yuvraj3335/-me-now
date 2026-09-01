@@ -23,7 +23,7 @@ import {
 import { listRepos } from '../registry/scan'
 import {
   DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode,
-  parseSessionModel, SESSION_MODELS, resolveCwd,
+  parseSessionModel, DEFAULT_SESSION_MODEL, type SessionModel, resolveCwd,
 } from './launch'
 import {
   available, closeTerminal, getTerminal, isRunning, listTerminals, openTerminal, sendBrief,
@@ -457,7 +457,10 @@ claudecode.post('/packs/:id/open', async c => {
  * so this is the one read that guarantees the session receives the artifact the
  * operator can go and open, and not a fourth copy that travelled separately.
  */
-function terminalForPack(packId: string): TerminalInfo | { error: string } {
+function terminalForPack(
+  packId: string,
+  model: SessionModel = DEFAULT_SESSION_MODEL,
+): TerminalInfo | { error: string } {
   const pack = getPack(packId)
   if (!pack) return { error: 'no such pack' }
 
@@ -468,6 +471,10 @@ function terminalForPack(packId: string): TerminalInfo | { error: string } {
     brief: String(pack.first_message ?? ''),
     briefPath: pack.pack_path,
     permissionMode: 'error' in mode ? DEFAULT_PERMISSION_MODE : mode.mode,
+    // Unlike the mode, this comes from the request rather than the pack row:
+    // a pack has no model column, and the choice is made in the composer at the
+    // moment of pressing Start.
+    model,
   })
   if ('error' in r) {
     audit('claude.terminal', { target: packId, ok: false, error: r.error })
@@ -496,11 +503,26 @@ claudecode.post('/terminals', async c => {
 
   if (typeof b.packId === 'string' && b.packId) {
     if (!getPack(b.packId)) return c.json(bad('no such pack'), 404)
+    /*
+     * The model is parsed HERE as well, and that is the whole point.
+     *
+     * This branch returns before the parse further down ever runs, so the
+     * launch sheet — which is the primary way a session gets started — sent
+     * `model` and had it silently dropped on the floor. The picker was
+     * decorative: `/sessions/new` honoured it, the non-pack branch below
+     * honoured it, and the one surface most sessions actually come from did not.
+     *
+     * A pack has no model of its own to read it from (`launch_packs` carries
+     * `permission_mode` and no model column), so the request body is the only
+     * source and it has to be taken before this branch returns.
+     */
+    const packModel = parseSessionModel(b.model)
+    if ('error' in packModel) return c.json(bad(packModel.error), 400)
     // The same two steps the Open button takes, in the same order: record what
     // was approved, then start it from what was recorded.
     const rec = openPack(b.packId, typeof b.brief === 'string' ? b.brief : undefined)
     if ('error' in rec) return c.json(bad(rec.error), 404)
-    const started = terminalForPack(b.packId)
+    const started = terminalForPack(b.packId, packModel.model)
     return 'error' in started ? c.json(bad(started.error), 409) : c.json(started)
   }
 

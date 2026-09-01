@@ -29,6 +29,44 @@ fi
 
 echo "wake-deploy: ${local_sha:0:8} -> ${remote_sha:0:8}"
 
+# Refuse a dirty tree, and refuse it BEFORE anything else happens.
+#
+# Two reasons, and the order matters for the second one.
+#
+# The rollback further down is `git reset --hard`, which cannot tell the commit
+# it is undoing from work nobody has committed yet. Measured, painfully: an
+# agent working in this checkout committed locally without pushing, so local and
+# remote differed; the ff-merge failed; the ERR trap fired; and `reset --hard`
+# threw away every uncommitted edit in the tree. `--ff-only` exists precisely so
+# that "someone edited on the box" stops a deploy rather than losing the edit,
+# and the trap was quietly undoing that promise.
+#
+# And it sits above the backup rather than below it because this state persists:
+# the timer runs every minute, so a box someone is working on would take a full
+# `sqlite3 .backup` copy sixty times an hour and rotate the real pre-deploy
+# backups out of a fourteen-deep directory within a quarter of an hour. The
+# retention policy would be defeated by exactly the condition this guard exists
+# to handle.
+#
+# Captured into a variable rather than tested inline: a command substitution
+# that fails inside `[ ... ]` does not trip `set -e`, it just yields an empty
+# string — so `git status` erroring (an index.lock held by a concurrent agent,
+# say) would read as a clean tree and let the merge through. This way the exit
+# status is checked and an unreadable tree is refused rather than assumed clean.
+#
+# Untracked files are deliberately not counted: agent litter in the working
+# directory is the normal state of this box and is not work to protect.
+if ! dirty=$(git status --porcelain --untracked-files=no 2>&1); then
+  echo "wake-deploy: refusing to deploy - cannot read the tree in $REPO" >&2
+  echo "$dirty" >&2
+  exit 1
+fi
+if [ -n "$dirty" ]; then
+  echo "wake-deploy: refusing to deploy - uncommitted changes in $REPO" >&2
+  echo "$dirty" >&2
+  exit 1
+fi
+
 # The database is the only thing here that cannot be rebuilt from git.
 db="$HOME/.local/share/wake/wake.sqlite"
 if [ -f "$db" ]; then
@@ -41,27 +79,8 @@ if [ -f "$db" ]; then
 fi
 
 # Fast-forward only. A diverged local checkout means someone edited on the box,
-# and silently discarding that is worse than refusing to deploy.
-#
-# Refuse outright if the tree is dirty, and refuse BEFORE the merge.
-#
-# The rollback below is `git reset --hard`, which cannot tell the commit it is
-# undoing from work nobody has committed yet. Measured, painfully: an agent
-# working in this checkout committed locally without pushing, so local and remote
-# differed; the ff-merge failed; the ERR trap fired; and `reset --hard` threw
-# away every uncommitted edit in the tree. The comment two lines above promises
-# exactly the opposite of that happening.
-#
-# So the two halves are made consistent. This script only ever touches a clean
-# tree, and the rollback can then only ever undo its own checkout. Untracked
-# files are deliberately not counted: agent litter in the working directory is
-# the normal state of this box and is not work to protect.
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-  echo "wake-deploy: refusing to deploy - uncommitted changes in $REPO" >&2
-  git status --short --untracked-files=no >&2
-  exit 1
-fi
-
+# and silently discarding that is worse than refusing to deploy. The tree is
+# already known clean by here — see the guard above.
 git merge --ff-only "origin/$BRANCH"
 
 # And back out of it if the commit does not survive verification.

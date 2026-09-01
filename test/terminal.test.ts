@@ -23,7 +23,7 @@
  */
 
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   claudeArgv, isSessionId, openTerminal, resolveSessionCwd, sessionIdFromTmuxName,
@@ -187,6 +187,44 @@ describe('what actually reaches a command line', () => {
       model: 'sonnet', brief: 'hello',
     })
     expect(withBrief[withBrief.length - 1]).toBe('hello')
+  })
+
+  test('every route that starts a session takes a model to argv', () => {
+    /*
+     * This is the assertion that would have caught the picker being decorative.
+     *
+     * `POST /terminals` has two branches. The pack branch — which is the launch
+     * sheet, and the way most sessions actually start — returns *before* the
+     * model was parsed, so `b.model` was read off the wire and dropped on the
+     * floor. `/sessions/new` honoured it and the non-pack branch honoured it, so
+     * the feature looked wired end to end from either of those and did nothing
+     * from the one that matters most.
+     *
+     * Pinned as a property of the route rather than of one call: every path that
+     * reaches `openTerminal` has to carry a model, and `terminalForPack` needs a
+     * parameter for it because a pack row has no model column to read.
+     */
+    const router = readFileSync('src/server/claudecode/router.ts', 'utf8')
+
+    // The pack branch parses it before it returns.
+    const packBranch = /if \(typeof b\.packId === 'string'[\s\S]*?\n  \}/.exec(router)?.[0] ?? ''
+    expect(packBranch.length, 'the pack branch could not be found').toBeGreaterThan(200)
+    expect(packBranch, 'the pack branch starts a session without reading the model')
+      .toMatch(/parseSessionModel\(b\.model\)/)
+    expect(packBranch, 'the pack branch does not pass the model on')
+      .toMatch(/terminalForPack\([^)]*model/)
+
+    // And the thing it passes it to accepts one and forwards it.
+    const forPack = /function terminalForPack\([\s\S]*?\n\}/.exec(router)?.[0] ?? ''
+    expect(forPack, 'terminalForPack stopped taking a model').toMatch(/model: SessionModel/)
+    expect(forPack, 'terminalForPack drops the model before openTerminal')
+      .toMatch(/openTerminal\(\{[\s\S]*?\bmodel,/)
+
+    // Every `openTerminal(` call in the router carries one.
+    for (const m of router.matchAll(/openTerminal\(\{[\s\S]*?\n  \}\)/g)) {
+      expect(m[0], `an openTerminal call with no model:\n${m[0].slice(0, 160)}`)
+        .toMatch(/\bmodel\b/)
+    }
   })
 
   test('an unrecognised model is refused by name rather than defaulted', () => {

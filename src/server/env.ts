@@ -212,6 +212,13 @@ export const DESK_CHANNELS: SlackChannel[] = [
  * So `spendflo-truto:C05CJ0CUV35` is accepted too, and the two forms mix freely
  * in one variable. Anything after a second colon is ignored rather than treated
  * as an id, because that is a typo and a wrong id is worse than none.
+ *
+ * **A name is required; an id alone is not enough.** `:C0123` is dropped, and
+ * that is not an oversight: the searched query is built as `in:#<name>`, so a
+ * nameless entry would emit a malformed term and narrow the whole poll to
+ * nothing. Worth stating because the note above `DESK_CHANNELS` points at this
+ * variable as the way to add `Customer (private)` — and an id may be all that is
+ * ever recovered for it. It needs the channel's real name too.
  */
 const TYPED_CHANNELS: SlackChannel[] = str('WAKE_SLACK_CHANNELS')
   .split(',')

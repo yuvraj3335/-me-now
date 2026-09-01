@@ -417,7 +417,27 @@ export function Home() {
         return s
       })
     }
-    await actions.setStatus(c.group_key, next)
+    /*
+     * A write that fails must not look like one that worked.
+     *
+     * The row is already off the screen by here — `drop()` above is optimistic —
+     * and this was an unguarded `await` inside a function called as
+     * `void setStatus(...)`. So a failed Done was pixel-identical to a
+     * successful one: the card vanished, no toast appeared because `undoable`
+     * never ran, the rejection went nowhere, and the card came back on the next
+     * poll with no explanation. `makeTask` below was written with this guard and
+     * these two were not.
+     *
+     * The server is the truth, so recovery is to re-read rather than to invert
+     * the optimistic edit by hand.
+     */
+    try {
+      await actions.setStatus(c.group_key, next)
+    } catch (e) {
+      toast((e as Error).message)
+      await reload()
+      return
+    }
     setWritten(v => v + 1)
     undoable(c, next === 'done' ? 'Done' : STATUS_LABEL[next], 'status')
     void reload()
@@ -429,7 +449,16 @@ export function Home() {
       if (x) x.due_at = at
       return s
     })
-    await actions.setDue(c.group_key, at)
+    // Same guard as `setStatus`, for the same reason: the row already shows the
+    // new date, so a failure that says nothing leaves the screen lying until the
+    // next poll quietly puts the old one back.
+    try {
+      await actions.setDue(c.group_key, at)
+    } catch (e) {
+      toast((e as Error).message)
+      await reload()
+      return
+    }
     setWritten(v => v + 1)
     void reload()
   }
@@ -448,6 +477,25 @@ export function Home() {
    * down would be the one action on this page that quietly did two things.
    */
   const makeTask = async (c: CardT) => {
+    /*
+     * One task per row, and the second press says so rather than making another.
+     *
+     * Nothing anywhere refuses a duplicate — `POST /tasks` inserts
+     * unconditionally — so two presses produced two identical tasks and two
+     * identical toasts, of which only the second Undo was reachable: the toast
+     * is single-slot, so the first task was orphaned with no way back to it
+     * except finding it in Work.
+     *
+     * On a control this quick, a second press is a mis-tap far more often than
+     * it is a considered decision to track the same thread twice. Saying so is
+     * both the safer answer and the more useful one — it tells him the note he
+     * meant to make is already made.
+     */
+    const already = (state?.tasks ?? []).find(t => t.source_card_group === c.group_key)
+    if (already) {
+      toast(`Already on your list — ${titleOf(c)}`)
+      return
+    }
     try {
       const t = await actions.createTask(taskFromCard(c)) as { id: string }
       // The row is named for the same reason every other toast on this page

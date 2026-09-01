@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { useLiveState, useStore, refresh } from './lib/api'
 import { registerSW } from './lib/push'
+import { surfaceErrors } from './lib/surfaceErrors'
 import { Home } from './pages/Home'
 import { Work } from './pages/Work'
 import Sessions from './pages/Sessions'
@@ -75,6 +76,11 @@ export default function App() {
   const [palette, setPalette] = useState(false)
 
   useEffect(() => { void registerSW() }, [])
+
+  // A rejected promise from any handler in the product says so, rather than
+  // going nowhere. See `lib/surfaceErrors.ts` — this is the half of "nothing
+  // fails silently" that an error boundary structurally cannot cover.
+  useEffect(() => { surfaceErrors() }, [])
 
   // A notification's deep link lands on a Wake route; honour it on wake-up.
   useEffect(() => {

@@ -199,6 +199,37 @@ describe('the list is written once, in env.ts, and read everywhere', () => {
     // configured value here would make this test agree with itself no matter
     // what shipped, which is the one thing it exists to prevent.
     expect(DESK_CHANNELS.map(c => `#${c.name}`)).toEqual(THE_LIST)
+
+    /*
+     * And the ids, against a literal, for a reason the names alone do not cover.
+     *
+     * `test/setup.ts` configures the suite's own scope and hardcodes its own
+     * copy of these ids, so every other assertion in this file reads that copy
+     * rather than what ships. A typo in one `DESK_CHANNELS` id would leave the
+     * whole suite green while the deployment silently searched a channel that
+     * does not exist — and an id is the half that cannot be eyeballed.
+     *
+     * Re-resolved through `slack_search_channels` on 2026-09-01; all sixteen
+     * matched the ids already in the file.
+     */
+    expect(Object.fromEntries(DESK_CHANNELS.map(c => [c.name, c.id]))).toEqual({
+      'clonepartner': 'C09BRBLNXNH',
+      'sprinto': 'C050LJAMFSN',
+      'maximor-truto': 'C0A8B267EE9',
+      'spendflo-truto': 'C05CJ0CUV35',
+      '15five-truto': 'C0AHHQMF08L',
+      'komplai-truto': 'C0A437E7UAU',
+      'evergrowth-truto': 'C0A25L2QEB0',
+      'thoropass-truto': 'C05P80HPYSK',
+      'open-truto': 'C08SS821JHG',
+      'stax-truto': 'C09TKFVP6AY',
+      'naq-truto': 'C09REMSHL14',
+      'docsbot-truto': 'C093QFW4U3E',
+      'truto-balkanid': 'C07PMS3UYKB',
+      'ex-superhawk-truto': 'C0AACN2HYM7',
+      'truto-zen': 'C07AVEG7ZHN',
+      'framer-clonepartner': 'C06UP5J326B',
+    })
   })
 
   test('no channel is named at the call site', () => {

@@ -3,7 +3,7 @@ import { db, isTaskStatus, latestFinishedRuns, logEvent, now, taskStatus, uid } 
 import { pile as pileOf } from './dedup'
 import { ADAPTERS, ingest } from './ingest'
 import { fetchStatus, startFetch, isFetchScope } from './fetch'
-import { notify, runReminders, sendTestPush, vapidPublicKey } from './push'
+import { runReminders, sendTestPush, vapidPublicKey } from './push'
 import { CARD_PRIORITIES, CARD_STATUSES, type CardPriority, type CardStatus } from './sources/types'
 import { readThread, slackTsToMs } from './sources/slack'
 import {
