@@ -11,8 +11,32 @@ import { PAGE_TITLE } from '../lib/typography'
 import { WakeMark } from './WakeMark'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
 
-export const spring = { type: 'spring', stiffness: 520, damping: 40, mass: 0.7 } as const
-export const softSpring = { type: 'spring', stiffness: 260, damping: 30 } as const
+/**
+ * The two springs every panel in this product settles on.
+ *
+ * They were declared here and used nowhere for a long time, while every surface
+ * animated on a duration and a cubic bézier instead. A timing curve is the right
+ * tool for a thing that fades — a scrim has no mass and nothing to overshoot —
+ * and the wrong one for a thing that *moves*, because the moment a panel is also
+ * draggable, a fixed 180ms ease-out from wherever the thumb let go is where the
+ * surface stops feeling attached to the hand.
+ *
+ * `spring` is for something small and near: a menu, a popover, a picker. `soft`
+ * is for something with a panel's worth of travel — a sheet coming up from the
+ * bottom edge. Both are damped past overshoot on purpose: this is furniture
+ * settling, not a toy bouncing, and a dialog that wobbles under a heading is the
+ * kind of motion that reads as cheap on the second viewing.
+ *
+ * `restDelta` is the pixel they may stop short by. A spring without one keeps
+ * animating for a few hundred milliseconds while it converges on a difference no
+ * display can draw, and anything gated on "is it still moving" stays true.
+ */
+export const spring = {
+  type: 'spring', stiffness: 520, damping: 40, mass: 0.7, restDelta: 0.5,
+} as const
+export const softSpring = {
+  type: 'spring', stiffness: 300, damping: 34, mass: 0.9, restDelta: 0.5,
+} as const
 
 /* --------------------------------- buttons -------------------------------- */
 
@@ -420,7 +444,7 @@ export function Menu<T extends string>({
           // been picked from has no business lingering anyway.
           initial={still ? false : { opacity: 0, y: at.bottom !== undefined ? 4 : -4 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
+          transition={spring}
           className="fixed z-[55] overflow-y-auto overscroll-contain py-1
                      rounded-panel border border-edge bg-ink-850 raised"
         >
@@ -635,7 +659,9 @@ export function Sheet({
             initial={still ? false : { y: '100%', opacity: 0.6 }}
             animate={{ y: 0, opacity: 1 }}
             exit={still ? undefined : { y: '100%', opacity: 0.6 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            // A sheet has a panel's worth of travel and comes up under a thumb,
+            // so it settles on a spring rather than running out a fixed 180ms.
+            transition={softSpring}
           >
             {title && (
               <div className="flex items-center justify-between gap-3 px-4 h-12 shrink-0 border-b border-rule">

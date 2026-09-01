@@ -175,13 +175,64 @@ describe('the list is what is running', () => {
   })
 
   test('a row is a title, a line, a dot and an age — and no buttons', () => {
-    const body = list.slice(list.indexOf('function Row('), list.indexOf('function SessionDrawer('))
+    /*
+     * AMENDED: the slice ends at the drawer's *use*, not at a drawer defined
+     * here, because there is no drawer defined here any more.
+     *
+     * `SessionDrawer` was a private copy of the desk's `SwipeDrawer` living in
+     * this file. It has been deleted — the shared component takes an optional
+     * `status` and a session simply does not pass one — so the old end marker
+     * `function SessionDrawer(` no longer exists and `indexOf` returned -1,
+     * which sliced the row body to nothing and passed every assertion below
+     * against an empty string. A marker that can vanish is a test that can stop
+     * testing without failing, so this one is bounded by the next function
+     * instead and asserts it actually found a body.
+     *
+     * The rule is untouched and is still the point: **no control is painted on
+     * the row itself.** Three icon buttons were 110px of a 375px screen,
+     * measured, and the title column got 133px against a 438px string. Actions
+     * live behind the swipe, which costs the row nothing at rest.
+     */
+    const at = list.indexOf('function Row(')
+    // Both markers: what follows `Row` is a block comment and then an
+    // `export function`, so bounding on a bare `\nfunction ` alone runs to the
+    // end of the file and picks up the delete sheet's buttons.
+    const ends = ['\nfunction ', '\nexport function ']
+      .map(m => list.indexOf(m, at + 1))
+      .filter(n => n !== -1)
+    const body = list.slice(at, ends.length ? Math.min(...ends) : undefined)
+    expect(body.length, 'the Row body could not be found').toBeGreaterThan(200)
+    expect(body, 'the Row body ran past the row').not.toMatch(/DeleteSheet/)
     expect(body, 'the live dot is not the status token').toMatch(/bg-status-live/)
     expect(body, 'the row stopped saying when it was last active').toMatch(/ago\(s\.lastTs\)/)
-    // The three icon buttons were 110px of a 375px screen, measured — the title
-    // column got 133px against a 438px string. What is left is the row.
     expect(body, 'a control came back onto the row').not.toMatch(/<Button/)
     expect(body, 'the branch came back onto the phone row').not.toMatch(/s\.branch/)
+  })
+
+  test('a session row swipes to the same actions every other row has', () => {
+    /*
+     * The desk, Work and this page share one drawer now. What a session gets is
+     * `Task`, `Done` and `Delete`; what it does not get is `Status`, and that is
+     * a decision rather than an omission — see the comment in `sessions.tsx`.
+     *
+     * A session has two facts about its state and neither is a status: whether
+     * the process is up, which is Claude Code's answer and which the row already
+     * draws as the live dot, and whether it is on Wake's list, which is what
+     * `Done` writes. `status` is optional on the drawer precisely so a row with
+     * no lifecycle can decline it instead of inventing five values.
+     */
+    expect(list, 'the session row went back to a private drawer')
+      .not.toMatch(/function SessionDrawer\(/)
+    expect(list, 'the session row stopped using the shared drawer')
+      .toMatch(/<SwipeDrawer/)
+    expect(list, 'a session grew a status it cannot honestly have')
+      .not.toMatch(/<SwipeDrawer[\s\S]{0,400}status=\{/)
+    // Three actions, and the width the hook is asked for has to match them.
+    expect(list, 'the drawer width no longer matches the actions in it')
+      .toMatch(/useSwipe\(`session:\$\{s\.id\}`, 3\)/)
+    for (const prop of ['onTask', 'onDone', 'onDelete']) {
+      expect(list, `the session drawer lost ${prop}`).toMatch(new RegExp(`${prop}=\\{`))
+    }
   })
 
   test('tapping a row goes to the page, not to a sheet', () => {

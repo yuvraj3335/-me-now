@@ -49,6 +49,7 @@ import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { overlayOpen, useOverlay } from '../lib/overlay'
 import { openSwipeKey } from '../lib/swipe'
+import { taskFromCard } from '../lib/taskFrom'
 import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
 
 /**
@@ -422,10 +423,40 @@ export function Home() {
     void reload()
   }
 
+  /**
+   * A task from a card, landed in Work without a sheet.
+   *
+   * The sheet is still what the detail pane offers, and it is still the right
+   * thing there — that is the path for a task you want to give a deadline, a
+   * goal and a colour. This is the other path: the row under the thumb is
+   * already the title and already carries its own provenance, so the only thing
+   * a sheet could add is a confirmation of what is on screen.
+   *
+   * The card is deliberately left exactly where it is. Making a note of
+   * something is not finishing it, and a row that vanished when you wrote it
+   * down would be the one action on this page that quietly did two things.
+   */
+  const makeTask = async (c: CardT) => {
+    try {
+      const t = await actions.createTask(taskFromCard(c)) as { id: string }
+      // The row is named for the same reason every other toast on this page
+      // names it — the drawer has been covering the title while the thumb was on
+      // the button, so `Task.` alone closes no loop.
+      toast(`Task — ${titleOf(c)}`, {
+        label: 'Undo',
+        run: async () => { await actions.deleteTask(t.id); await reload() },
+      })
+      void reload()
+    } catch (e) {
+      toast((e as Error).message)
+    }
+  }
+
   const rowActions: RowAction = {
     onOpen: c => openDetail(c.group_key),
     onStatus: (c, s) => void setStatus(c, s),
     onDue: (c, at) => void setDue(c, at),
+    onTask: c => void makeTask(c),
   }
 
   /**

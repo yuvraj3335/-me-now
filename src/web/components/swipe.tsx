@@ -35,12 +35,27 @@
  *
  * **`Status` opens its picker in place**, over the row, because the alternative
  * is a menu — and a menu here is the kebab wearing a different hat.
+ *
+ * **The offset is a motion value, not React state.** It used to be `useState`,
+ * written on every `pointermove` — so a swipe re-rendered the row, its cells and
+ * every button in the drawer once per frame, on the main thread, while the
+ * finger was still moving. Moving the *width* out of the animation (see above)
+ * fixed the layout half of that and left the render half in place. A motion
+ * value is written straight to the element's transform without React seeing it,
+ * so a gesture now costs exactly two renders — one when the drawer mounts and
+ * one when it unmounts — instead of one per frame. `live` is that mount, and it
+ * is the only piece of this still in state.
+ *
+ * **It settles on a spring** rather than snapping to its end value the instant
+ * the finger lifts. The row was tracking a thumb one-to-one a frame earlier, and
+ * a hard jump to `-width` is where a surface stops feeling attached to the hand.
  */
 
+import { animate, motion, useMotionValue, useTransform, type MotionValue } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  axisFor, clampSwipe, openSwipeKey, setOpenSwipe, snapSwipe, SWIPE_ACTION_W, SWIPE_ENGAGE_PX,
-  swipeWidth, useOpenSwipe, type SwipeAxis,
+  axisFor, clampSwipe, elasticSwipe, openSwipeKey, setOpenSwipe, snapSwipe, SWIPE_ACTION_W,
+  SWIPE_ENGAGE_PX, SWIPE_SPRING, swipeWidth, useOpenSwipe, type SwipeAxis,
 } from '../lib/swipe'
 import { statusColor, statusWash } from './status'
 import { STATUS_LABEL, type CardStatus } from '../lib/types'
@@ -147,10 +162,61 @@ export function useSwipe(
     return !scroller || scroller.hasAttribute('data-atend')
   }
 
-  const [dx, setDx] = useState(0)
+  /**
+   * Where the drawer is, written straight to the compositor.
+   *
+   * Nothing re-renders when this changes. `live` below is the only state a
+   * gesture touches, and it changes twice per gesture rather than sixty times a
+   * second.
+   */
+  const offset = useMotionValue(0)
+  /** Whether the drawer is on screen at all — see the `return null` in the drawer. */
+  const [live, setLive] = useState(false)
   /** The offset as of this instant, for handlers that fire between renders. */
   const dxRef = useRef(0)
-  const put = useCallback((v: number) => { dxRef.current = v; setDx(v) }, [])
+  /** The spring currently carrying the row somewhere, and where it is headed. */
+  const running = useRef<{ stop: () => void; to: number } | null>(null)
+
+  /** Track the pointer exactly. Kills any spring: a finger outranks physics. */
+  const put = useCallback((v: number) => {
+    running.current?.stop()
+    running.current = null
+    dxRef.current = v
+    offset.set(v)
+    // React bails out on an identical value, so this is one render on the
+    // 0 ↔ non-0 crossing and nothing at all on the frames in between.
+    setLive(v !== 0)
+  }, [offset])
+
+  /**
+   * Carry the row to a resting place on a spring.
+   *
+   * The drawer stays mounted for the whole of a closing animation and unmounts
+   * on the last frame, or it would vanish instead of sliding shut. Re-entrant on
+   * purpose: `pointerup` publishes to the store *and* settles, and the store then
+   * fires the effect below with the same target — asking for a spring that is
+   * already running to that exact value is a no-op rather than a restart, which
+   * is what stops that pair producing a visible hitch.
+   */
+  const settle = useCallback((target: number) => {
+    if (running.current?.to === target) return
+    running.current?.stop()
+    if (target !== 0) setLive(true)
+    const ctl = animate(offset, target, {
+      ...SWIPE_SPRING,
+      onUpdate: v => { dxRef.current = v },
+      onComplete: () => {
+        running.current = null
+        dxRef.current = target
+        if (target === 0) setLive(false)
+      },
+    })
+    running.current = { stop: () => ctl.stop(), to: target }
+  }, [offset])
+
+  // A row that unmounts mid-spring must not leave one running against a motion
+  // value nothing is reading any more.
+  useEffect(() => () => { running.current?.stop() }, [])
 
   const from = useRef<{ x: number; y: number; base: number } | null>(null)
   const axis = useRef<SwipeAxis>('undecided')
@@ -169,8 +235,8 @@ export function useSwipe(
   // the two fingers are both already deciding where this row sits.
   useEffect(() => {
     if (from.current || wheeling.current) return
-    put(open ? -width : 0)
-  }, [open, width, put])
+    settle(open ? -width : 0)
+  }, [open, width, settle])
 
   /**
    * A row that leaves takes its openness with it.
@@ -219,7 +285,10 @@ export function useSwipe(
   useEffect(() => {
     const el = node.current
     if (!el || width <= 0) return
-    let settle: ReturnType<typeof setTimeout> | null = null
+    // Named `idle` rather than `settle`: the hook now has a `settle` of its own
+    // that springs the row to a resting place, and a local shadowing it here
+    // would silently make every wheel gesture end by clearing a timeout instead.
+    let idle: ReturnType<typeof setTimeout> | null = null
     /** How far this gesture has travelled sideways, across its whole stream. */
     let travelled = 0
     /** Whether it ever travelled far enough to be a gesture at all. */
@@ -246,10 +315,10 @@ export function useSwipe(
        * hands the keyboard to. A row that no longer owns the store closes
        * itself and says nothing.
        */
-      if (openSwipeKey() !== key) { put(0); return }
-      const landed = snapSwipe(dxRef.current, width)
+      if (openSwipeKey() !== key) { settle(0); return }
+      const landed = snapSwipe(clampSwipe(dxRef.current, width), width)
       setOpenSwipe(landed ? key : null)
-      put(landed)
+      settle(landed)
     }
 
     const onWheel = (e: WheelEvent) => {
@@ -269,11 +338,11 @@ export function useSwipe(
        */
       e.preventDefault()
       travelled += Math.abs(e.deltaX)
-      if (settle) clearTimeout(settle)
-      settle = setTimeout(end, 120)
+      if (idle) clearTimeout(idle)
+      idle = setTimeout(end, 120)
       if (travelled < SWIPE_ENGAGE_PX) return
 
-      const next = clampSwipe(dxRef.current - e.deltaX, width)
+      const next = elasticSwipe(dxRef.current - e.deltaX, width)
       if (next === 0 && dxRef.current === 0) return
 
       /*
@@ -295,10 +364,10 @@ export function useSwipe(
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       el.removeEventListener('wheel', onWheel)
-      if (settle) clearTimeout(settle)
+      if (idle) clearTimeout(idle)
       wheeling.current = false
     }
-  }, [key, width, put])
+  }, [key, width, put, settle])
 
   const bind: SwipeBind = {
     ref: n => { node.current = n },
@@ -313,7 +382,7 @@ export function useSwipe(
        * drawer is actually moving, so a title can still be selected and copied
        * from a row at rest.
        */
-      ...(dx !== 0 ? { userSelect: 'none' as const } : null),
+      ...(live ? { userSelect: 'none' as const } : null),
     },
 
     onPointerDown: e => {
@@ -366,16 +435,21 @@ export function useSwipe(
         } catch { /* the drag still works without it; it just ends at the edge */ }
       }
 
-      put(clampSwipe(start.base + ddx, width))
+      // Elastic, not clamped: a thumb that keeps pulling past the last action
+      // still gets movement, just less of it. A row that goes dead under a
+      // finger reads as a stuck app; resistance reads as an end.
+      put(elasticSwipe(start.base + ddx, width))
     },
 
     onPointerUp: () => {
       const started = from.current
       from.current = null
       if (!started || axis.current !== 'x') return
-      const landed = snapSwipe(dxRef.current, width)
+      // Snapped from the hard range, so an overdragged row still lands on one
+      // of the two resting places rather than keeping any of its stretch.
+      const landed = snapSwipe(clampSwipe(dxRef.current, width), width)
       setOpenSwipe(landed ? key : null)
-      put(landed)
+      settle(landed)
     },
 
     onPointerCancel: () => {
@@ -385,7 +459,7 @@ export function useSwipe(
       // well is what keeps that true for a click that arrives without one — a
       // button inside the row activated from the keyboard.
       engaged.current = false
-      if (axis.current === 'x') put(open ? -width : 0)
+      if (axis.current === 'x') settle(open ? -width : 0)
     },
 
     /**
@@ -410,7 +484,7 @@ export function useSwipe(
     },
   }
 
-  return { dx, open, width, bind, close }
+  return { offset, live, open, width, bind, close }
 }
 
 /* --------------------------------- drawer --------------------------------- */
@@ -429,13 +503,31 @@ const TONE = {
   ok: 'bg-ok text-on-ok',
   ink: 'bg-ink-700 text-fg',
   bad: 'bg-bad text-on-bad',
+  accent: 'bg-accent text-on-accent',
 } as const
 
 export type SwipeDrawerProps = {
-  /** The live offset from `useSwipe`. Nothing renders at 0. */
-  dx: number
+  /**
+   * The live offset from `useSwipe`, as a motion value.
+   *
+   * Not a number: a number would mean this component re-rendered on every frame
+   * of every swipe, which is the thing the hook above stopped doing. `live` is
+   * what says whether to render at all.
+   */
+  offset: MotionValue<number>
+  live: boolean
   width: number
   onDone: () => void
+  /**
+   * Make a task from this row, and land it in Work without asking anything.
+   *
+   * Omitted by a row that has no origin worth carrying — a task cannot be made
+   * from a task. Where it is offered it is the *first* action under the thumb,
+   * because it is the only one of the four that is purely additive: the other
+   * three all take the row somewhere, and the one that costs nothing should be
+   * the one nearest the finger.
+   */
+  onTask?: () => void
   /**
    * Deletes a task or a goal; on a card this is `Won't do`, which is how Wake
    * already dismisses work. The word on the button is `Delete` either way —
@@ -455,20 +547,30 @@ export type SwipeDrawerProps = {
 }
 
 export function SwipeDrawer({
-  dx, width, onDone, onDelete, status, onClose,
+  offset, live, width, onDone, onTask, onDelete, status, onClose,
 }: SwipeDrawerProps) {
   const [picking, setPicking] = useState(false)
 
+  /*
+   * How far the strip of buttons is pushed out of its own window.
+   *
+   * Derived from the offset rather than computed in render, so it updates on
+   * the compositor with the gesture instead of once per React render. The clamp
+   * is here rather than in the hook because the hook now lets a finger pull
+   * past the end — see `elasticSwipe` — and the strip must not travel further
+   * left than its own window however hard the row is pulled.
+   */
+  const x = useTransform(offset, v => width - Math.min(width, Math.max(0, -v)))
+
   // A drawer that shuts while its picker is up must not reopen holding it.
-  useEffect(() => { if (dx === 0) setPicking(false) }, [dx])
+  useEffect(() => { if (!live) setPicking(false) }, [live])
 
   // Nothing at rest, and the contract in `ui-contract.test.ts` is why: a drawer
   // that is always present is a control a touch device can never reveal and can
   // always press. Leaving it mounted to save the first frame's layout was tried
   // and is not worth that.
-  if (dx === 0) return null
+  if (!live) return null
 
-  const shown = Math.min(width, Math.max(0, -dx))
   const act = (run: () => void) => () => { run(); onClose() }
 
   if (picking && status) {
@@ -595,16 +697,20 @@ export function SwipeDrawer({
        */
       style={{ width }}
     >
-      <div
+      <motion.div
         className="absolute inset-y-0 right-0 flex items-stretch"
-        style={{ width, transform: `translate3d(${width - shown}px, 0, 0)` }}
+        style={{ width, x }}
       >
+        {/* `Task`, not `+`. Every other action in this drawer is a word you can
+            read at arm's length, and a glyph here would be the one control on
+            the surface you have to already know. */}
+        {onTask && <SwipeButton tone="accent" label="Task" onClick={act(onTask)} />}
         <SwipeButton tone="ok" label="Done" onClick={act(onDone)} />
         {status && (
           <SwipeButton tone="ink" label="Status" onClick={() => setPicking(true)} />
         )}
         <SwipeButton tone="bad" label="Delete" onClick={act(onDelete)} />
-      </div>
+      </motion.div>
     </div>
   )
 }

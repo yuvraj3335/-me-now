@@ -73,8 +73,12 @@ describe('a phone can reach every column of its own table', () => {
      * clipping it) and the pinned Title cell — widest, always on screen, where
      * a thumb lands — computed `touch-action: pan-y`.
      */
+    // Four actions, not three: the drawer gained `Task`. The count is what sets
+    // the drawer's width, so it is pinned alongside the axis policy rather than
+    // left to drift — a row asking for one width and drawing another is a strip
+    // of buttons that does not reach the edge it is anchored to.
     expect(table, 'the phone row went back to keeping the horizontal axis')
-      .toContain("useSwipe(card.group_key, 3, 'manipulation')")
+      .toContain("useSwipe(card.group_key, 4, 'manipulation')")
     expect(css, 'the row policy that yields both axes is gone')
       .toMatch(/\[data-swipe='manipulation'\],\s*\n\s*\[data-swipe='manipulation'\] > td \{ touch-action: manipulation; \}/)
     // And no cell re-declares one. The per-cell split — Title for the drawer,

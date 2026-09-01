@@ -78,6 +78,17 @@ export type RowAction = {
   onStatus: (c: Card, status: CardStatus) => void
   /** A due date, or null to clear one. */
   onDue: (c: Card, at: number | null) => void
+  /**
+   * Make a task from this row and land it in Work, with no sheet in between.
+   *
+   * The sheet still exists and is still what the detail pane offers — that is
+   * the path for a task you want to shape. This is the other one: the row is
+   * already the title, the provenance is already on it, and the only thing a
+   * sheet would add is a confirmation of something you can see. The undo is in
+   * the toast, which is where every other irreversible-looking thing on this
+   * page puts it.
+   */
+  onTask: (c: Card) => void
 }
 
 /** The five, as the drawer's picker wants them. Built once, not per row. */
@@ -95,7 +106,7 @@ const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id: id as string, label: STATUS
 const NEW_TITLE = 'new since you last looked'
 
 /**
- * The drawer's three actions, in the vocabulary the desk already has.
+ * The drawer's four actions, in the vocabulary the desk already has.
  *
  * `Delete` on a card is `Won't do` — the way Wake has always dismissed work —
  * so nothing here invents a fourth verb or a second kind of removal. The row is
@@ -103,6 +114,7 @@ const NEW_TITLE = 'new since you last looked'
  * reason `Won't do` and not a real delete.
  */
 const drawerFor = (card: Card, actions: RowAction) => ({
+  onTask: () => actions.onTask(card),
   onDone: () => actions.onStatus(card, 'done'),
   onDelete: () => actions.onStatus(card, 'wont_do'),
   status: {
@@ -651,7 +663,7 @@ export function CardRow({
 }) {
   const ref = useRef<HTMLTableRowElement>(null)
   const kind = cardKind(card)
-  const swipe = useSwipe(card.group_key, 3)
+  const swipe = useSwipe(card.group_key, 4)
   // Printed through `titleOf` rather than raw, here and on the `title`
   // attribute beside it, so a collector's hard cut is admitted wherever the
   // name is read — including the tooltip, which is the one place on this row
@@ -723,7 +735,7 @@ export function CardRow({
           holds it. */}
       <DueCell card={card} onDue={actions.onDue}>
         <SwipeDrawer
-          dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+          offset={swipe.offset} live={swipe.live} width={swipe.width} onClose={swipe.close}
           {...drawerFor(card, actions)}
         />
       </DueCell>
@@ -1085,7 +1097,7 @@ export function CardLine({
    * on the same frame. Swipe to the end of the columns and keep going: the
    * drawer opens, on the same finger, without lifting it.
    */
-  const swipe = useSwipe(card.group_key, 3, 'manipulation')
+  const swipe = useSwipe(card.group_key, 4, 'manipulation')
   const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
   const row = useRef<HTMLTableRowElement | null>(null)
   const peekAbove = usePeekAbove(peeking, row)
@@ -1175,7 +1187,7 @@ export function CardLine({
           thing on this row that is supposed to cover the row. */}
       <td className="sticky right-0 z-20 w-0 p-0 align-middle">
         <SwipeDrawer
-          dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+          offset={swipe.offset} live={swipe.live} width={swipe.width} onClose={swipe.close}
           {...drawerFor(card, actions)}
         />
         {/* The peek hangs off this same 0px cell, for the same reason the
@@ -1470,7 +1482,7 @@ function RowCard({
   const kind = cardKind(card)
   const where = contextLine(card)
   const name = titleOf(card)
-  const swipe = useSwipe(card.group_key, 3)
+  const swipe = useSwipe(card.group_key, 4)
   const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
   const peekAbove = usePeekAbove(peeking, ref)
 
@@ -1510,7 +1522,7 @@ function RowCard({
         ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
       <SwipeDrawer
-        dx={swipe.dx} width={swipe.width} onClose={swipe.close}
+        offset={swipe.offset} live={swipe.live} width={swipe.width} onClose={swipe.close}
         {...drawerFor(card, actions)}
       />
 

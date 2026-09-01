@@ -1240,7 +1240,8 @@ function TaskRow({
   const swipe = useSwipe(`task:${task.id}`, 3)
   const drawer = (
     <SwipeDrawer
-      dx={swipe.dx}
+      offset={swipe.offset}
+      live={swipe.live}
       width={swipe.width}
       onClose={swipe.close}
       onDone={() => onStatus(task, 'done')}
@@ -1462,7 +1463,8 @@ function GoalRow({
         </div>
       </button>
       <SwipeDrawer
-        dx={swipe.dx}
+        offset={swipe.offset}
+        live={swipe.live}
         width={swipe.width}
         onClose={swipe.close}
         onDone={() => onStatus(g, true)}

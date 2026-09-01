@@ -10,6 +10,7 @@ import { actions as api } from '../lib/api'
 import { StatusChip, isSettled } from './status'
 import { SOURCE_LABEL } from './sources'
 import { openLaunch, taskContext, taskRepoHint } from '../lib/launch'
+import { originFromCard } from '../lib/taskFrom'
 import { Button, Chip, DateTimePicker, Field, Sheet, inputClass } from './primitives'
 
 /** Sticky-note palette: muted enough to sit on the dark ground without shouting. */
@@ -151,14 +152,11 @@ export function TaskSheet({
       // the only link, and `ingest.ts` marks a card gone the moment its source
       // stops returning it — so a task's provenance line disappeared exactly
       // when the pull request merged.
-      if (!task && fromCard) {
-        body.origin_source = fromCard.sources[0]?.source ?? null
-        body.origin_title = fromCard.title
-        body.origin_why = fromCard.why
-        body.origin_url = fromCard.url
-        body.origin_excerpt = fromCard.excerpt ?? null
-        body.origin_meta = fromCard.meta ?? null
-      }
+      //
+      // The mapping is shared with the swipe drawer's `Task` action, which builds
+      // the same object with no sheet at all. Two callers, one mapping, so the
+      // quick path cannot quietly carry less than this one.
+      if (!task && fromCard) Object.assign(body, originFromCard(fromCard))
       const saved = task
         ? await actions.updateTask(task.id, body) as Task
         : await actions.createTask(body) as Task

@@ -11,7 +11,9 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { axisFor, SWIPE_AXIS_RATIO } from '../src/web/lib/swipe'
+import {
+  axisFor, clampSwipe, elasticSwipe, snapSwipe, SWIPE_AXIS_RATIO,
+} from '../src/web/lib/swipe'
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap(entry => {
@@ -169,8 +171,30 @@ describe('a card that leaves the list can come back', () => {
       const offers = [...src.matchAll(/label:\s*'Undo'([\s\S]{0,240})/g)]
       expect(offers.length, `${f}: nothing offers an undo any more`).toBeGreaterThan(0)
       for (const m of offers) {
-        expect(m[1], `${f}: an undo clears more than the action it undoes`)
-          .toMatch(/actions\.restore\([^)]+,\s*\w/)
+        /*
+         * AMENDED: a *named* restore, or a targeted inverse.
+         *
+         * The rule has always been "an Undo reverses exactly what it named and
+         * nothing else", and until now every Undo on these two surfaces undid a
+         * suppression, so `actions.restore(g, <field>)` was the only shape it
+         * could take. The swipe drawer's `Task` action is the first that undoes
+         * a *creation*: there is no suppression to lift, and the reversal is
+         * deleting the one row it just made.
+         *
+         * `actions.deleteTask(t.id)` satisfies the actual rule — it names one
+         * object and touches nothing else — while failing the old pattern, which
+         * was the rule wearing one implementation's clothes. What is still
+         * refused is the thing that caused this test to exist: a bare
+         * `actions.restore(g)` with no second argument, which drops every
+         * suppression on the card including a due date and a placement the
+         * action never touched.
+         */
+        const named = /actions\.restore\([^)]+,\s*\w/.test(m[1]!)
+        const inverse = /actions\.delete\w+\(\w[\w.]*\)/.test(m[1]!)
+        expect(named || inverse, `${f}: an undo clears more than the action it undoes`)
+          .toBe(true)
+        expect(m[1], `${f}: an undo restores everything rather than one field`)
+          .not.toMatch(/actions\.restore\(\s*[\w.]+\s*\)/)
       }
     }
   })
@@ -1547,8 +1571,15 @@ describe('a row can be acted on without being opened', () => {
     // Not at `opacity: 0` and not at `width: 0` with live buttons inside it:
     // `group-hover` never fires on touch, so that shape is a control which is
     // permanently invisible and permanently tappable.
+    // AMENDED: the shut state is `live`, not `dx === 0`.
+    //
+    // The offset stopped being React state — it is a motion value written
+    // straight to the transform, so there is no per-render `dx` left to compare
+    // against zero. `live` is the one piece of the gesture still in state and it
+    // is exactly this question: is the drawer on screen at all. The rule the old
+    // assertion was standing for is unchanged and is what is pinned here.
     expect(swipe, 'the drawer renders while the row is closed')
-      .toMatch(/if \(dx === 0\) return null/)
+      .toMatch(/if \(!live\) return null/)
     for (const f of web) {
       expect(read(f), `${f}: a swipe action is hidden behind opacity`)
         .not.toMatch(/opacity-0\s+group-hover:opacity-100/)
@@ -1565,11 +1596,71 @@ describe('a row can be acted on without being opened', () => {
      *
      * The box is a constant size now and the strip inside it is moved with a
      * transform, which the compositor can do without laying anything out.
+     *
+     * AMENDED, and the rule got stronger rather than weaker.
+     *
+     * Taking `width` out of the animation fixed the layout half of "it's not
+     * smooth" and left the other half in place: the offset was still React
+     * state, written on every `pointermove`, so a swipe re-*rendered* the row
+     * and its cells sixty times a second even though it no longer re-laid them
+     * out. It is a motion value now, which React never sees change, so the
+     * transform is written on the compositor and the gesture costs two renders
+     * in total — the drawer mounting and the drawer unmounting.
+     *
+     * So there is no `${width - shown}` template to pin any more; the strip is
+     * a `motion.div` driven by a derived motion value. Both halves are asserted
+     * here, because either one coming back alone reproduces the complaint.
      */
     expect(swipe, 'the drawer went back to animating its own width')
       .not.toMatch(/style=\{\{ width: shown \}\}/)
     expect(swipe, 'the revealed strip is no longer moved with a transform')
-      .toMatch(/transform: `translate3d\(\$\{width - shown\}px, 0, 0\)`/)
+      .toMatch(/<motion\.div[\s\S]{0,200}style=\{\{ width, x \}\}/)
+    expect(swipe, 'the strip stopped deriving its travel from the live offset')
+      .toMatch(/useTransform\(offset,/)
+
+    // And the render half: nothing may put the moving offset back into state.
+    // `setLive` is a boolean and is allowed; a `setDx`-shaped writer is not.
+    expect(swipe, 'the swipe offset went back into React state on every frame')
+      .not.toMatch(/const \[dx, setDx\]|setDx\(/)
+  })
+
+  test('the drawer settles on a spring and gives at its limits', () => {
+    /*
+     * Two halves of the same complaint — "extremely smooth", asked for by name.
+     *
+     * A gesture that tracks a thumb one-to-one and then jumps to its end value
+     * the instant the thumb lifts is where a surface stops feeling attached to
+     * the hand, so the release is a spring rather than a hard set. And a row
+     * that goes dead the moment it reaches `-width` reads as a stuck app, so
+     * both ends give and take it back.
+     *
+     * DECISIONS #38 said "no rubber band", and that sentence was about a resting
+     * state in the MIDDLE — a drawer stopped 40% open with half-labelled
+     * actions. That still cannot happen: `snapSwipe` is unchanged and the
+     * release still lands on exactly open or exactly shut.
+     */
+    expect(swipe, 'the drawer went back to snapping without physics')
+      .toMatch(/settle\(/)
+    const lib = read('src/web/lib/swipe.ts')
+    expect(lib, 'the settle stopped being a spring').toMatch(/type: 'spring'/)
+    expect(lib, 'the limits went back to a dead clamp').toMatch(/export function elasticSwipe/)
+
+    // Give at the ends, and no travel that a clamp would not also allow to rest.
+    expect(elasticSwipe(40, 264), 'a closed row no longer gives to the right')
+      .toBeGreaterThan(0)
+    expect(elasticSwipe(40, 264), 'the give is not resistance, it is free travel')
+      .toBeLessThan(40)
+    expect(elasticSwipe(-400, 264), 'an overdragged row travels unresisted')
+      .toBeGreaterThan(-400)
+    expect(elasticSwipe(-400, 264), 'the drawer stopped opening fully')
+      .toBeLessThan(-264)
+    expect(elasticSwipe(-100, 264), 'travel inside the range stopped being 1:1')
+      .toBe(-100)
+
+    // The stretch is never a resting place: the snap is computed from the hard
+    // range, so an overdragged release still lands on one of the two.
+    expect(snapSwipe(clampSwipe(elasticSwipe(-400, 264), 264), 264)).toBe(-264)
+    expect(snapSwipe(clampSwipe(elasticSwipe(40, 264), 264), 264)).toBe(0)
   })
 
   test('a thumb travelling in an arc still counts as a swipe', () => {

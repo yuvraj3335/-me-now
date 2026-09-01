@@ -43,8 +43,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { Button, Empty, Menu, Pager, Sheet, pageCount, pageSlice, rowStateClass, useRail } from './primitives'
-import { useSwipe } from './swipe'
-import { SWIPE_ACTION_W } from '../lib/swipe'
+import { SwipeDrawer, useSwipe } from './swipe'
+import { taskFromSession } from '../lib/taskFrom'
+import { actions } from '../lib/api'
 import { ago } from '../lib/time'
 import { toast } from '../lib/toast'
 import { navigate, setParam, useParams } from '../lib/route'
@@ -310,6 +311,29 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     setScoped(s => (s ? { ...s, rows: apply(s.rows) } : s))
   }
 
+  /**
+   * A task from a session, landed without a sheet in between.
+   *
+   * The session stays on the list. This is not a way of putting one away — that
+   * is `Done` — it is a way of writing down the thing the session reminded you
+   * of, which is what the swipe is nearest to at the moment you remember it.
+   *
+   * Nothing is optimistic here because the task does not appear on this page:
+   * the toast is the whole confirmation, and it carries the way back, since a
+   * task created by a misfired thumb is otherwise something to go and find.
+   */
+  const makeTask = async (s: Session) => {
+    try {
+      const t = await actions.createTask(taskFromSession(s)) as { id: string }
+      toast(`Task — ${s.title}`, {
+        label: 'Undo',
+        run: () => void actions.deleteTask(t.id),
+      })
+    } catch (e) {
+      toast((e as Error).message)
+    }
+  }
+
   const archive = async (s: Session, on: boolean) => {
     drop(s.id, on)
     try {
@@ -406,6 +430,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
                 onOpen={() => navigate(sessionRoute(s.id))}
                 onArchive={() => void archive(s, true)}
                 onDelete={() => setDoomed(s)}
+                onTask={() => void makeTask(s)}
               />
             ))}
           </ul>
@@ -500,14 +525,15 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
  * is the exact thing the old page got wrong.
  */
 function Row({
-  session: s, onOpen, onArchive, onDelete,
+  session: s, onOpen, onArchive, onDelete, onTask,
 }: {
   session: Session
   onOpen: () => void
   onArchive: () => void
   onDelete: () => void
+  onTask: () => void
 }) {
-  const swipe = useSwipe(`session:${s.id}`, 2)
+  const swipe = useSwipe(`session:${s.id}`, 3)
 
   return (
     <li
@@ -543,10 +569,12 @@ function Row({
         <span className="shrink-0 text-sm text-fg-mute tnum">{ago(s.lastTs)}</span>
       </button>
 
-      <SessionDrawer
-        dx={swipe.dx}
+      <SwipeDrawer
+        offset={swipe.offset}
+        live={swipe.live}
         width={swipe.width}
-        onArchive={onArchive}
+        onTask={onTask}
+        onDone={onArchive}
         onDelete={onDelete}
         onClose={swipe.close}
       />
@@ -554,68 +582,34 @@ function Row({
   )
 }
 
-/**
- * The two actions behind a row, revealed by the same gesture the desk uses.
+/*
+ * The drawer behind a session row is the desk's own `SwipeDrawer` now.
  *
- * `useSwipe` is the desk's own hook — one gesture implementation in the
- * product, with the axis rules, the trackpad path and the single-open-row store
- * that comes with it. The panel is drawn here rather than through `SwipeDrawer`
- * because that component's three actions are `Done`, `Status` and `Delete`, and
- * a session has neither of the first two: it is not work you finish and it has
- * no status.
+ * It used to be a private copy in this file, on the reasoning that the shared
+ * component offers `Done`, `Status` and `Delete` and a session has neither of
+ * the first two. Half of that was right, and keeping the copy cost more than it
+ * saved.
  *
- * `Hide` and not `Archive`, because that is all the word can honestly mean now.
- * Claude Code has no archive, the row is a running process, and what this
- * writes is one row in Wake's database saying "keep this off my list". Calling
- * that Archive invited the reading that it did something to the session.
+ * **`Status` really is N/A, and it stays N/A.** A session has two facts about
+ * its state and a status is the wrong shape for both: whether the process is up,
+ * which is Claude Code's to say and which this list already draws as the live
+ * dot, and whether it is on Wake's list, which is what `Done` writes. There is
+ * no five-state lifecycle to choose from, so the drawer is given no `status`
+ * prop and does not render the button — which is what that prop being optional
+ * is for. Inventing one would be a second vocabulary for a word this product
+ * spends carefully, and it would have to lie about which system owns the answer.
  *
- * Nothing is rendered at all while the drawer is shut — not at `opacity: 0` and
- * not at `width: 0` with live buttons inside it, which on a touch screen is a
- * control that is permanently invisible and permanently tappable.
+ * **`Done` is right, and `Hide` was the weaker word.** DECISIONS #40 settled
+ * what the archive table means — "I am done looking at this one" — and that is
+ * `Done` in the same sense the desk uses it: the row leaves, nothing upstream is
+ * touched, and it undoes. A row that behaves identically to every other row in
+ * the product should not be the one row that calls it something else.
+ *
+ * Deleting the copy also took a real bug with it. It sized its clip window with
+ * `style={{ width: shown }}`, recomputed on every `pointermove` — a layout write
+ * per frame, which is precisely the "it is not smooth" that `swipe.tsx` was
+ * fixed for and this file never was.
  */
-function SessionDrawer({
-  dx, width, onArchive, onDelete, onClose,
-}: {
-  dx: number
-  width: number
-  onArchive: () => void
-  onDelete: () => void
-  onClose: () => void
-}) {
-  if (dx === 0) return null
-
-  const shown = Math.min(width, Math.max(0, -dx))
-  const act = (run: () => void) => () => { run(); onClose() }
-
-  return (
-    <div
-      data-swipe-action
-      className="absolute inset-y-0 right-0 z-10 overflow-hidden"
-      style={{ width: shown }}
-    >
-      <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width }}>
-        <button
-          data-swipe-action
-          onClick={act(onArchive)}
-          style={{ width: SWIPE_ACTION_W }}
-          className="shrink-0 flex items-center justify-center text-sm font-medium
-                     bg-ink-700 text-fg transition-[filter] duration-100 hover:brightness-110"
-        >
-          Hide
-        </button>
-        <button
-          data-swipe-action
-          onClick={act(onDelete)}
-          style={{ width: SWIPE_ACTION_W }}
-          className="shrink-0 flex items-center justify-center text-sm font-medium
-                     bg-bad text-on-bad transition-[filter] duration-100 hover:brightness-110"
-        >
-          Delete
-        </button>
-      </div>
-    </div>
-  )
-}
 
 /* -------------------------------- deleting -------------------------------- */
 
@@ -738,7 +732,7 @@ export function DeleteSheet({
               <p className="text-sm text-fg-mute mt-2 leading-snug">
                 This removes files under your Claude Code home, not inside Wake. It cannot be
                 undone, and one of them is the edit-undo history for real source files. To take a
-                session off this list without destroying it, swipe the row and hide it instead.
+                session off this list without destroying it, swipe the row and press Done.
               </p>
 
               <h3 className="text-eyebrow uppercase text-fg-mute mt-4 mb-2">What goes</h3>
