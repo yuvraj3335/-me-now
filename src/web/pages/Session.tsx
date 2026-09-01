@@ -45,7 +45,7 @@ import { Button, Menu, Sheet } from '../components/primitives'
 import { Mic } from '../components/voice'
 import { DeleteSheet, rememberedRepo, sessionRoute } from '../components/sessions'
 import {
-  sessionApi, type OpenSession, type SessionStarting, type SessionTurn,
+  sessionApi, type OpenSession, type SessionStarting, type SessionTurn, type TurnWindow,
 } from '../lib/api'
 import {
   DEFAULT_SESSION_MODEL, PERMISSION_MODES, SESSION_MODELS, launchApi, openLaunch,
@@ -160,6 +160,17 @@ export function SessionPage({ id }: { id: string | null }) {
    * so the page's job is to say where the question is, not to route around it.
    */
   const [starting, setStarting] = useState<SessionStarting | null>(null)
+  /**
+   * What the reader could see, so an empty page can say which empty it is.
+   *
+   * Measured on this machine: two of thirteen live sessions rendered a blank
+   * conversation under a row claiming fourteen turns, because the whole window
+   * the server read was `thinking`, `tool_use` and `tool_result` — the session
+   * had been working without speaking for a quarter of a megabyte. The old
+   * sentence for that was "Nothing has been said in this session yet", which is
+   * the one thing it was not.
+   */
+  const [window_, setWindow] = useState<TurnWindow | null>(null)
 
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -221,6 +232,7 @@ export function SessionPage({ id }: { id: string | null }) {
         setTurns(d.turns)
         setActive(d.session.active)
         setStarting(d.starting ?? null)
+        setWindow(d.window ?? null)
       })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
@@ -250,6 +262,7 @@ export function SessionPage({ id }: { id: string | null }) {
         // until he answers it, and then stops — so the notice clears itself
         // without the page having to be reopened.
         setStarting(d.starting ?? null)
+        if (d.window) setWindow(d.window)
         if (!d.turns.length) return
         /*
          * Merged against what is actually held, not against what was asked for.
@@ -333,18 +346,39 @@ export function SessionPage({ id }: { id: string | null }) {
   const permission: PermissionMode =
     mode ?? (env?.defaultPermissionMode ?? 'bypassPermissions')
 
+  /**
+   * Two guards against one tap becoming two sessions, because neither is enough.
+   *
+   * `busy` is state, so two taps in the same tick both read `false` from the
+   * same closure and both fire — which on a phone is not hypothetical: the
+   * first tap shows nothing until tmux has answered, so the natural thing to do
+   * is press it again. The ref closes that within this component.
+   *
+   * `sending` closes the rest of it. A reload mid-flight, a second tab, or a
+   * request that timed out on a flaky tunnel and was retried are all outside
+   * one component's memory, and the server used to answer each of them with a
+   * fresh `randomUUID()` — a second Claude Code in the same repository, holding
+   * the same first message. The id is minted once per outstanding send and the
+   * server derives the session id from it, so every retry lands on one session.
+   */
+  const inFlight = useRef(false)
+  const sending = useRef<string | null>(null)
+
   const send = useCallback(async () => {
     const body = text.trim()
-    if (!body || busy) return
+    if (!body || busy || inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setRefused(null)
     try {
       if (!id) {
         if (!cwd) { setRefused('Name a repository to start in.'); return }
+        sending.current ??= crypto.randomUUID()
         const r = await sessionApi.create({
-          repo: cwd, text: body, permissionMode: permission, model,
+          repo: cwd, text: body, permissionMode: permission, model, clientId: sending.current,
         })
         setText('')
+        sending.current = null
         // The session exists and is running by the time this resolves, so the
         // page it lands on is a live one rather than a hopeful one.
         navigate(sessionRoute(r.id))
@@ -354,8 +388,11 @@ export function SessionPage({ id }: { id: string | null }) {
         setPending(p => [...p, { text: body, ts: Date.now() }])
       }
     } catch (e) {
+      // `sending.current` is deliberately kept: this send is the one being
+      // retried, and a fresh id would make the retry a second session.
       setRefused((e as Error).message)
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }, [text, busy, id, cwd, permission, model])
@@ -498,7 +535,7 @@ export function SessionPage({ id }: { id: string | null }) {
 
         {!err && !starting && !shown.length && (
           id
-            ? <p className="text-sm text-fg-mute">Nothing has been said in this session yet.</p>
+            ? <Quiet window={window_} active={active} />
             : (
               /*
                 No greeting, and no "How can I help?".
@@ -711,6 +748,37 @@ export function SessionPage({ id }: { id: string | null }) {
   )
 }
 
+/**
+ * An empty conversation, saying which kind of empty it is.
+ *
+ * There are three and they used to share a sentence. A session that has never
+ * answered has nothing to show; a session whose whole read window was tool work
+ * has plenty going on and nothing said in it; and a session that is finished and
+ * quiet is simply over. "Nothing has been said in this session yet" was true of
+ * the first and a lie about the second, which is the one it was most often shown
+ * for — measured on two of the thirteen sessions live on this box, both of which
+ * rendered a blank page under a row claiming double-figure turns.
+ *
+ * The numbers are in it because they are the answer to the next question. "90
+ * records and 38 tool calls in the last 256 KB of 1.3 MB" says both that the
+ * session is busy and that the conversation is further back than the reader
+ * went, which is a thing to know before concluding anything.
+ */
+function Quiet({ window: w, active }: { window: TurnWindow | null; active: boolean }) {
+  if (w && w.records > 0) {
+    const kb = (n: number) => `${Math.round(n / 1024).toLocaleString()} KB`
+    return (
+      <p className="text-sm text-fg-mute leading-relaxed">
+        {active ? 'This session is working.' : 'Nothing was said in the part of this conversation Wake read.'}{' '}
+        The last {kb(w.bytes)} of {kb(w.ofBytes)} holds {w.records} record{w.records === 1 ? '' : 's'}
+        {w.tools > 0 && ` and ${w.tools} tool call${w.tools === 1 ? '' : 's'}`}, and no message.
+        {w.ofBytes > w.bytes && ' Whatever was last said is further back than that.'}
+      </p>
+    )
+  }
+  return <p className="text-sm text-fg-mute">Nothing has been said in this session yet.</p>
+}
+
 /* --------------------------------- a turn --------------------------------- */
 
 /**
@@ -741,10 +809,16 @@ function Turn({ turn }: { turn: SessionTurn }) {
           slab — but the bubble itself is now a piece of the material rather
           than a rectangle of `ink-800`, which is the row-hover token and made
           every message I sent look like a row somebody was pointing at. */}
-      <div className={`max-w-[80%] min-w-0 ${mine ? 'glass-raise rounded-panel px-3 py-2' : ''}`}>
-        <div className={`text-base leading-[1.7] ${mine ? 'text-fg' : 'text-fg-dim'}`}>
-          <Prose text={turn.text} />
-        </div>
+      {/* A turn with tools and no prose is real and is drawn as the chip
+          alone: it is the session working between two sentences, and the
+          padded bubble it used to get was an empty grey box with a number in
+          it. `text` is allowed to be empty — see `SessionTurn`. */}
+      <div className={`max-w-[80%] min-w-0 ${mine && turn.text ? 'glass-raise rounded-panel px-3 py-2' : ''}`}>
+        {turn.text && (
+          <div className={`text-base leading-[1.7] ${mine ? 'text-fg' : 'text-fg-dim'}`}>
+            <Prose text={turn.text} />
+          </div>
+        )}
         <Tools names={turn.tools} />
       </div>
     </div>

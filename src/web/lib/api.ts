@@ -304,9 +304,32 @@ export const actions = {
  */
 export type SessionTurn = {
   role: 'user' | 'assistant'
+  /**
+   * What was said. Empty is legal and means "only tools happened here".
+   *
+   * A turn that is nothing but tool calls used to be dropped, and its tools
+   * with it — so a session that had been working for the whole window rendered
+   * as a blank page. `Turn` draws the chip alone for these, which is the honest
+   * picture of what happened.
+   */
   text: string
   ts: number
   tools: string[]
+}
+
+/**
+ * How much of the transcript the answer was read from, and what was in it.
+ *
+ * The page needs this to tell two empties apart. "Nothing has been said yet"
+ * and "ninety records went past in the window I read and none of them was
+ * speech" are different facts about a session, and only one of them is a reason
+ * to worry — while the page said the first about both.
+ */
+export type TurnWindow = {
+  bytes: number
+  ofBytes: number
+  records: number
+  tools: number
 }
 
 /**
@@ -353,10 +376,11 @@ export type SessionStarting = {
  * on this box, the other is about a document being assembled to send to it.
  */
 export const sessionApi = {
-  /** Everything the page opens with: the row, the turns, the paths, the excerpt. */
+  /** Everything the page opens with: the row, the turns and the paths. */
   get: (id: string) =>
     req<{
-      session: OpenSession; turns: SessionTurn[]; excerpt: string; paths: string[]
+      session: OpenSession; turns: SessionTurn[]; paths: string[]
+      window?: TurnWindow | null
       starting?: SessionStarting
     }>(
       `/claude/sessions/${encodeURIComponent(id)}`,
@@ -371,7 +395,7 @@ export const sessionApi = {
    * was open, which is why this is asked rather than pushed.
    */
   since: (id: string, after: number) =>
-    req<{ turns: SessionTurn[]; active: boolean; starting?: SessionStarting }>(
+    req<{ turns: SessionTurn[]; active: boolean; window?: TurnWindow | null; starting?: SessionStarting }>(
       `/claude/sessions/${encodeURIComponent(id)}/turns?after=${after}`,
     ),
   /**
@@ -381,7 +405,18 @@ export const sessionApi = {
    * the fix for the bug this whole surface exists to correct. The session is
    * active by Claude Code's own reckoning the instant it exists.
    */
-  create: (b: { repo: string; text?: string; permissionMode?: string; model?: string }) =>
+  create: (b: {
+    repo: string; text?: string; permissionMode?: string; model?: string
+    /**
+     * This send's own id, so a retry is a retry rather than a second session.
+     *
+     * Two taps used to be two Claude Code sessions in one repository, both
+     * carrying the same first message: the route minted a uuid per call and had
+     * nothing to recognise the second call by. The server derives the session id
+     * from this, so the same value always lands on the same session.
+     */
+    clientId?: string
+  }) =>
     post<{ ok: true; id: string; session: { sessionId: string; cwd: string; repo: string | null } }>(
       '/claude/sessions/new', b,
     ),

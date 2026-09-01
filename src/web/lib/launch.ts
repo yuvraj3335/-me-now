@@ -120,6 +120,15 @@ export type Session = {
    * only its tail is opened.
    */
   turns: number
+  /**
+   * Tool results in that same tail.
+   *
+   * The other half of `turns`, and the reason `turns` can honestly read zero.
+   * A session that has been running tools for the whole window said nothing in
+   * it — true, useful, and unreadable on its own as "0 turns", which is a dead
+   * row for a session that is working hard.
+   */
+  tools?: number
   lastTs: number
   path: string
   pr: { url: string; repo: string; number: number } | null
@@ -129,6 +138,15 @@ export type Session = {
   permissionMode?: string | null
   /** Running on the box right now, from Claude Code's own per-process files. */
   live?: boolean
+  /**
+   * A `claude -p` run: real, running, and nothing a person can type into.
+   *
+   * Thirteen sessions were live on this machine at once and eight of them were
+   * headless agent runs, all offered on the list as things to open. Opening one
+   * lands on a page whose composer refuses a tap later with a sentence about
+   * tmux, which is the right refusal arriving at the wrong moment.
+   */
+  headless?: boolean
   /**
    * Put away, in Wake's own database.
    *
@@ -268,6 +286,13 @@ export type LaunchState = {
   terminal?: {
     available: { ok: boolean; tmux: boolean; python: boolean; claude: boolean; missing: string | null }
     running: Array<{ id: string; sessionId: string; cwd: string; repo: string | null }>
+    /**
+     * Why the running list could not be read, when that is the reason it is
+     * empty. `tmux list-sessions` exits non-zero both for "no server running" —
+     * the normal resting state — and for "the socket directory is unwritable",
+     * and the server used to answer the empty list to either.
+     */
+    error?: string | null
   }
 }
 
@@ -319,7 +344,10 @@ export const launchApi = {
     if (opts.window) q.set('window', String(opts.window))
     if (opts.limit) q.set('limit', String(opts.limit))
     const s = q.toString()
-    return req<{ sessions: Session[] }>(`/sessions${s ? `?${s}` : ''}`)
+    // `reading` is whether Claude Code's own per-process directory could be
+    // read at all, and `stale` counts the files in it whose process is gone. An
+    // empty list has three causes and used to render as one blank page.
+    return req<{ sessions: Session[]; reading?: boolean; stale?: number }>(`/sessions${s ? `?${s}` : ''}`)
   },
   /**
    * Put a session away, or take it back out.

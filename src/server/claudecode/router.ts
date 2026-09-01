@@ -17,8 +17,8 @@ import { unlinkSync } from 'node:fs'
 import { basename } from 'node:path'
 import { archivedSessionIds, audit, db, setSessionArchived } from '../db'
 import {
-  deleteSession, getSession, listActiveSessions, liveSessions,
-  parseSessionTurns, sessionExcerpt, sessionFilePaths,
+  deleteSession, getSession, listActiveSessions, liveSessions, parseSessionTurns,
+  scanLiveSessions, sessionFilePaths,
 } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
 import {
@@ -26,8 +26,8 @@ import {
   parseSessionModel, DEFAULT_SESSION_MODEL, type SessionModel, resolveCwd,
 } from './launch'
 import {
-  available, closeTerminal, getTerminal, isRunning, listTerminals, openTerminal, sendBrief,
-  type OpenInput, type TerminalInfo,
+  available, closeTerminal, derivedSessionId, getTerminal, isRunning, openTerminal,
+  scanTerminals, sendBrief, type OpenInput, type TerminalInfo,
 } from './terminal'
 import { handoffConfig } from './handoff'
 import { issueConfirmation, useConfirmation } from '../security'
@@ -84,9 +84,21 @@ claudecode.get('/state', c =>
     // Whether this machine can start a session at all, and which ones it has
     // running. On `/state` so the sheet's Open control can be *off with a
     // reason* rather than a button that answers 503 after the brief is written.
-    terminal: { available: available(), running: listTerminals() },
+    //
+    // `error` is the third answer, and it is new. `list-sessions` exits non-zero
+    // both when no server is running — the resting state — and when tmux cannot
+    // be read at all, and this used to collapse the two into an empty list. A
+    // box whose socket directory had gone unwritable looked exactly like a quiet
+    // morning, from every surface at once.
+    terminal: { available: available(), ...terminalState() },
   }),
 )
+
+/** What tmux is holding, and the reason if the question could not be answered. */
+function terminalState() {
+  const scan = scanTerminals()
+  return { running: scan.terminals, error: scan.error }
+}
 
 /**
  * The sessions a composer may offer to continue.
@@ -120,15 +132,25 @@ function sessionRows(opts: { repo?: string; limit?: number } = {}) {
  * longer disagree with Claude Code about what is alive.
  */
 claudecode.get('/sessions', c => {
-  const live = liveSessions()
+  const scan = scanLiveSessions()
   const archived = archivedSessionIds()
   const rows = listActiveSessions({
     repo: c.req.query('repo') || undefined,
     limit: Number(c.req.query('limit')) || 100,
   })
     .filter(s => !archived.has(s.id))
-    .map(s => ({ ...s, live: true, archived: false, startedAt: live.get(s.id)?.startedAt ?? s.lastTs }))
-  return c.json({ sessions: rows })
+    .map(s => ({ ...s, live: true, archived: false, startedAt: scan.sessions.get(s.id)?.startedAt ?? s.lastTs }))
+  /*
+   * An empty list has three causes and used to render as one blank page.
+   *
+   * Claude Code has never run here; nothing is running right now; or the
+   * directory Wake reads its answer out of is not there at all. Only the middle
+   * one is good news, and a list that cannot tell them apart is a list that
+   * answers a broken install with a cheerful zero. `reading` says whether the
+   * question could be asked; `stale` counts the per-process files whose pid is
+   * gone, which is the residue of sessions that were killed rather than closed.
+   */
+  return c.json({ sessions: rows, reading: scan.readable, stale: scan.stale })
 })
 
 /**
@@ -171,11 +193,28 @@ claudecode.get('/sessions/:id', c => {
   }
 
   const live = liveSessions().get(id)
-  const excerpt = sessionExcerpt(id, 4_000)
+  /*
+   * No `excerpt` here any more.
+   *
+   * This route used to compute one alongside `turns`: a second full pass over a
+   * 512KB tail of the same transcript, producing a blob of prose for a brief to
+   * quote. Nothing in the browser has ever read it — `sessionExcerpt` is called
+   * on the pack path, which is where a brief is actually written — so every
+   * opening of a session page was paying for a megabyte of file reads and two
+   * parses to serve a field that went straight into the bin. `turns` is the
+   * structure this page renders and it is now the only thing this route reads.
+   */
+  const read = parseSessionTurns(id, { limit: 200 })
   return c.json({
-    session: { ...s, live: !!live, active: !!live, startedAt: live?.startedAt ?? s.lastTs },
-    turns: parseSessionTurns(id, { limit: 200 }).turns,
-    excerpt: excerpt.found ? excerpt.text ?? '' : '',
+    session: {
+      ...s, live: !!live, active: !!live,
+      startedAt: live?.startedAt ?? s.lastTs,
+      headless: !!live?.headless,
+    },
+    turns: read.turns,
+    // What the reader was able to see, so an empty conversation can say which
+    // kind of empty it is. See `TurnWindow`.
+    window: read.window ?? null,
     paths: sessionFilePaths(id),
   })
 })
@@ -203,7 +242,7 @@ claudecode.get('/sessions/:id/turns', c => {
       starting: { trusted: t.trusted, started: t.started, route: t.route },
     })
   }
-  return c.json({ turns: r.turns, active: liveSessions().has(id) })
+  return c.json({ turns: r.turns, active: liveSessions().has(id), window: r.window ?? null })
 })
 
 /**
@@ -230,7 +269,23 @@ claudecode.post('/sessions/new', async c => {
   if (!cwd) return c.json(bad('name a repository to start in'), 400)
 
   const text = typeof b.text === 'string' ? b.text : null
-  const r = openTerminal({ cwd, brief: text, permissionMode: mode.mode, model: model.model })
+  /*
+   * The composer's own id for the message it is sending, so a retry is a retry.
+   *
+   * Two taps on Send used to be two sessions in the same repository, both
+   * carrying the same first message, because this route minted a uuid per call
+   * and had nothing to recognise the second call by. `clientId` is generated
+   * once when the composer starts a send and reused for as long as that send is
+   * outstanding — so a double tap, a flaky tunnel and a retry all land on one
+   * session. It is a uuid, shape-checked in `openTerminal`, and it can only ever
+   * *create*: reaching an existing conversation still goes through `sessionId`
+   * and its liveness gate.
+   */
+  const clientId = typeof b.clientId === 'string' ? b.clientId : null
+  const r = openTerminal({
+    cwd, brief: text, permissionMode: mode.mode, model: model.model,
+    newSessionId: clientId ? derivedSessionId(`new:${clientId}`) : null,
+  })
   if ('error' in r) {
     audit('claude.session.new', { target: cwd, ok: false, error: r.error })
     return c.json(bad(r.error), r.status)
@@ -467,6 +522,17 @@ function terminalForPack(
   const mode = parsePermissionMode(pack.permission_mode)
   const r = openTerminal({
     sessionId: pack.session_id ?? null,
+    /*
+     * One pack, one session, however many times Open is pressed.
+     *
+     * Only used when the pack does not already name a session to continue: the
+     * id is derived from the pack's own id, so the second press finds the tmux
+     * session the first press started and reattaches to it. Before this, every
+     * press minted a fresh uuid — a double tap on a phone, where the first tap
+     * shows nothing until tmux has answered, started two Claude Code sessions on
+     * one brief and delivered the brief to both.
+     */
+    newSessionId: derivedSessionId(`pack:${packId}`),
     cwd: pack.cwd,
     brief: String(pack.first_message ?? ''),
     briefPath: pack.pack_path,
@@ -566,7 +632,10 @@ claudecode.post('/terminals', async c => {
   return c.json(r)
 })
 
-claudecode.get('/terminals', c => c.json({ terminals: listTerminals(), available: available() }))
+claudecode.get('/terminals', c => {
+  const scan = scanTerminals()
+  return c.json({ terminals: scan.terminals, available: available(), error: scan.error })
+})
 
 /**
  * One terminal, and the session it is.

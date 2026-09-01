@@ -205,6 +205,14 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
    * about.
    */
   const [index, setIndex] = useState<Session[] | null>(null)
+  /**
+   * Whether the question could be asked, as opposed to answered with nothing.
+   *
+   * `undefined` until the first read lands and on any server that predates the
+   * field, which reads as "assume it was fine" — the old behaviour, rather than
+   * a new wrong answer on a deployment that has not caught up.
+   */
+  const [reading, setReading] = useState<boolean | undefined>(undefined)
   const [scoped, setScoped] = useState<{ repo: string; rows: Session[] } | null>(null)
   /**
    * The repositories that exist on this machine, which is a different fact from
@@ -234,7 +242,7 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   useEffect(() => {
     let alive = true
     launchApi.sessions()
-      .then(d => { if (alive) { setIndex(d.sessions); setErr(null) } })
+      .then(d => { if (alive) { setIndex(d.sessions); setReading(d.reading); setErr(null) } })
       .catch(e => { if (alive) setErr((e as Error).message) })
     return () => { alive = false }
   }, [reloads])
@@ -406,10 +414,23 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
     ? <p className="text-sm text-bad pt-4">{err}</p>
     : !rows.length
       ? (
+        /*
+         * An empty list has three causes and used to render as one sentence.
+         *
+         * Claude Code is not running anything; nothing is running *in this
+         * repository*; or the per-process directory Wake reads its answer out
+         * of could not be read at all — which happens on a machine where Claude
+         * Code has never run, and which "Claude Code is not running anything"
+         * describes as a quiet morning. The third one is the one this page is
+         * least allowed to get wrong, because it is indistinguishable from
+         * working until you go looking.
+         */
         <Empty>
-          {repo === ALL_REPOS
-            ? 'Claude Code is not running anything on this machine.'
-            : 'Nothing running in this repository.'}
+          {reading === false
+            ? `Wake cannot read ${LIVE_DIR}, which is where Claude Code says what it is running. Until it can, this list is empty for a reason that is not "nothing is running".`
+            : repo === ALL_REPOS
+              ? 'Claude Code is not running anything on this machine.'
+              : 'Nothing running in this repository.'}
         </Empty>
       )
       : groups.map(([id, list]) => (
@@ -502,6 +523,15 @@ export function SessionsView({ onCount }: { onCount?: (n: number | null) => void
   )
 }
 
+/**
+ * Where Claude Code writes what it is running.
+ *
+ * Named here rather than fetched, because the one moment it matters is the
+ * moment the server could not read it — and a path in the sentence is the
+ * difference between "something is wrong" and something to go and look at.
+ */
+const LIVE_DIR = '~/.claude/sessions'
+
 /* ---------------------------------- row ----------------------------------- */
 
 /**
@@ -562,7 +592,27 @@ function Row({
             the cap height of the title beside it. */}
         <span className="mt-1.5 w-2 h-2 rounded-full shrink-0 bg-status-live" aria-hidden />
         <span className="min-w-0 grow">
-          <span className="block text-base text-fg truncate" title={s.title}>{s.title}</span>
+          <span className="flex items-center gap-1.5 min-w-0">
+            <span className="min-w-0 text-base text-fg truncate" title={s.title}>{s.title}</span>
+            {/*
+              A `claude -p` run, said on the row rather than discovered on the
+              page after it.
+
+              Thirteen sessions were live on this box at once and eight were
+              headless agent runs. They are genuinely running and genuinely his,
+              so hiding them would be the same class of lie in the other
+              direction — but there is no terminal to attach to and no composer
+              to type into, and the only place that used to be said was the
+              refusal that arrives after the tap. One word on the row is the
+              whole fix.
+            */}
+            {s.headless && (
+              <span className="shrink-0 text-eyebrow uppercase text-fg-mute border border-edge
+                               rounded-chip px-1.5 py-px leading-none">
+                headless
+              </span>
+            )}
+          </span>
           {/* The last thing said, clipped to one line. It is a whole sentence
               of somebody's half-finished thought, and one line of it is what
               tells this session from the other three in the same repository —
