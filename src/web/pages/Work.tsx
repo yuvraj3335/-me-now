@@ -130,7 +130,17 @@ const GOAL_CHOICES = [
  * and dropped if it will not parse, because a task with no origin line is a
  * great deal better than one whose origin line is `"{\"repo\":…"`.
  */
-async function recreateTask(t: Task) {
+/**
+ * A deleted task, put back exactly as it was.
+ *
+ * Exported because the desk's Tasks tab deletes tasks too, and the undo behind
+ * that button has to restore the same seven fields, the same `restore` flag and
+ * the same notes — a second copy of this is how one of the two would come to
+ * drop the notes or re-count the undo as throughput. It lives here rather than
+ * in a lib because everything it knows is this page's vocabulary; the desk
+ * imports the behaviour rather than reimplementing it.
+ */
+export async function recreateTask(t: Task) {
   let originMeta: unknown = null
   try {
     originMeta = t.origin_meta ? JSON.parse(t.origin_meta) : null
@@ -792,11 +802,23 @@ export function Work() {
 const railTail = (lead: boolean) => (lead ? 'mt-8 xl:mt-0' : 'pt-6 border-t border-edge')
 
 /** An eyebrow and rows. It is never amber: a heading colour is not a state. */
+/**
+ * A titled stack of panes.
+ *
+ * The gap is the separator now. Rows used to be divided by a hairline each and
+ * are their own objects under the material — `gap-2` is the same 8px the desk's
+ * phone list uses, so a task row and a card row are recognisably the same kind
+ * of thing on the same device.
+ *
+ * `flex flex-col` rather than `space-y`: two of the three callers put a control
+ * (`Show`, a pager) among the rows, and `space-y` would space those by the same
+ * amount while `gap` is the container's own and applies to whatever is in it.
+ */
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="mb-6">
       <h2 className="text-eyebrow uppercase text-fg-mute mb-2">{label}</h2>
-      {children}
+      <div className="flex flex-col gap-2">{children}</div>
     </section>
   )
 }
@@ -1385,10 +1407,18 @@ function TaskRow({
     </div>
   )
 
-  // One row treatment, shared with every other list in the product: lightness is
-  // attention, so the row the pane is showing is plainly not the row under the
-  // cursor. Hover is emitted only when nothing else is set.
-  const rowClass = `relative border-b border-rule last:border-0 ${rowStateClass({ selected })}`
+  /*
+   * One row treatment, shared with every other list in the product: lightness is
+   * attention, so the row the pane is showing is plainly not the row under the
+   * cursor. Hover is emitted only when nothing else is set.
+   *
+   * A pane rather than a strip between hairlines, matching the desk's phone
+   * list. `overflow-hidden` is what holds the swipe drawer inside the corner
+   * radius — without it the drawer's square red end paints past a rounded row
+   * and the row reads as broken at exactly the moment it is being acted on.
+   */
+  const rowClass = `press-row relative overflow-hidden rounded-card border border-edge
+    glass-edge ${rowStateClass({ selected })}`
 
   // One shape for every row on the page. There were two — a `Reorder.Item` for
   // the live lists and a plain block for the finished one — and the two
@@ -1429,7 +1459,7 @@ function GoalList({
 }) {
   if (!goals.length) return loaded ? <Blank what="goals" onAdd={onAdd} /> : null
   return (
-    <div>
+    <div className="flex flex-col gap-2">
       {goals.map(g => (
         <GoalRow
           key={g.id} goal={g}
@@ -1475,7 +1505,8 @@ function GoalRow({
       onClickCapture={swipe.bind.onClickCapture}
       data-swipe={swipe.bind['data-swipe']}
       style={swipe.bind.style}
-      className={`relative border-b border-rule last:border-0 ${rowStateClass({ selected })}`}
+      className={`press-row relative overflow-hidden rounded-card border border-edge
+        glass-edge ${rowStateClass({ selected })}`}
     >
       <button onClick={() => onOpen(g)} className="w-full text-left py-3">
         <div className="flex items-baseline gap-3">

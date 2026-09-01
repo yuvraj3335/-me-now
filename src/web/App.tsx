@@ -27,6 +27,7 @@ import { Mail } from './pages/Mail'
  */
 const TerminalPage = lazy(() => import('./pages/Terminal'))
 import { STATIC_MODE, useStill } from './lib/motion'
+import { spring } from './components/primitives'
 import { Palette, contributedCommands, subscribePalette, paletteVersion, type Command } from './components/palette'
 import { LaunchSheet } from './components/launch'
 import { ToastBar } from './components/toast'
@@ -189,7 +190,12 @@ export default function App() {
       reducedMotion={staticMode ? 'always' : 'user'}
       transition={staticMode ? { duration: 0 } : undefined}
     >
-    <div className="min-h-dvh sm:flex">
+    {/* `ambient` paints the two fixed washes every glass surface in the product
+        is made of — see `.ambient` in `styles.css`. It is on the shell rather
+        than on `body` so the terminal, which returns above this and owns the
+        whole viewport, does not get it: a VT emulator on a gradient is a
+        readability problem and not a material. */}
+    <div className="ambient min-h-dvh sm:flex">
 
       {/* Desktop nav: a left rail, not a bar riding on top of the page. A
           horizontal strip scrolls with the document underneath it — its own
@@ -198,10 +204,14 @@ export default function App() {
           on a long one (Pulse). A rail as tall as the viewport has nowhere
           to scroll away to.
 
-          Opaque, with a 1px edge. Elevation in this product is an edge on a
-          flat surface, never a blur and never a shadow. */}
+          Glass, and the one bar on the laptop that is. The rail is full-height
+          and the page scrolls past it, which is exactly the condition
+          `.glass-bar` describes — a strip in front of something moving. It was
+          opaque `bg-ink-900` on the argument that elevation here is an edge and
+          never a blur; that argument covered the whole product and now covers
+          the ground the material floats over, which the rail is not part of. */}
       <nav className="hidden sm:flex sm:flex-col sm:sticky sm:top-0 sm:h-dvh sm:w-50 sm:shrink-0
-                      sm:px-3 sm:py-6 sm:border-r sm:border-edge z-30 bg-ink-900">
+                      sm:px-3 sm:py-6 sm:border-r sm:border-edge z-30 glass-bar">
         {/* A mark and a word, not a word in the body font. The rail used to set
             `Wake` in the same family and weight as the nav item beneath it, so
             the product had no mark at all on either device. */}
@@ -212,7 +222,7 @@ export default function App() {
         <div className="flex flex-col gap-1">
           {TABS.map(t => (
             <NavItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}
-              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} />
+              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} still={still} />
           ))}
         </div>
         <button
@@ -301,11 +311,11 @@ export default function App() {
           instead — it reports 0 the moment it is `display: none`, which is
           exactly the answer wanted from `sm` up. See `navStrip`. */}
       <nav data-navbar
-        className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom glass border-t border-edge">
+        className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom glass-bar border-t border-edge">
         <div className="flex">
           {TABS.map(t => (
             <TabItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}
-              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} />
+              onClick={() => navigate(t.path)} badge={badgeFor(t.path)} still={still} />
           ))}
         </div>
       </nav>
@@ -391,23 +401,52 @@ function useCommands(): Command[] {
   }, [version])
 }
 
+/**
+ * One destination in the rail, and the pane of glass that marks the one you are
+ * on.
+ *
+ * The capsule is new and it is deliberately *not* the thing this comment used to
+ * refuse. What was refused was a grey pill at `font-weight: 400` — a fill doing
+ * the whole job, with the label no different from its five neighbours. Weight
+ * and colour still carry it here; the capsule is a second, quieter statement in
+ * the material the rest of the product is now made of, and being glass is what
+ * keeps it from reading as a button.
+ *
+ * It is one element that *moves*, not six that fade. `layoutId` is what makes
+ * that true: framer takes the capsule out of the outgoing item and animates it
+ * into the incoming one, so the mark travels the rail. Six independently
+ * cross-fading capsules is the same picture on any single frame and a
+ * completely different thing to watch.
+ *
+ * `still` drops it to an instant swap. An entrance that never runs would leave
+ * the capsule mid-rail — see `lib/motion.ts` for the frames-are-not-being-drawn
+ * case that is really about.
+ *
+ * The count is muted here. It was `text-accent-ink` in the rail while the tab
+ * bar painted the same number on an amber pill and a group heading painted it a
+ * third time: one number, three amber marks, on a screen whose budget is three
+ * marks in total. The phone's badge keeps the accent, because that one is seen
+ * without the page.
+ */
 function NavItem({
-  label, Icon, active, onClick, badge,
-}: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
-  // Weight and colour, not a filled rectangle. The active item was a grey pill
-  // at `font-weight: 400` — the fill was the only signal, and a filled rectangle
-  // around the active nav item is the one shape this design does not use.
-  //
-  // The count is muted here. It was `text-accent-ink` in the rail while the tab
-  // bar painted the same number on an amber pill and a group heading painted it
-  // a third time: one number, three amber marks, on a screen whose budget is
-  // three marks in total. The phone's badge keeps the accent, because that one
-  // is seen without the page.
+  label, Icon, active, onClick, badge, still,
+}: {
+  label: string; Icon: any; active: boolean
+  onClick: () => void; badge: number; still: boolean
+}) {
   return (
     <button onClick={onClick}
-      className={`relative w-full flex items-center gap-3 h-8 px-3 rounded-control text-sm text-left
+      className={`press relative w-full flex items-center gap-3 h-9 px-3 rounded-control text-sm text-left
         transition-colors duration-100
         ${active ? 'text-fg font-medium' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800'}`}>
+      {active && (
+        <motion.span
+          aria-hidden
+          layoutId={still ? undefined : 'nav-capsule'}
+          transition={spring}
+          className="absolute inset-0 -z-10 rounded-control glass-card border border-edge"
+        />
+      )}
       <Icon size={14} />
       <span className="grow">{label}</span>
       {badge > 0 && <span className="tnum text-sm text-fg-mute">{badge > 99 ? '99+' : badge}</span>}
@@ -415,13 +454,38 @@ function NavItem({
   )
 }
 
+/**
+ * The same capsule, on the phone, where it is doing more work.
+ *
+ * Six destinations at 65px each, read at arm's length, often one-handed: the
+ * only thing saying which one you are on was a 16px glyph at `strokeWidth 2.1`
+ * against 1.7 and a label one weight heavier. Both are real and both are
+ * invisible in daylight. The capsule is the mark that survives the conditions
+ * this bar is actually used in.
+ *
+ * It shares no `layoutId` with the rail's, and must not: the two bars are never
+ * on screen together — one is `sm:hidden`, the other `hidden sm:flex` — so a
+ * shared id would have framer animating a capsule between two elements of which
+ * exactly one exists, on every resize across the breakpoint.
+ */
 function TabItem({
-  label, Icon, active, onClick, badge,
-}: { label: string; Icon: any; active: boolean; onClick: () => void; badge: number }) {
+  label, Icon, active, onClick, badge, still,
+}: {
+  label: string; Icon: any; active: boolean
+  onClick: () => void; badge: number; still: boolean
+}) {
   return (
     <button onClick={onClick}
-      className={`relative flex-1 flex flex-col items-center gap-1 py-2 min-h-12
+      className={`press relative flex-1 flex flex-col items-center gap-1 py-2 min-h-12
         transition-colors duration-100 ${active ? 'text-fg' : 'text-fg-mute'}`}>
+      {active && (
+        <motion.span
+          aria-hidden
+          layoutId={still ? undefined : 'tab-capsule'}
+          transition={spring}
+          className="absolute inset-x-1 inset-y-1 -z-10 rounded-card glass-card"
+        />
+      )}
       <span className="relative">
         <Icon size={16} strokeWidth={active ? 2.1 : 1.7} />
         {/* This badge is one of the three amber marks in the product. It says

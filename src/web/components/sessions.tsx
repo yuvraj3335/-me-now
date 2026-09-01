@@ -548,7 +548,12 @@ function Row({
       // `overflow-hidden` is what makes the drawer stop at the row's rounded
       // corner. The row paints no ground of its own, so the one state class
       // owns the fill and there is no second background utility to outrank.
-      className={`relative overflow-hidden rounded-panel border border-edge ${rowStateClass()}`}
+      /* `rounded-card` and the specular pair, so a session row is the same
+         object as a desk row and a task row — one shape for a row, product
+         wide. It was already a bordered panel, which is why this is the only
+         list that needed nothing else. */
+      className={`press-row relative overflow-hidden rounded-card border border-edge glass-edge
+        ${rowStateClass()}`}
     >
       <button onClick={onOpen} className="w-full min-w-0 flex items-start gap-3 p-3 text-left">
         {/* Baseline-aligned by hand rather than by `items-baseline`, because a

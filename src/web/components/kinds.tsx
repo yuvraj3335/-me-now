@@ -21,7 +21,7 @@
 
 import {
   BellRing, CircleDot, GitPullRequest, GitPullRequestArrow, Mail, MessageSquare,
-  SquareTerminal, TriangleAlert, type LucideIcon,
+  SquareCheck, SquareTerminal, TriangleAlert, type LucideIcon,
 } from 'lucide-react'
 import type { Card, CardSource, SourceName } from '../lib/types'
 import { bucketOf } from '../lib/bucket'
@@ -33,9 +33,37 @@ export type Kind = {
   Icon: LucideIcon
   /** Which source's hue the glyph takes — the *lead* source of the group. */
   source: SourceName
+  /**
+   * A hue that is not a source's, for the one row type that has no source.
+   *
+   * A task of his own arrives through no pipe, so `source` has no honest answer
+   * for it and every value it could be given is a lie the Kind column would
+   * paint in colour. This overrides the lookup rather than widening
+   * `SourceName`, which is a union five other files switch exhaustively over —
+   * a sixth member there would be six new unreachable branches to satisfy the
+   * compiler and one real behaviour change.
+   */
+  tint?: string
 }
 
 const FALLBACK: Kind = { word: 'Item', Icon: CircleDot, source: 'github' }
+
+/**
+ * A task of his own, which is the one row on the desk that nobody sent.
+ *
+ * Neutral on purpose, and deliberately not the accent: the Tasks tab is the one
+ * surface where *every* row is this kind, so a hue here would be 50 marks
+ * carrying no information — and if it were amber it would be 50 marks in the
+ * colour this product reserves for "this one". The word is the whole signal,
+ * and on that tab even the word is a constant; where it earns its place is the
+ * detail pane and the palette, where a task and a card sit in the same list.
+ */
+export const TASK_KIND: Kind = {
+  word: 'Task',
+  Icon: SquareCheck,
+  source: 'claude',
+  tint: 'var(--color-fg-dim)',
+}
 
 /**
  * The kind of one source's contribution.
@@ -94,6 +122,10 @@ export function kindOf(source: SourceName, kind: string, meta: Record<string, an
  * where it came from and is not in conflict with what it is.
  */
 export function cardKind(card: Card): Kind {
+  // A task of his own, before anything asks which pipe carried it — nothing
+  // did. See `lib/taskRow.ts`: the row has no members at all, so the lookup
+  // below would answer `Item` in GitHub's blue for every row on the Tasks tab.
+  if (card.kind === 'task' && !card.sources.length) return TASK_KIND
   const lead = card.sources[0]
   if (!lead) return kindOf('github', card.kind, card.meta)
   return kindOf(bucketOf(lead), card.kind || lead.kind, { ...lead.meta, ...card.meta })
@@ -102,7 +134,10 @@ export function cardKind(card: Card): Kind {
 /** The glyph, in its source's hue. Sized for a row (16px) or a pane (14px). */
 export function KindGlyph({ kind, size = 16 }: { kind: Kind; size?: number }) {
   const { Icon } = kind
-  return <Icon size={size} strokeWidth={1.8} style={{ color: SOURCE_COLOR[kind.source] }} aria-hidden />
+  return (
+    <Icon size={size} strokeWidth={1.8} aria-hidden
+      style={{ color: kind.tint ?? SOURCE_COLOR[kind.source] }} />
+  )
 }
 
 /**

@@ -87,9 +87,26 @@ export type RowAction = {
    * sheet would add is a confirmation of something you can see. The undo is in
    * the toast, which is where every other irreversible-looking thing on this
    * page puts it.
+   *
+   * Optional, because the desk's own Tasks tab is made of tasks and a task
+   * cannot be made from a task. `SwipeDrawerProps.onTask` has always said so;
+   * this is the caller side of the same fact, and the drawer's width follows
+   * from it — see `actionsOn` below.
    */
-  onTask: (c: Card) => void
+  onTask?: (c: Card) => void
 }
+
+/**
+ * How many actions this row's drawer will paint.
+ *
+ * It has to be computed rather than written as `4`, and the reason is a
+ * measurement rather than tidiness: `swipeActionWidth` gives four actions a
+ * narrower box than three so a four-action drawer does not cover the whole of a
+ * 375px row. A row offering three actions while the hook is told four opens a
+ * 264px window with 198px of buttons in it, and the 66px of empty drawer sits
+ * where the finger let go.
+ */
+const actionsOn = (actions: RowAction) => (actions.onTask ? 4 : 3)
 
 /** The five, as the drawer's picker wants them. Built once, not per row. */
 const STATUS_CHOICES = STATUS_ORDER.map(id => ({ id: id as string, label: STATUS_LABEL[id] }))
@@ -114,7 +131,7 @@ const NEW_TITLE = 'new since you last looked'
  * reason `Won't do` and not a real delete.
  */
 const drawerFor = (card: Card, actions: RowAction) => ({
-  onTask: () => actions.onTask(card),
+  onTask: actions.onTask && (() => actions.onTask!(card)),
   onDone: () => actions.onStatus(card, 'done'),
   onDelete: () => actions.onStatus(card, 'wont_do'),
   status: {
@@ -358,8 +375,10 @@ export function TableHead({
        z-index in one stacking context paint in tree order, and a `<tbody>`
        comes after a `<thead>` — so an open drawer painted its solid 264px
        block over Title / Status / Kind / Due as its row scrolled up under
-       the header. */
-    <thead className="sticky top-0 z-20 glass">
+       the header.
+       A bar rather than a panel, too: rows scroll *under* this, which is
+       exactly the condition `.glass-bar` is thinner and blurred harder for. */
+    <thead className="sticky top-0 z-20 glass-bar">
       <tr className="border-b border-edge">
         <th className={HEAD} scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>
@@ -626,7 +645,7 @@ export function StatusPicker({
           /* `z-[55]`, the same rank `Menu` takes: above a `Sheet` because that
              is one of the surfaces it opens over, below the palette because
              ⌘K is allowed to cover everything. */
-          className="fixed z-[55] py-1 rounded-panel border border-edge bg-ink-850 raised"
+          className="fixed z-[55] py-1 rounded-panel border border-edge glass"
         >
           {STATUS_ORDER.map(s => (
             <button
@@ -674,7 +693,7 @@ export function CardRow({
 }) {
   const ref = useRef<HTMLTableRowElement>(null)
   const kind = cardKind(card)
-  const swipe = useSwipe(card.group_key, 4)
+  const swipe = useSwipe(card.group_key, actionsOn(actions))
   // Printed through `titleOf` rather than raw, here and on the `title`
   // attribute beside it, so a collector's hard cut is admitted wherever the
   // name is read — including the tooltip, which is the one place on this row
@@ -1108,7 +1127,7 @@ export function CardLine({
    * on the same frame. Swipe to the end of the columns and keep going: the
    * drawer opens, on the same finger, without lifting it.
    */
-  const swipe = useSwipe(card.group_key, 4, 'manipulation')
+  const swipe = useSwipe(card.group_key, actionsOn(actions), 'manipulation')
   const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
   const row = useRef<HTMLTableRowElement | null>(null)
   const peekAbove = usePeekAbove(peeking, row)
@@ -1413,7 +1432,7 @@ function RowPeek({ card, onClose, className }: {
     <div
       role="tooltip"
       className={`${className} pointer-events-none flex flex-col gap-2
-                 rounded-panel border border-edge bg-ink-850 p-3`}
+                 rounded-panel border border-edge glass p-3`}
     >
       <span className="flex items-center gap-2 min-w-0">
         <KindGlyph kind={kind} size={14} />
@@ -1493,7 +1512,7 @@ function RowCard({
   const kind = cardKind(card)
   const where = contextLine(card)
   const name = titleOf(card)
-  const swipe = useSwipe(card.group_key, 4)
+  const swipe = useSwipe(card.group_key, actionsOn(actions))
   const tap = useDoubleTap(() => onPeek(card), () => actions.onOpen(card))
   const peekAbove = usePeekAbove(peeking, ref)
 
@@ -1529,7 +1548,24 @@ function RowCard({
          contains it and this row is that container. No `overflow-hidden`: the
          drawer already clips itself to the width the finger has revealed, and
          clipping here would eat the status control's 44px collar instead. */
-      className={`relative cursor-pointer border-b border-rule py-2
+      /*
+       * A pane, not a strip between two hairlines.
+       *
+       * The rule that separated rows is gone on this layout and the separation
+       * is now the gap between them — which is the shape the material asks for
+       * and, on a phone, the shape that makes a row a target rather than a line
+       * of text. `overflow-hidden` is what keeps the swipe drawer inside the
+       * corner radius; it is safe here and not on the pre-material row because
+       * the drawer is the only thing that reaches the row's right edge, and it
+       * is `inset` rather than outset.
+       *
+       * `row-skip` lets the browser not paint this row while it is off screen —
+       * see `styles.css`. It is the single biggest thing on a 74-row list and it
+       * needs the fixed height hint that the class carries, which is why it goes
+       * on the `<li>` and not on the `<ul>`.
+       */
+      className={`press-row row-skip relative cursor-pointer overflow-hidden
+        rounded-card border border-edge glass-edge py-2
         ${rowStateClass({ selected, focused, unseen: card.activity.count > 0 })}`}
     >
       <SwipeDrawer
@@ -1608,10 +1644,20 @@ export function CardList({
   const [peek, setPeek] = useState<Card | null>(null)
 
   return (
-    /* One edge at the top, which is the table's `<thead>` rule doing the one
-       job it still has here: saying where the list starts. Without it the
-       first row floats under the filter control with nothing between them. */
-    <ul className="border-t border-edge">
+    /*
+     * A stack of panes with air between them.
+     *
+     * The top rule is gone with the row rules: it was the `<thead>` line doing
+     * the one job it still had here — saying where the list starts — and a row
+     * that is visibly its own object says that by existing. What replaced it is
+     * the gap, which also has to be paid at the top so the first pane does not
+     * sit against the filter control.
+     *
+     * 8px, matching the file's own gap scale. Anything under it and the panes
+     * read as one striped block; anything over and a 390px screen loses a row
+     * per screenful to air.
+     */
+    <ul className="flex flex-col gap-2 pt-2">
       {rows.map(c => (
         <RowCard
           key={c.group_key} card={c}

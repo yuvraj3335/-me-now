@@ -73,12 +73,24 @@ describe('a phone can reach every column of its own table', () => {
      * clipping it) and the pinned Title cell — widest, always on screen, where
      * a thumb lands — computed `touch-action: pan-y`.
      */
-    // Four actions, not three: the drawer gained `Task`. The count is what sets
-    // the drawer's width, so it is pinned alongside the axis policy rather than
-    // left to drift — a row asking for one width and drawing another is a strip
-    // of buttons that does not reach the edge it is anchored to.
+    /*
+     * The count is what sets the drawer's width, so it is pinned alongside the
+     * axis policy rather than left to drift — a row asking for one width and
+     * drawing another is a strip of buttons that does not reach the edge it is
+     * anchored to.
+     *
+     * It used to be the literal `4`, back when every row offered `Task`. The
+     * desk's own Tasks tab is made of tasks and a task cannot be made from a
+     * task, so that row offers three and `SwipeDrawer` draws three — and a
+     * hard-coded 4 there opens a 264px window with 198px of buttons in it. The
+     * assertion follows the fix rather than the old number: the count is
+     * *derived from the same prop the drawer reads*, which is a stronger
+     * guarantee than any constant, and `actionsOn` is where that is decided.
+     */
     expect(table, 'the phone row went back to keeping the horizontal axis')
-      .toContain("useSwipe(card.group_key, 4, 'manipulation')")
+      .toContain("useSwipe(card.group_key, actionsOn(actions), 'manipulation')")
+    expect(table, 'the drawer width stopped following the actions it will draw')
+      .toMatch(/const actionsOn = \(actions: RowAction\) => \(actions\.onTask \? 4 : 3\)/)
     expect(css, 'the row policy that yields both axes is gone')
       .toMatch(/\[data-swipe='manipulation'\],\s*\n\s*\[data-swipe='manipulation'\] > td \{ touch-action: manipulation; \}/)
     // And no cell re-declares one. The per-cell split — Title for the drawer,

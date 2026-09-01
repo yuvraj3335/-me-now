@@ -135,7 +135,7 @@ export function Palette({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={still ? undefined : { opacity: 0, y: -6, scale: 0.99 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="relative w-full max-w-[560px] rounded-panel glass
+            className="relative w-full max-w-[560px] rounded-sheet glass
                        border border-edge overflow-hidden"
           >
             <div className="flex items-center gap-2 px-4 h-12 hairline">

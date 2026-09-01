@@ -10,8 +10,21 @@
   re-parsing every entry. Ink and amber; amber appears perhaps three times on a
   screen and always means "this one".
 
-  What it is not: a reading column, a feed of cards floating in a gutter, glass,
-  or a settings README with headings.
+  The material is Liquid Glass, and it is a material rather than a coat of
+  paint: a translucent surface floats over an ambient ground, catches a specular
+  line along its top edge, and lets what is behind it show through as colour
+  rather than as shape. That reverses "no glass", which stood for two releases
+  and which several comments below still argue for; where one of those survives
+  it is because the argument under it is still true of something else.
+
+  Two rules keep it from becoming glassmorphism, and both live in `.glass-*`
+  below. **Depth is relative** — glass reads as depth precisely because the
+  ground it floats over is not glass. And **the blur is rationed**: real
+  `backdrop-filter` is the most expensive thing a phone's compositor can be
+  asked for, and fifty blurred rows are not a richer version of this, they are a
+  slideshow. Chrome blurs; content only tints. See `.glass-card`.
+
+  What it is still not: a reading column, or a settings README with headings.
 */
 @theme {
   /*
@@ -22,10 +35,10 @@
     The utilities emit `var(--color-x)`, so overriding the variable in a scoped
     selector re-themes the whole app without a second set of classes.
   */
-  --color-ink-950: #08080a;
-  --color-ink-900: #0a0a0c;
+  --color-ink-950: #020203;
+  --color-ink-900: #040406;
   --color-ink-850: #101014;
-  --color-ink-800: #17171c;
+  --color-ink-800: #1a1a20;
   --color-ink-700: #1e1e25;
   --color-ink-600: #33333d;
 
@@ -40,12 +53,12 @@
     1.58:1 the `·` separators that used to be painted in `ink-600` were the only
     elements in the product that failed contrast.
   */
-  --color-rule: #31313c;
-  --color-edge: #424254;
+  --color-rule: #33333e;
+  --color-edge: #454558;
 
   --color-fg:      #f2f2f5;
   --color-fg-dim:  #c4c4d0;
-  --color-fg-mute: #9b9baa;
+  --color-fg-mute: #9e9eac;
 
   /*
     The accent is two tokens, because one colour cannot do both jobs.
@@ -179,9 +192,24 @@
     for the two things that are actually panels — a sheet and the palette — and a
     PAGE never uses it, because a page has no panels on it.
   */
-  --radius-chip:    4px;
-  --radius-control: 6px;
-  --radius-panel:   10px;
+  /*
+    Radii, re-scaled for a material that has thickness.
+
+    4/6/10 was drawn for hairlines on a flat page, where a tight corner is what
+    keeps a control from reading as a lozenge. A translucent surface is a
+    different object: the corner is where the specular edge turns, and at 6px
+    there is no turn — the highlight reads as two straight lines that stop. The
+    reference this was rebuilt against holds a continuous curve on everything,
+    and the sizes below are the smallest that actually carry one at each scale.
+
+    `card` is new and is the one a row uses. `sheet` is the big radius, and it
+    is only ever on a corner that is not against a screen edge.
+  */
+  --radius-chip:    8px;
+  --radius-control: 10px;
+  --radius-card:    14px;
+  --radius-panel:   18px;
+  --radius-sheet:   24px;
 
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -209,10 +237,27 @@
   :root[data-theme='dark'] {
     color-scheme: dark;
 
-    --color-ink-950: #08080a;
-    --color-ink-900: #0a0a0c;   /* the page */
+    /*
+      The page is near-black now, and that is what makes the material possible.
+
+      #0a0a0c was the right page for a flat design: every surface was the same
+      ink and depth came from a hairline. Under glass the page is the thing
+      everything else floats *over*, and a translucent row over #0a0a0c composited
+      to #1d1b1d — where `fg-mute` measured 5.7:1 against a stated floor of 7 and
+      `status-idle` 4.6:1 against 5.5. The row could not be lifted and the tokens
+      could not be dimmed, so the page went down instead.
+
+      Every other ground here is unchanged, deliberately. Hover moved one step
+      (#17171c is now *below* a resting row, so it read as a dip rather than a
+      lift), and nothing else did — which is what makes the whole scheme
+      verifiable: every token measures the same or better against its own worst
+      ground than it did before this change. The numbers are in the block above
+      `--glass-card-tint`.
+    */
+    --color-ink-950: #020203;
+    --color-ink-900: #040406;   /* the page */
     --color-ink-850: #101014;   /* panels, sheets, inputs, code blocks */
-    --color-ink-800: #17171c;   /* row hover, button hover */
+    --color-ink-800: #1a1a20;   /* row hover, button hover — one step up from #17171c */
     --color-ink-700: #1e1e25;   /* row keyboard focus, pressed */
     --color-ink-600: #33333d;   /* scrollbars and grabbers only — never text */
     /*
@@ -263,12 +308,20 @@
        levels in light, which is why light mode compensated with white cards on
        grey and why "hairlines, not boxes" was not actually a system. The floors,
        in both themes: rule >= 1.5:1, edge >= 1.9:1. Every ratio is measured. */
-    --color-rule: #31313c;      /* 1.54:1 — hairline between rows */
-    --color-edge: #424254;      /* 2.01:1 — panel / rail / control borders */
+    /* Both lifted one notch, and the notch is measured against the *card*
+       rather than the page — a border on a resting row is the commonest place
+       either of them is drawn now, and the row's ground is lighter than the
+       page. On the card: rule 1.52:1, edge 2.03:1. On the page they are 1.64
+       and 2.19. Floors unchanged: rule >= 1.5, edge >= 1.9. */
+    --color-rule: #33333e;
+    --color-edge: #454558;
 
-    --color-fg:      #f2f2f5;   /* 17.7:1 */
-    --color-fg-dim:  #c4c4d0;   /* 11.4:1 — was #b4b4c0 at 9.6:1 */
-    --color-fg-mute: #9b9baa;   /*  7.2:1 — was #8a8a96 at 5.8:1 */
+    --color-fg:      #f2f2f5;   /* 17.0:1 on a card, 16.9:1 on the page */
+    --color-fg-dim:  #c4c4d0;   /* 11.0:1 on a card */
+    /* 7.2:1 on a card. Three levels up from #9b9baa, which measured 6.9:1 there
+       — under this file's own 7:1 floor for text read to decide. The page it
+       was picked against is no longer the ground it is usually read on. */
+    --color-fg-mute: #9e9eac;
 
     --color-accent:      #e9a23b;
     --color-accent-ink:  #e9a23b;  /* 9.1:1 on the page */
@@ -298,11 +351,68 @@
       as fog — blurring alone greys the colour out, and lifting it back is what
       Apple's own material does.
     */
-    --glass-tint: rgb(16 16 20 / 0.78);
-    --glass-blur: 24px;
+    --glass-tint: rgb(18 18 24 / 0.72);
+    --glass-blur: 30px;
     --glass-sat:  180%;
     /* The specular line along the top edge. One pixel, inset, never a border. */
-    --glass-edge: rgb(255 255 255 / 0.10);
+    --glass-edge: rgb(255 255 255 / 0.14);
+
+    /*
+      Three weights of the same material, and the third is the load-bearing one.
+
+      `bar` is a strip that content scrolls *under* — the phone tab bar, a sticky
+      table head, the filter row. It is thinner and blurs harder than a panel,
+      because the thing behind it is moving and a thin tint over a moving page is
+      how you can tell the strip is in front rather than painted on.
+
+      `card` is a row, a chip, a cell: content, not chrome. It has a tint and a
+      specular edge and **no blur at all**, and that is a performance decision
+      before it is an aesthetic one. `backdrop-filter` re-samples everything
+      behind the element on every composited frame; at fifty rows on a phone that
+      is fifty full-viewport reads per frame and the list stops tracking the
+      thumb. What buys the look back is the ambient ground below — a translucent
+      fill over a coloured wash genuinely picks the colour up, so the row reads
+      as a pane of glass while costing one ordinary paint. This is also what iOS
+      does: the material is on the chrome, not on every cell.
+
+      `--glass-lens` is the dark line along a surface's *bottom* inside edge.
+      Together with the highlight on top it is what makes 1px of border read as
+      a thickness rather than as an outline — a real pane catches light on the
+      edge nearest the source and shades on the one away from it.
+    */
+    --glass-bar-tint:  rgb(10 10 14 / 0.62);
+    --glass-bar-blur:  22px;
+    /*
+      2%, and the number is a contrast budget rather than a taste.
+      
+      A resting row composites to #111014. Measured there: `fg` 17.0:1,
+      `fg-dim` 11.0:1, `fg-mute` 7.2:1, and the weakest mark in the product —
+      `status-idle` — 5.6:1, against floors of 7 and 5.5. At 4.5% the row landed
+      on #251f25 and three of those dropped under. The specular edge is what
+      makes up the difference visually, which is why it is stronger here than
+      the tint: an edge costs no contrast at all, because nothing is read on it.
+    */
+    --glass-card-tint: rgb(255 255 255 / 0.020);
+    --glass-card-edge: rgb(255 255 255 / 0.07);
+    --glass-lens:      rgb(0 0 0 / 0.30);
+
+    /*
+      The ambient ground, and the only reason any of the above reads as glass.
+
+      A translucent surface over a flat near-black page is a slightly lighter
+      near-black rectangle — there is nothing behind it to show through, so the
+      material has nothing to be made of. These two washes are what it refracts:
+      one cool, one warm, both fixed, both far enough apart that a panel crossing
+      the screen changes colour as it goes.
+
+      They are held at 7% and under, and that ceiling is a contrast floor rather
+      than taste. The page is measured for `fg-mute` at 7.2:1; at these alphas
+      the brightest point of the composite is about `#111117`, where `fg-mute`
+      still measures 6.9:1 — inside the erosion this file already accepts for a
+      hovered row. Raise them and that stops being true.
+    */
+    --ambient-1: rgb(96 116 220 / 0.035);
+    --ambient-2: rgb(226 158 74 / 0.022);
 
     --color-src-slack:  #c2a3e8;
     --color-src-github: #9db1ce;
@@ -345,7 +455,11 @@
     color-scheme: light;
 
     --color-ink-950: #14141a;   /* still dark: it is the scrim and the button ink */
-    --color-ink-900: #f7f7f9;
+    /* The page steps down so a near-white card lifts off it. #f7f7f9 was
+       1.01:1 against the card, i.e. the same colour: the panes were invisible
+       and only their borders said a row was an object. Every ratio was
+       re-measured against this — no text or mark token moved. */
+    --color-ink-900: #eceef3;
     --color-ink-850: #ffffff;
     --color-ink-800: #eeeef2;
     --color-ink-700: #e5e6ec;
@@ -379,10 +493,32 @@
        specular edge is near-white here because the panel is lighter than the
        page rather than darker, so the highlight sits on top of it rather than
        inside it. */
-    --glass-tint: rgb(255 255 255 / 0.80);
-    --glass-blur: 24px;
+    --glass-tint: rgb(255 255 255 / 0.72);
+    --glass-blur: 30px;
     --glass-sat:  180%;
-    --glass-edge: rgb(255 255 255 / 0.70);
+    --glass-edge: rgb(255 255 255 / 0.85);
+
+    /* The same three weights, inverted ground — see the dark block for what each
+       one is. The card tint is white rather than a lift, because here a panel is
+       *lighter* than the page; the lens line stays dark but far weaker, for the
+       reason `--color-shadow` is weaker in this theme. */
+    --glass-bar-tint:  rgb(255 255 255 / 0.72);
+    --glass-bar-blur:  22px;
+    /* Near-white, unlike the 2% lift the dark theme uses, and for the same reason
+       inverted: here a card is *lighter* than its page, so the tint is most of the
+       object rather than a hint of one. 0.92 rather than 1.0 keeps it a material —
+       fully opaque and the ambient wash stops reaching it at all. Measured on the
+       resulting #fdfdfe: every token clears light mode's own floors. */
+    --glass-card-tint: rgb(255 255 255 / 0.92);
+    --glass-card-edge: rgb(255 255 255 / 0.90);
+    --glass-lens:      rgb(20 20 26 / 0.06);
+
+    /* The ambient ground, warmer and weaker: an off-white page shows a wash at a
+       fraction of the alpha a near-black one needs, and `fg-mute` has 6.1:1 here
+       rather than 7.2:1 to spend. Measured at the brightest point of the
+       composite, `fg-mute` holds 5.9:1. */
+    --ambient-1: rgb(96 116 220 / 0.026);
+    --ambient-2: rgb(226 158 74 / 0.020);
 
     --color-src-slack:  #6d3fa0;
     --color-src-github: #3c5680;
@@ -414,7 +550,11 @@
       color-scheme: light;
 
       --color-ink-950: #14141a;
-      --color-ink-900: #f7f7f9;
+      /* The page steps down so a near-white card lifts off it. #f7f7f9 was
+         1.01:1 against the card, i.e. the same colour: the panes were invisible
+         and only their borders said a row was an object. Every ratio was
+         re-measured against this — no text or mark token moved. */
+      --color-ink-900: #eceef3;
       --color-ink-850: #ffffff;
       --color-ink-800: #eeeef2;
       --color-ink-700: #e5e6ec;
@@ -438,10 +578,32 @@
       --color-scrim:       #14141a;
 
       /* Liquid glass, light — the same values as the explicit light block. */
-      --glass-tint: rgb(255 255 255 / 0.80);
-      --glass-blur: 24px;
+      --glass-tint: rgb(255 255 255 / 0.72);
+      --glass-blur: 30px;
       --glass-sat:  180%;
-      --glass-edge: rgb(255 255 255 / 0.70);
+      --glass-edge: rgb(255 255 255 / 0.85);
+
+      /* The same three weights, inverted ground — see the dark block for what each
+         one is. The card tint is white rather than a lift, because here a panel is
+         *lighter* than the page; the lens line stays dark but far weaker, for the
+         reason `--color-shadow` is weaker in this theme. */
+      --glass-bar-tint:  rgb(255 255 255 / 0.72);
+      --glass-bar-blur:  22px;
+      /* Near-white, unlike the 2% lift the dark theme uses, and for the same reason
+         inverted: here a card is *lighter* than its page, so the tint is most of the
+         object rather than a hint of one. 0.92 rather than 1.0 keeps it a material —
+         fully opaque and the ambient wash stops reaching it at all. Measured on the
+         resulting #fdfdfe: every token clears light mode's own floors. */
+      --glass-card-tint: rgb(255 255 255 / 0.92);
+      --glass-card-edge: rgb(255 255 255 / 0.90);
+      --glass-lens:      rgb(20 20 26 / 0.06);
+
+      /* The ambient ground, warmer and weaker: an off-white page shows a wash at a
+         fraction of the alpha a near-black one needs, and `fg-mute` has 6.1:1 here
+         rather than 7.2:1 to spend. Measured at the brightest point of the
+         composite, `fg-mute` holds 5.9:1. */
+      --ambient-1: rgb(96 116 220 / 0.026);
+      --ambient-2: rgb(226 158 74 / 0.020);
 
       --color-src-slack:  #6d3fa0;
       --color-src-github: #3c5680;
@@ -635,6 +797,23 @@
   .hairline { border-bottom: 1px solid var(--color-rule); }
 
   /*
+    A bar that reaches the page edges from inside a padded column.
+
+    A sticky strip has to be the full width of the screen or the content
+    scrolling under it shows in the 16px gutters either side — a glass bar with
+    two transparent stripes down it, which reads as a rendering fault rather
+    than as a design. But its *contents* still have to land on the one vertical
+    everything else on the page uses, so the pad cannot simply be removed.
+
+    Cancel and re-apply, in one class, at both page widths. It is written
+    against the same two numbers `.pad-x` holds and has to move with them —
+    which is why it is here, directly underneath, rather than as two arbitrary
+    negative margins at a call site.
+  */
+  .bleed-x { margin-inline: -16px; padding-inline: 16px; }
+  @media (min-width: 640px) { .bleed-x { margin-inline: -24px; padding-inline: 24px; } }
+
+  /*
     The two structural edges a resizable pane needs, and the grip that moves it.
 
     They exist as classes rather than as Tailwind's `border-l border-edge`
@@ -680,14 +859,29 @@
     transparent pixel of fade, which is nothing.
   */
   .rail { position: relative; min-width: 0; }
-  .rail[data-spill]::after {
-    content: '';
-    position: absolute;
-    inset-block: 0 1px;
-    right: 0;
-    width: 32px;
-    pointer-events: none;
-    background: linear-gradient(to left, var(--color-ink-900), transparent);
+  /*
+    A mask on the scroller, not a gradient painted over it.
+
+    It used to be an `::after` filled with `--color-ink-900` — the page ground —
+    fading to transparent. That works exactly as long as the rail is sitting on
+    the page, and the desk's rail is now inside a `.glass-bar`: an opaque
+    page-coloured patch on a translucent strip is a rectangle of solid colour in
+    the corner of it, which is a more obvious fault than the clipped chip the
+    fade exists to hide.
+
+    Masking the scroller fades the chip's own pixels instead, so it is correct
+    over any ground — glass, page, or the sheet Mail's rail sits on — and it
+    stops the product from having to know which. It is applied to the child
+    rather than to `.rail` itself because `.rail` is the positioning wrapper and
+    the child is the box that actually overflows; all three call sites have that
+    shape.
+
+    Both prefixes: Safari has shipped `-webkit-mask-image` for years and only
+    took the unprefixed name recently, and this is read on a phone.
+  */
+  .rail[data-spill] > * {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
   }
 
   /*
@@ -812,32 +1006,39 @@
   }
 
   /*
-    Liquid glass, and the rule that keeps it from becoming glassmorphism.
+    Liquid glass, and the two rules that keep it from becoming glassmorphism.
 
     This reverses "no glass", which stood for two releases and which the comment
     above `.raised` still argued for. It was asked for by name, and the ban is
     gone rather than worked around.
 
-    **It goes on floating surfaces only.** A floating surface is one that sits
-    *over* content and is dismissible: a sheet, a menu, a popover, the command
-    palette, the toast bar, the phone tab bar, a sticky header. Content itself
-    is never glass — not a card, not a table row, not the page. That is the
-    whole difference between the material doing something and a product that has
-    been dipped in it: glass reads as depth precisely because most of the screen
-    is not glass. Nine surfaces used `backdrop-blur` the last time this was
-    tried, over a near-black page, and it read as smear.
+    **Depth is relative, so not everything may be glass.** The material reads as
+    depth precisely because there is a ground it is floating over. The earlier
+    version of this rule said "floating surfaces only" and drew the line at
+    dismissibility; the line is drawn at *chrome versus content* now, which is
+    wider — a row, a chip and a cell are glass too — but it is still a line, and
+    the page ground under all of it never is.
 
-    **The edge is a highlight, not a border.** `inset 0 1px 0` along the top only
-    — that is the specular line a real pane catches, and it is what stops a
-    translucent panel looking like a hole. Panels keep their `border-edge` as
-    well; the highlight sits inside it.
+    **The blur is rationed, and that is the whole of the phone's smoothness.**
+    `backdrop-filter` makes the compositor re-sample everything behind the
+    element on every frame it paints. One of those on a fixed bar is free; fifty
+    of them on a scrolling list is a list that stops tracking the thumb, which is
+    the exact complaint this work started from. So there are three weights and
+    only two of them blur — see `--glass-card-tint` for why the third does not
+    need to.
+
+    **The edge is a highlight, not a border.** `inset 0 1px 0` along the top and
+    `inset 0 -1px 0` along the bottom: the specular line a real pane catches on
+    the edge nearest the light, and the shade on the edge away from it. Between
+    them 1px of border reads as a thickness. Panels keep `border-edge` as well;
+    the highlight sits inside it.
 
     **`-webkit-` is not optional.** iOS Safari has never shipped the unprefixed
     property, and this product is read on a phone.
 
     **And it degrades to the opaque token.** Firefox with the pref off, an old
     WebView, a device that refuses the filter under memory pressure: without the
-    fallback the panel is 78% transparent with no blur, which is not a softer
+    fallback the panel is 72% transparent with no blur, which is not a softer
     version of this, it is unreadable text over live content. `@supports` makes
     that a different rendering rather than a broken one.
   */
@@ -847,12 +1048,115 @@
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
     box-shadow:
       inset 0 1px 0 0 var(--glass-edge),
+      inset 0 -1px 0 0 var(--glass-lens),
       0 1px 2px var(--color-shadow),
-      0 12px 28px -10px var(--color-shadow);
+      0 16px 40px -12px var(--color-shadow);
+  }
+
+  /*
+    A strip that content scrolls under: the phone tab bar, a sticky table head,
+    the desk's filter row, a page header that stays put.
+
+    Thinner than a panel and blurred harder, and both halves of that are about
+    the same thing — a bar is in front of something that is *moving*. A thick
+    tint over a moving page hides the movement and the strip reads as painted
+    on; a thin one over a weak blur lets legible shapes slide past under the
+    text sitting on it. Thin plus hard is the combination that says "in front".
+
+    No drop shadow, unlike `.glass`. A bar is flush against an edge of the
+    screen or against the content it pins to, so the shadow would fall on a
+    hairline nobody can see it against — the specular edge is the whole
+    elevation it needs.
+  */
+  .glass-bar {
+    background: var(--glass-bar-tint);
+    -webkit-backdrop-filter: blur(var(--glass-bar-blur)) saturate(var(--glass-sat));
+    backdrop-filter: blur(var(--glass-bar-blur)) saturate(var(--glass-sat));
+  }
+
+  /*
+    Content: a row, a card, a chip, a cell. **No blur, on purpose.**
+
+    This is the weight that does the most work and costs the least, and the
+    reason it costs nothing is the ambient ground. A 4.5% white fill over a flat
+    near-black page is a flat, slightly-lighter rectangle. The same fill over
+    `--ambient-1`/`--ambient-2` picks the wash up and changes colour across the
+    screen — which is what the eye reads as translucency. So the row genuinely
+    is showing what is behind it; it is just that what is behind it is a
+    gradient and not a live re-sample, and at a row's size and opacity there is
+    no difference a person can see.
+
+    What there is a difference in: fifty of these paint in one pass. Fifty
+    `backdrop-filter`s do not.
+
+    `--glass-card-edge` is deliberately fainter than `--glass-edge`. A specular
+    line at panel strength, repeated down fifty rows, stops being a highlight
+    and becomes a set of rules — the striped-table look this design has never
+    used.
+  */
+  .glass-card {
+    background-color: var(--glass-card-tint);
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-card-edge),
+      inset 0 -1px 0 0 var(--glass-lens);
+  }
+
+  /*
+    The same pane of glass with no fill of its own — the edges alone.
+
+    This exists because a row has four grounds and only one of them is the
+    material. `rowStateClass` paints `row-sel`, `ink-700` and `row-new` on the
+    same element, all as `background-color`, and so does `.glass-card`: one
+    property, two classes, and which one wins comes down to the order Tailwind
+    happened to emit them in. That is not a cascade argument worth having on the
+    product's main list.
+
+    So the split is by *responsibility* rather than by strength. `rowStateClass`
+    owns the fill — including the resting one, which is now the card tint rather
+    than nothing — and this owns the specular pair, which nothing else ever sets.
+    The two compose because they touch different properties.
+  */
+  .glass-edge {
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-card-edge),
+      inset 0 -1px 0 0 var(--glass-lens);
   }
 
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .glass { background: var(--color-ink-850); }
+    .glass-bar { background: var(--color-ink-850); }
+  }
+
+  /*
+    The ambient ground the whole material is made of.
+
+    Two washes, fixed to the viewport rather than to the document, so a panel
+    moving across the screen crosses them and changes colour on the way — which
+    is the tell that it is translucent rather than tinted. Fixed also means they
+    do not scroll, so no amount of list is any more expensive to draw.
+
+    `position: fixed` with `z-index: -1` puts it behind every page's content
+    without any page having to know it is there, and `pointer-events: none`
+    keeps it out of hit-testing entirely. It is painted on `body::before` rather
+    than as a `background-image` on `html` because two radial gradients on the
+    root element are re-rasterised on every resize of the layout viewport —
+    which on iOS is every time the URL bar hides.
+
+    `contain: strict` and the explicit `will-change` promote it once, to its own
+    layer, where it is one texture the compositor reuses for the life of the
+    page.
+  */
+  .ambient::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(80vw 60vh at 12% -8%,  var(--ambient-1), transparent 70%),
+      radial-gradient(70vw 55vh at 92% 108%, var(--ambient-2), transparent 70%);
+    will-change: transform;
+    contain: strict;
   }
 
   /*
@@ -886,7 +1190,107 @@
   */
   @media (prefers-reduced-motion: reduce) {
     .glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
+    .glass-bar { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
     .glass-scrim { -webkit-backdrop-filter: none; backdrop-filter: none; }
+    /* `.glass-card` is not listed, and that is not an omission: it never blurred,
+       so there is nothing here to give back. The ambient ground stays too — it
+       is a static gradient, not motion. */
+  }
+
+  /*
+    A surface that answers the finger before the network does.
+
+    The gap this closes is the one a phone actually feels. Every control here
+    was `transition-colors`, and a colour change on a coarse pointer is invisible
+    while a thumb is sitting on top of the thing that changed — so the interval
+    between the tap and whatever it caused was blank, and the app read as
+    unresponsive even when it was not. A press that scales is visible *around*
+    the finger, which is the only part of the control still on screen.
+
+    97% and not less. Below about 96 the text inside re-rasterises visibly on a
+    low-DPI screen; at 97 it is a compositor transform of an already-painted
+    layer, which is free.
+
+    `transform` only, and no transition on the way *down*: the press must land on
+    the same frame as the touch. The `ease-out-quint` is on the release, where
+    something settling reads better than something snapping. This is the one
+    place the file uses a duration rather than a spring, because there is no
+    velocity to carry — a finger lifting has none.
+  */
+  /*
+    The colour half is declared here too, and that is not redundancy.
+
+    `transition-property` is one property. Every element wearing `.press` also
+    wears Tailwind's `transition-colors`, and the two are the same declaration
+    with different values — so whichever the cascade puts last wins *outright*
+    and the other is simply gone. `.press` is written after the Tailwind import,
+    so a bare `transition: transform` here deleted the colour fade from every
+    button, chip and nav item in the product: hover snapped. Verified in the
+    browser — computed `transition-property` read `transform` alone.
+
+    So one declaration carries both, with the durations they each want: 220ms
+    for the spring back, 100ms for the colour, which is what `duration-100` on
+    those elements was asking for.
+  */
+  .press,
+  .press-row {
+    transition:
+      transform 220ms var(--ease-out-quint),
+      color 100ms linear,
+      background-color 100ms linear,
+      border-color 100ms linear,
+      opacity 100ms linear;
+  }
+  .press:active { transform: scale(0.97); }
+  /* A row is wide, so the same 3% is 12px of travel at 390px and reads as a
+     slump rather than a press. Scaled by area instead. */
+  .press-row:active { transform: scale(0.985); }
+  /* No transition on the way *down*: the press has to land on the same frame as
+     the touch. Only the release settles. */
+  .press:active, .press-row:active { transition-duration: 0ms; }
+  @media (prefers-reduced-motion: reduce) {
+    .press:active, .press-row:active { transform: none; }
+  }
+
+  /*
+    Momentum, and where it is allowed to stop.
+
+    Three separate fixes that every scroller in this product wanted and none of
+    them had. `-webkit-overflow-scrolling` is what gives an iOS scroll region
+    momentum at all — without it a flick inside a sheet stops dead the instant
+    the finger leaves, which is the single most "not a native app" thing a web
+    view does. `overscroll-behavior: contain` stops a scroll that has reached the
+    end of a sheet from continuing into the page underneath it, which is how a
+    list inside a modal scrolls the desk behind the modal. And `overflow-anchor`
+    off, because a list that re-sorts under a poll otherwise jumps to keep the
+    old anchor row still.
+  */
+  .scroller {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+  }
+
+  /*
+    Rows the browser is allowed not to paint.
+
+    `content-visibility: auto` lets the engine skip layout and paint for a row
+    that is off screen, which on a 74-row desk is most of them. The size hint is
+    not optional with it: without one, every skipped row measures 0 and the
+    scrollbar re-computes as rows enter, so the thumb jumps under the finger
+    while it is being dragged. 76px is the phone row card — one title line, one
+    meta line, and the rule.
+
+    Scoped to the phone list, deliberately. On a `<tr>` under `border-collapse`
+    the containment interacts with column sizing — a skipped row cannot
+    contribute a width, so `table-fixed` is a hard requirement and the desk's
+    laptop table has a resizable pane changing that width anyway. The phone list
+    is `<li>`s in a column, where there is no such coupling and where the row
+    count is highest.
+  */
+  .row-skip {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 76px;
   }
 
   /*

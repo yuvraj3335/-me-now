@@ -102,7 +102,10 @@ export function Mail() {
       {/* List */}
       <section className={`sm:w-90 2xl:w-100 sm:shrink-0 sm:border-r sm:border-edge
                            sm:overflow-y-auto ${selected ? 'hidden sm:block' : ''}`}>
-        <header className="sticky top-0 z-10 bg-ink-900 border-b border-rule pad-x pt-4 pb-2">
+        {/* `glass-bar`: the thread list scrolls under this, which is the one
+            condition the thin weight is for. It was `bg-ink-900` — the page
+            ground — which is opaque and so hid that fact entirely. */}
+        <header className="sticky top-0 z-10 glass-bar border-b border-rule pad-x pt-4 pb-2">
           <div className="flex items-center gap-3">
             <PageTitle>Mail</PageTitle>
             {/* A count is a fact, and this one is not known for the first three
@@ -188,7 +191,7 @@ export function Mail() {
           </div>
         </header>
 
-        <div className="pad-x">
+        <div className="pad-x flex flex-col gap-2 pt-2">
           {list.errors.map(e => <BoxError key={e.account} account={e.account} error={e.error} />)}
 
           {list.threads.map(t => (
@@ -425,7 +428,10 @@ function ThreadRow({
     <button
       onClick={onOpen}
       aria-current={active ? 'true' : undefined}
-      className={`w-full text-left py-2 border-b border-rule
+      /* A pane, like every other row in the product. `row-skip` because this
+         list pages in indefinitely — it is the longest list here, and the one
+         most often read on a phone. */
+      className={`press-row row-skip w-full text-left px-3 py-2 rounded-card border border-edge glass-edge
         ${rowStateClass({ active, unseen: thread.unread })}`}
     >
       <div className="flex items-baseline gap-2">

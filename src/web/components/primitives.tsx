@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from 'motion/react'
+import { AnimatePresence, motion, useDragControls } from 'motion/react'
 import {
   useEffect, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject,
@@ -87,11 +87,16 @@ const SIZE: Record<ButtonSize, string> = {
  * spending the accent. Four ghost labels in a row read as a caption.
  */
 const VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-on-accent font-semibold hover:brightness-110',
-  secondary: 'bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700',
+  /* The two filled variants carry the specular pair, which is what makes a
+     solid button read as a piece of the same material rather than as a
+     rectangle of colour sitting on top of it. `default` and `ghost` do not:
+     they have no fill for a highlight to sit on, and an inset line on a
+     transparent box draws the box. */
+  primary: 'bg-accent text-on-accent font-semibold hover:brightness-110 glass-edge',
+  secondary: 'glass-card border border-edge text-fg font-medium hover:brightness-125',
   default: 'border border-edge text-fg-dim font-medium hover:text-fg hover:bg-ink-800',
   ghost: 'text-fg-mute font-medium hover:text-fg-dim hover:bg-ink-800',
-  danger: 'bg-bad text-on-bad font-semibold hover:brightness-110',
+  danger: 'bg-bad text-on-bad font-semibold hover:brightness-110 glass-edge',
 }
 
 export function Button({
@@ -111,7 +116,10 @@ export function Button({
       aria-label={ariaLabel}
       disabled={disabled}
       onClick={onClick}
-      className={`relative inline-flex items-center justify-center rounded-control whitespace-nowrap
+      /* `press` is what answers a thumb. A colour change is invisible under the
+         finger that caused it, which is the whole of why this product read as
+         slow on a phone — see `.press` in `styles.css`. */
+      className={`press relative inline-flex items-center justify-center rounded-control whitespace-nowrap
         transition-colors duration-100 disabled:opacity-40 disabled:pointer-events-none
         ${SIZE[size]} ${VARIANT[variant]} ${className}`}
     >
@@ -418,9 +426,9 @@ export function Menu<T extends string>({
             aria-haspopup="menu"
             aria-expanded={open}
             aria-label={ariaLabel ?? label}
-            className="hit relative inline-flex items-center gap-2 h-8 px-3 rounded-control
-                       border border-edge bg-ink-850 text-sm whitespace-nowrap
-                       transition-colors duration-100 hover:bg-ink-800"
+            className="hit press relative inline-flex items-center gap-2 h-8 px-3 rounded-control
+                       border border-edge glass-card text-sm whitespace-nowrap
+                       transition-colors duration-100 hover:brightness-125"
           >
             {label && <span className="text-fg-mute shrink-0">{label}</span>}
             <span className={`truncate min-w-0 ${full ? 'grow text-left' : ''}
@@ -445,7 +453,7 @@ export function Menu<T extends string>({
           initial={still ? false : { opacity: 0, y: at.bottom !== undefined ? 4 : -4 }}
           animate={{ opacity: 1, y: 0 }}
           transition={spring}
-          className="fixed z-[55] overflow-y-auto overscroll-contain py-1
+          className="scroller fixed z-[55] overflow-y-auto py-1
                      rounded-panel border border-edge glass"
         >
           {items.map(it => {
@@ -569,6 +577,23 @@ function useKeyboardInset(active: boolean): number {
   return inset
 }
 
+/**
+ * How far, and how fast, a flick has to be to mean "close this".
+ *
+ * Two conditions rather than one, because they catch two different gestures. A
+ * slow, deliberate drag past a third of the panel is a decision — distance is
+ * what reads it. A quick flick from the top of a tall sheet never travels a
+ * third of anything, and it is the more common of the two on a phone: velocity
+ * is what reads that one. Either alone dismisses sheets people meant to keep,
+ * or keeps sheets people meant to throw away.
+ *
+ * 0.32 rather than a pixel count, because the panel's height is whatever its
+ * content came to — a fixed 160px is a third of a short sheet and a tenth of a
+ * full one.
+ */
+const SHEET_DISMISS_FRACTION = 0.32
+const SHEET_DISMISS_VELOCITY = 520
+
 export function Sheet({
   open, onClose, title, children, footer, wide,
 }: {
@@ -584,6 +609,8 @@ export function Sheet({
   const still = useStill()
   useOverlay(open)
   const keyboard = useKeyboardInset(open)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const dragControls = useDragControls()
 
   // Escape closes every overlay in the product.
   useEffect(() => {
@@ -624,7 +651,42 @@ export function Sheet({
             onClick={onClose}
           />
           <motion.div
+            ref={panelRef}
             role="dialog" aria-modal="true" aria-label={title}
+            /*
+              Flick it down to close, which is the affordance a bottom sheet on a
+              phone is expected to have and did not.
+              
+              **The drag is on the panel and the gesture starts at the handle.**
+              framer's `dragControls` is what splits those two: the panel is what
+              moves, and `onPointerDown` on the grabber is the only thing that
+              starts it. Making the whole panel draggable is the obvious version
+              and it is wrong — the body is a scroller, and a drag that begins on
+              a list either steals the scroll or has to be undone mid-gesture
+              once the direction is known, which is a frame late either way.
+
+              `dragElastic: 0` upward and free downward. A sheet that rubber-
+              bands up from its own top edge suggests there is more of it above,
+              and there is not; `dragConstraints` pinned at `top: 0` says so
+              without a second rule.
+
+              `dragMomentum` off because the release is decided here rather than
+              coasted: past a third of the panel, or fast enough that a short
+              flick meant it, and otherwise it springs back to zero on the same
+              spring it arrived on.
+            */
+            drag={still ? false : 'y'}
+            dragControls={dragControls}
+            dragListener={false}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={{ top: 0, bottom: 0.9 }}
+            dragMomentum={false}
+            onDragEnd={(_, info) => {
+              const h = panelRef.current?.offsetHeight ?? 0
+              const far = h > 0 && info.offset.y > h * SHEET_DISMISS_FRACTION
+              const fast = info.velocity.y > SHEET_DISMISS_VELOCITY
+              if (far || fast) onClose()
+            }}
             /*
               `dvh`, not `vh`, and it is not a preference.
 
@@ -638,8 +700,16 @@ export function Sheet({
               goes. Every other height in this app was already `dvh`; this was
               the one that was not.
             */
+            /*
+              `rounded-sheet` on the two top corners on a phone, and on all four
+              from `sm` up. A radius on a corner that is flush with the screen
+              edge is a corner nobody can see, and paying for it on the bottom
+              two would put two transparent notches against the device's own
+              bezel. This is the one place in the product that uses the largest
+              radius, which is what makes it read as the surface in front.
+            */
             className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} glass
-                       border border-edge sm:rounded-panel rounded-t-panel
+                       border border-edge sm:rounded-sheet rounded-t-sheet
                        max-h-[88dvh] flex flex-col`}
             /*
               The keyboard is lifted out of the panel's way rather than scrolled
@@ -663,8 +733,35 @@ export function Sheet({
             // so it settles on a spring rather than running out a fixed 180ms.
             transition={softSpring}
           >
+            {/*
+              The grabber, on the phone only.
+
+              It is the one thing on the surface that says the sheet can be
+              thrown away, and a gesture nobody is told about is a gesture nobody
+              uses. From `sm` up the sheet is a centred dialog rather than
+              something anchored to a thumb's reach, so there is nothing to pull
+              and the handle would be decoration.
+
+              `touch-action: none` — via `.grabber` — is the load-bearing half:
+              without it the browser claims the drag as a scroll and the
+              pointermove events stop arriving after a few pixels, which is the
+              same failure the pane's resize grip documents. The 44px box is the
+              target; the 4px bar is the ink.
+            */}
+            <div
+              onPointerDown={e => dragControls.start(e)}
+              className="grabber sm:hidden shrink-0 flex items-center justify-center h-6 -mb-2"
+              aria-hidden
+            >
+              <span className="w-9 h-1 rounded-full bg-edge" />
+            </div>
             {title && (
-              <div className="flex items-center justify-between gap-3 px-4 h-12 shrink-0 border-b border-rule">
+              <div
+                /* The header drags too. It is the largest inert strip on the
+                   surface and the one a thumb lands on when it misses a 4px
+                   bar; excluding it would make the handle the only way in. */
+                onPointerDown={e => dragControls.start(e)}
+                className="grabber sm:cursor-default flex items-center justify-between gap-3 px-4 h-12 shrink-0 border-b border-rule">
                 <h2 className="text-md font-medium tracking-[-0.01em] truncate">{title}</h2>
                 <Button variant="ghost" size="sm" onClick={onClose} ariaLabel="Close" title="Close">
                   <X size={14} />
@@ -683,7 +780,7 @@ export function Sheet({
               was and lets a sticky bar cancel it with `-mb-4`, the way it
               already cancels the horizontal pad with `-mx-4`.
             */}
-            <div className="overflow-y-auto overscroll-contain min-h-0 px-4 pt-4 grow">
+            <div className="scroller overflow-y-auto min-h-0 px-4 pt-4 grow">
               <div className="pb-4">{children}</div>
             </div>
             {/*
@@ -712,7 +809,11 @@ export function Sheet({
               a flex container here would silently re-arrange all of them.
             */}
             {footer && (
-              <div className="px-4 py-3 shrink-0 bg-ink-850 border-t border-rule">{footer}</div>
+              /* `glass-bar`, because content scrolls under this exactly the way it
+                 scrolls under a sticky table head — and unlike the sheet around
+                 it, which is a panel. An opaque strip inside a translucent panel
+                 is the seam that gives the material away. */
+              <div className="px-4 py-3 shrink-0 glass-bar border-t border-rule">{footer}</div>
             )}
           </motion.div>
         </div>
@@ -743,8 +844,16 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   )
 }
 
+/**
+ * A field, in the material.
+ *
+ * `glass-card` rather than `bg-ink-850`: a solid panel-coloured box inside a
+ * sheet that is itself glass is the one shape that gives the material away — an
+ * opaque rectangle floating on a translucent one. The tint plus the specular
+ * pair reads as a well pressed into the surface, which is what a field is.
+ */
 export const inputClass =
-  `w-full bg-ink-850 border border-edge rounded-control px-3 py-2 text-base text-fg
+  `w-full glass-card border border-edge rounded-control px-3 py-2 text-base text-fg
    placeholder:text-fg-mute outline-none transition-shadow
    focus:ring-1 focus:ring-accent/50`
 
@@ -1182,11 +1291,13 @@ export function Chip({
       title={title}
       aria-label={ariaLabel}
       aria-pressed={active}
-      className={`hit relative inline-flex items-center gap-2 h-8 px-2 rounded-control text-sm
+      className={`hit press relative inline-flex items-center gap-2 h-8 px-3 rounded-chip text-sm
         font-medium transition-colors duration-100 whitespace-nowrap
         ${flexible ? 'min-w-0' : 'shrink-0'}
         disabled:opacity-40 disabled:pointer-events-none
-        ${active ? 'bg-ink-800 text-fg border border-edge' : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800 border border-transparent'}`}
+        ${active
+          ? 'glass-card text-fg border border-edge'
+          : 'text-fg-mute hover:text-fg-dim hover:bg-ink-800 border border-transparent'}`}
     >
       {mark ?? (dot && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: dot }} />)}
       {children}
@@ -1317,6 +1428,15 @@ export function CountBadge({
  * variants last — so the row would stop looking new for exactly as long as you
  * were pointing at it, which is when you are reading it.
  *
+ * **The resting ground is the glass tint, and this function owns it.** A row
+ * used to rest on nothing at all and take a colour only when something was true
+ * of it; under the material it rests on `--glass-card-tint`, which is what makes
+ * it read as a pane over the ambient wash rather than as a strip of page. It is
+ * emitted here rather than by a `.glass-card` sitting alongside because both
+ * would be setting `background-color` on one element and the winner would be
+ * whichever Tailwind wrote last. `.glass-edge` carries the specular pair, which
+ * touches `box-shadow` and so cannot collide with any of these.
+ *
  * It returns a class string rather than rendering anything, because the four
  * lists that need it are a `<tr>`, an `<li>`, a `<button>` and a `<div>`. That
  * is also why the cursor is a background gradient rather than a border or a
@@ -1340,7 +1460,7 @@ export function rowStateClass({ selected, active, focused, unseen }: RowState = 
     chosen ? 'bg-row-sel'
     : focused ? 'bg-ink-700'
     : unseen ? 'bg-row-new'
-    : 'hover:bg-ink-800'
+    : 'bg-[var(--glass-card-tint)] hover:bg-ink-800'
   return `transition-colors duration-100 ${ground}${focused ? ' row-cursor' : ''}`
 }
 

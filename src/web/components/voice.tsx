@@ -81,7 +81,7 @@ export function Mic({
           product, on a radius that is not one of the three tokens. */}
       {note && (
         <p className="absolute right-0 top-8 z-20 w-60 text-sm text-fg-mute
-                      bg-ink-850 rounded-panel border border-edge p-2 leading-snug">
+                      glass-card rounded-panel border border-edge p-2 leading-snug">
           {note}
         </p>
       )}

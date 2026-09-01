@@ -26,9 +26,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, Download, Loader2, SlidersHorizontal } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Loader2, Plus, SlidersHorizontal } from 'lucide-react'
 import { actions, fetchNow, optimistic, reload, useStore } from '../lib/api'
-import type { Card as CardT, CardPriority, CardStatus, SourceName } from '../lib/types'
+import type { Card as CardT, CardPriority, CardStatus, SourceName, Task } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { timeOfDay } from '../lib/time'
 import {
@@ -37,7 +37,7 @@ import {
 } from '../components/CardTable'
 import { CardDetail } from '../components/CardDetail'
 import { Sync, useResultLine } from '../components/sync'
-import { TaskSheet } from '../components/TaskSheet'
+import { TaskRead, TaskSheet } from '../components/TaskSheet'
 import {
   Button, CountBadge, Field, PAGE_SIZE, PageTitle, Pager, Select, Sheet, inputClass,
   pageCount, pageSlice, useRail,
@@ -50,6 +50,8 @@ import { toast } from '../lib/toast'
 import { overlayOpen, useOverlay } from '../lib/overlay'
 import { openSwipeKey } from '../lib/swipe'
 import { taskFromCard } from '../lib/taskFrom'
+import { isTaskRow, taskIdOf, taskRow, taskRowKey } from '../lib/taskRow'
+import { recreateTask } from './Work'
 import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../lib/route'
 
 /**
@@ -67,6 +69,27 @@ import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../l
  * this page.
  */
 const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
+
+/**
+ * Where the desk's rows come from, which is six answers and not five.
+ *
+ * `tasks` is not a sixth source and it is no longer the absence of a filter
+ * either — it is the other *table*. The first tab used to mean "no source
+ * predicate", so it showed every card from every pipe: ~100 rows of other
+ * people's systems under a heading that said `Tasks`, with not one thing he had
+ * written down among them, because a task has never been a card. It shows the
+ * `tasks` table now, adapted to the row shape by `lib/taskRow.ts`.
+ *
+ * What that costs, stated plainly: there is no single view of every source at
+ * once any more. It was the thing the first tab did and it is the thing the
+ * first tab was named against, and one of the two had to go. Every card is
+ * still one tap away on the source tab it belongs to, and `?src=` still holds
+ * whichever that is.
+ */
+export type DeskTab = 'tasks' | SourceName
+
+/** Stable empty task list, for the same reason `NO_CARDS` exists. */
+const NO_TASKS: Task[] = []
 
 /**
  * Stable empty arrays.
@@ -159,7 +182,17 @@ export function Home() {
    * no source filter. Same whitelist `sort` keeps four lines down, for the same
    * reason.
    */
-  const filter: SourceName | null = FILTERS.find(s => s === p.src) ?? null
+  const tab: DeskTab = FILTERS.find(s => s === p.src) ?? 'tasks'
+  /**
+   * The tab as a *source*, which is what the chrome around the list wants.
+   *
+   * `Sync`, `Fetch` and the empty state are all scoped by pipe, and the Tasks
+   * tab has no pipe — so this is `null` there, which is the value those three
+   * already treat as "everything" and which `inBucket` already reads as "no
+   * source predicate". Nothing downstream had to learn a sixth name.
+   */
+  const filter: SourceName | null = tab === 'tasks' ? null : tab
+  const isTasks = tab === 'tasks'
   const query = p.q ?? ''
   const due = (p.due ?? 'any') as DueFilter
   const pri = p.pri ?? 'any'
@@ -171,6 +204,8 @@ export function Home() {
   const sort: DueSort = p.sort === 'due' || p.sort === '-due' ? p.sort : null
   const selectedKey = useDetailKey()
   const [taskFrom, setTaskFrom] = useState<CardT | null>(null)
+  /** The `+ Task` button on the Tasks tab, opening an empty form. */
+  const [newTask, setNewTask] = useState(false)
   /**
    * `null` until someone actually navigates.
    *
@@ -181,9 +216,32 @@ export function Home() {
   /** Bumped by every status write, so a settled list re-reads itself. */
   const [written, setWritten] = useState(0)
 
-  const settled = isSettledFilter(status)
+  /**
+   * The settled list is a *card* list, so the Tasks tab never asks for it.
+   *
+   * `GET /cards/done` exists because a finished card leaves `state.cards`
+   * entirely — the desk is what is still on him. Nothing does that to a task:
+   * `/state` sends the whole `tasks` table including the done and the
+   * won't-done ones, so on this tab the Status filter is an ordinary predicate
+   * over rows that are already in hand. Asking the server here would fetch a
+   * hundred cards to render none of them.
+   */
+  const settled = !isTasks && isSettledFilter(status)
   const hidden = useHiddenCards(settled, written)
-  const cards = settled ? (hidden ?? NO_CARDS) : (state?.cards ?? NO_CARDS)
+  const tasks = state?.tasks ?? NO_TASKS
+  /**
+   * Every task, as a desk row.
+   *
+   * Memoised on the task list itself rather than rebuilt per render: `rows`
+   * below is a `useMemo` keyed on this, and a fresh array every render is the
+   * loop `NO_CARDS` was introduced to stop.
+   */
+  const taskRows = useMemo(() => tasks.map(taskRow), [tasks])
+  const cards = isTasks
+    ? taskRows
+    : settled ? (hidden ?? NO_CARDS) : (state?.cards ?? NO_CARDS)
+  /** The real task behind a task row, for the sheet that reads one. */
+  const taskById = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks])
   /**
    * Whether the list this page is standing over has actually answered.
    *
@@ -210,6 +268,17 @@ export function Home() {
    * as a Sentry identity and, just as importantly, what does not.
    */
   const matchSource = useCallback((c: CardT) => inBucket(c, filter), [filter])
+
+  /**
+   * Priority does not exist on a task, so this tab does not pretend it does.
+   *
+   * The `tasks` table has no priority column — `taskRow` writes Normal because
+   * `Card` requires a number, not because anything chose it. Left as an
+   * ordinary predicate, `?pri=0` on this tab would empty the list with a
+   * control above it claiming to be the reason. `FilterRow` hides the control
+   * here for the same reason; this is the half that survives a hand-typed URL.
+   */
+  const priActive = !isTasks && pri !== 'any'
 
   /**
    * Search spans every column the table dropped, not just the two it kept.
@@ -253,8 +322,8 @@ export function Home() {
   }, [due])
 
   const matchPriority = useCallback(
-    (c: CardT) => pri === 'any' || c.priority === Number(pri),
-    [pri],
+    (c: CardT) => !priActive || c.priority === Number(pri),
+    [pri, priActive],
   )
 
   const matchStatus = useCallback(
@@ -316,7 +385,35 @@ export function Home() {
     () => rows.find(c => c.group_key === selectedKey) ?? null,
     [rows, selectedKey],
   )
-  const shown = selectedKey === '' ? null : (selected ?? rows[0] ?? null)
+  /**
+   * A task opens its own sheet, not the card pane.
+   *
+   * `CardDetail` reads a card: its members, the thread on it, who is waiting,
+   * what has landed since he last looked. A task has none of those, so pointing
+   * it at a synthetic row would render a pane of blanks and an `Open` button
+   * with nowhere to go. `TaskRead` is the surface that already answers a task —
+   * Work has opened it for two releases — and it is the same sheet here.
+   *
+   * There is also no resting fallback on this tab. `rows[0]` in the pane is
+   * right for a desk, where something is always the most likely thing to be
+   * reading at 7am; a sheet is a thing you opened, and one that opens itself
+   * over the list on arrival is a takeover.
+   */
+  const shown = isTasks || selectedKey === '' ? null : (selected ?? rows[0] ?? null)
+  const readingTask =
+    selected && isTaskRow(selected) ? taskById.get(taskIdOf(selected)) ?? null : null
+  /**
+   * The last task the sheet held, so it can animate out with its contents.
+   *
+   * `TaskRead` is gated on `open`, and closing clears the selection on the same
+   * tick — without this the panel's exit animation plays over an empty sheet.
+   * Work keeps the identical ref for the identical reason.
+   */
+  const lastRead = useRef<Task | null>(null)
+  if (readingTask) lastRead.current = readingTask
+  /** The task being edited, when the read sheet hands over to the form. */
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const editing = editingId ? taskById.get(editingId) ?? null : null
   const isTable = width >= TABLE_MIN
   /**
    * Whether this viewport can hold columns at all.
@@ -402,7 +499,43 @@ export function Home() {
       },
     })
 
+  /**
+   * Where the work stands, on whichever of the two tables this row lives in.
+   *
+   * A task settles in place: `/state` sends every task whatever its status, so
+   * `Done` on this tab moves the row within the list rather than off it, and
+   * the Status filter is what hides it. That is the opposite of a card, which
+   * leaves `state.cards` the moment it settles — hence two branches rather than
+   * one clever one.
+   */
+  const setTaskStatus = async (c: CardT, next: CardStatus) => {
+    const id = taskIdOf(c)
+    const was = c.status
+    if (next === was) return
+    optimistic(s => {
+      const x = s.tasks.find(t => t.id === id)
+      if (x) x.status = next
+      return s
+    })
+    try {
+      await actions.updateTask(id, { status: next })
+    } catch (e) {
+      toast((e as Error).message)
+      await reload()
+      return
+    }
+    // Named, and undone by putting the old status back rather than by
+    // `actions.restore` — that endpoint drops card suppressions and a task has
+    // none. Same shape as the card branch, different write.
+    toast(`${next === 'done' ? 'Done' : STATUS_LABEL[next]} — ${titleOf(c)}`, {
+      label: 'Undo',
+      run: async () => { await actions.updateTask(id, { status: was }); await reload() },
+    })
+    void reload()
+  }
+
   const setStatus = async (c: CardT, next: CardStatus) => {
+    if (isTaskRow(c)) return setTaskStatus(c, next)
     // A card that settles leaves the desk entirely; one that merely moves along
     // stays where it is, so the row updates under the pointer instead of
     // jumping. The exception is the settled list itself, which is server-owned
@@ -444,6 +577,23 @@ export function Home() {
   }
 
   const setDue = async (c: CardT, at: number | null) => {
+    if (isTaskRow(c)) {
+      const id = taskIdOf(c)
+      optimistic(s => {
+        const x = s.tasks.find(t => t.id === id)
+        if (x) x.due_at = at
+        return s
+      })
+      try {
+        await actions.updateTask(id, { due_at: at })
+      } catch (e) {
+        toast((e as Error).message)
+        await reload()
+        return
+      }
+      void reload()
+      return
+    }
     optimistic(s => {
       const x = s.cards.find(i => i.group_key === c.group_key)
       if (x) x.due_at = at
@@ -511,11 +661,46 @@ export function Home() {
     }
   }
 
+  /**
+   * The drawer's fourth action, offered only where it means something.
+   *
+   * `Task` makes a task out of a row. On the Tasks tab every row already is
+   * one, so the action is withheld rather than made into a no-op — and the
+   * drawer narrows to three actions on its own, because `actionsOn` reads
+   * exactly this. See `RowAction.onTask`.
+   */
+  /**
+   * Delete a task, with the row put back on undo.
+   *
+   * A real delete, unlike a card's `Delete`, which is `Won't do` and reachable
+   * again through the Status filter. There is no suppression table behind a
+   * task and nothing to restore it from, so the undo re-creates it from the row
+   * that was on screen — which is why the whole task is captured rather than
+   * its id.
+   */
+  const removeTask = async (t: Task) => {
+    optimistic(s => { s.tasks = s.tasks.filter(x => x.id !== t.id); return s })
+    if (t.id === editingId) setEditingId(null)
+    if (taskRowKey(t.id) === selectedKey) closeDetail()
+    try {
+      await actions.deleteTask(t.id)
+    } catch (e) {
+      toast((e as Error).message)
+      await reload()
+      return
+    }
+    // Named, like every other undo on this page — the drawer has been covering
+    // the title while the thumb was on the button. `recreateTask` is Work's, so
+    // the notes and the `restore` flag come back with it.
+    toast(`Deleted — ${t.title}`, { label: 'Undo', run: () => recreateTask(t) })
+    void reload()
+  }
+
   const rowActions: RowAction = {
     onOpen: c => openDetail(c.group_key),
     onStatus: (c, s) => void setStatus(c, s),
     onDue: (c, at) => void setDue(c, at),
-    onTask: c => void makeTask(c),
+    ...(isTasks ? {} : { onTask: (c: CardT) => void makeTask(c) }),
   }
 
   /**
@@ -612,7 +797,7 @@ export function Home() {
   // Nothing at all until the first read lands. A 200ms loader is worse than a
   // beat of nothing, and a sentence explaining that a page is loading is chrome
   // that teaches.
-  if (!state) return <div className="pad-x pt-4"><Header source={filter} /></div>
+  if (!state) return <div className="pad-x pt-4"><Header source={filter} tab={tab} /></div>
 
   /**
    * Whether anything is narrowing this list besides the tab.
@@ -622,7 +807,7 @@ export function Home() {
    * already on the screen and the empty state has a different thing to say
    * about it — see `Blank`.
    */
-  const filtered = !!query || due !== 'any' || pri !== 'any' || status !== 'any'
+  const filtered = !!query || due !== 'any' || priActive || status !== 'any'
 
   /**
    * A filter that matches nothing is one line — but it is a line, not a word.
@@ -652,12 +837,29 @@ export function Home() {
       style={{ paddingBottom: 'calc(var(--nav-h) + 24px)' }}
       className="min-w-0 grow pad-x"
     >
-      <Header count={rows.length} source={filter} />
-      <SourceTabs value={filter} state={state} />
-      <FilterRow query={query} due={due} pri={pri} status={status} />
+      <Header count={rows.length} source={filter} tab={tab} onNewTask={() => setNewTask(true)} />
+      {/*
+        The tabs and the filters pin; the title does not.
+
+        Which of the three sticks is the whole decision here. All three is
+        ~150px of an 844px screen held permanently — a quarter of the phone
+        spent on chrome above a list. None of them is what this page did, and on
+        74 rows it means scrolling back to the top to change source. So it is
+        the two that are *controls*: `Desk`, its count and `Fetch` are a title
+        row, and a title that scrolls away is the pattern every phone OS uses
+        for exactly this reason.
+
+        `bleed-x` because a glass bar with 16px of un-tinted gutter either side
+        reads as a bug — see `styles.css`. `z-20` sits under the swipe drawer's
+        picker (z-30) and the shell's rails (z-30), and over every row.
+      */}
+      <div className="sticky top-0 z-20 bleed-x glass-bar">
+        <SourceTabs value={tab} state={state} />
+        <FilterRow query={query} due={due} pri={pri} status={status} tab={tab} />
+      </div>
 
       {rows.length === 0 ? (
-        <Blank query={query} filtered={filtered} source={filter} />
+        <Blank query={query} filtered={filtered} tab={tab} onNewTask={() => setNewTask(true)} />
       ) : isTable ? (
         <>
           <table className="w-full table-fixed border-collapse">
@@ -733,13 +935,32 @@ export function Home() {
       {detail}
       {/*
         The pane column always exists at the pane width, so opening a row never
-        re-lays out the list. No fill: `bg-ink-850` is pure white in light mode,
-        which put a 400px white panel on a grey page on the product's main
-        screen. A left hairline is the whole edge it needs.
+        re-lays out the list.
+
+        `glass-bar` and deliberately not `glass`. The old note here refused a
+        fill at all, on the measurement that `bg-ink-850` is pure white in light
+        mode and put a 400px white panel on a grey page — which was true of an
+        opaque token and is the whole reason the material has three weights. A
+        bar is the right one: this column is full-height and the table scrolls
+        past it, which is the condition `.glass-bar` exists for, and a panel's
+        heavier tint over 400×900 of screen would be the white box again in a
+        different colour. The left hairline stays; the tint is what makes it
+        read as in front rather than as more page.
       */}
       <aside
         style={{ width: paneWidth }}
-        className="hidden xl:block relative xl:shrink-0 edge-l xl:sticky xl:top-0 xl:h-dvh"
+        /*
+         * Not drawn on the Tasks tab, and that is a layout change on purpose.
+         *
+         * The pane exists at every width so that *opening a row* never re-lays
+         * out the list — a card is read in the column beside the table. A task
+         * is not: it opens `TaskRead`, so the column would be 400px of nothing
+         * on every row of the tab, and the list it is taking that width from is
+         * the one the reader came here to scan. Switching tabs re-lays out;
+         * opening a row still does not, which is what the rule was protecting.
+         */
+        hidden={isTasks || undefined}
+        className={`${isTasks ? 'hidden' : 'hidden xl:block'} relative xl:shrink-0 edge-l glass-bar xl:sticky xl:top-0 xl:h-dvh`}
       >
         {/* Six pixels of grab, sitting over the hairline rather than beside it,
             so the edge the eye sees and the edge the hand finds are one edge. */}
@@ -772,6 +993,28 @@ export function Home() {
         )}
       </aside>
       <TaskSheet open={!!taskFrom} onClose={() => setTaskFrom(null)} fromCard={taskFrom} />
+      {/*
+        The two surfaces a task of his own is read and written through, and they
+        are Work's — the same components, not a second pair that would drift.
+        Reading and editing are one surface at a time for the reason Work states:
+        a form stacked on the sheet it opened from gives the back gesture two
+        panels to walk out of.
+      */}
+      <TaskRead
+        open={!!readingTask}
+        task={readingTask ?? lastRead.current}
+        goals={state.goals}
+        reminders={state.reminders}
+        onClose={closeDetail}
+        onEdit={t => { closeDetail(); setEditingId(t.id) }}
+        onStatus={(t, next) => void setStatus(taskRow(t), next)}
+        onDelete={t => { closeDetail(); void removeTask(t) }}
+      />
+      <TaskSheet
+        open={!!editing || newTask}
+        onClose={() => { setEditingId(null); setNewTask(false) }}
+        task={editing}
+      />
     </div>
   )
 }
@@ -837,7 +1080,7 @@ function DetailPage({
          cover. Between them the detail has the whole screen the shell allows
          anything, which is what a page means here. */
       style={{ bottom: 'var(--nav-h)' }}
-      className="fixed inset-x-0 top-0 z-50 pad-top flex flex-col bg-ink-900"
+      className="fixed inset-x-0 top-0 z-50 pad-top flex flex-col glass"
     >
       <DetailPath card={card} onBack={closeDetail} />
       {/* `CardDetail` is `h-full min-h-0`, so as a flex item it shrinks to
@@ -914,7 +1157,29 @@ function DetailPath({ card, onBack }: { card: CardT; onBack: () => void }) {
  * a reader has to be able to press either one on purpose, and a poll that was
  * reachable only from the command palette was a poll nobody knew existed.
  */
-function Header({ count, source }: { count?: number; source: SourceName | null }) {
+function Header({
+  count, source, tab, onNewTask,
+}: {
+  count?: number
+  source: SourceName | null
+  tab: DeskTab
+  onNewTask?: () => void
+}) {
+  /*
+   * Two different jobs, so two different right-hand sides.
+   *
+   * `Sync` and `Fetch` change what a *pipe* has delivered, and on the Tasks tab
+   * there is no pipe: nothing polled his task list, he wrote it. Leaving them
+   * there would put two controls at the top of the page that cannot add a row
+   * to what is under them — and worse, `Fetch` unscoped would report having
+   * found six new things while the list it sits above did not move.
+   *
+   * What that tab wants instead is the one control that *can* add a row, and it
+   * is the amber: writing a task down is the only commitment on this page, so
+   * it takes the accent the way Work's `+ Task` does. One per surface, and the
+   * source tabs spend theirs on nothing.
+   */
+  const isTasks = tab === 'tasks'
   return (
     <header className="pt-4 pb-2 flex items-center gap-3">
       <PageTitle>Desk</PageTitle>
@@ -925,8 +1190,18 @@ function Header({ count, source }: { count?: number; source: SourceName | null }
           being reachable and nothing on screen says why. Shrinkable, the
           pressure lands on the two lines inside, which are built to elide. */}
       <span className="ml-auto min-w-0 flex items-center gap-2">
-        <Sync source={source} />
-        <Fetch source={source} />
+        {isTasks ? (
+          onNewTask && (
+            <Button variant="primary" onClick={onNewTask}>
+              <Plus size={14} aria-hidden /> Task
+            </Button>
+          )
+        ) : (
+          <>
+            <Sync source={source} />
+            <Fetch source={source} />
+          </>
+        )}
       </span>
     </header>
   )
@@ -959,7 +1234,7 @@ function Header({ count, source }: { count?: number; source: SourceName | null }
 function SourceTabs({
   value, state,
 }: {
-  value: SourceName | null
+  value: DeskTab
   state: { lastSync: Array<{ source: string; ok: number; connected: number; error: string | null }> }
 }) {
   const runs = new Map(state.lastSync.map(r => [r.source, r]))
@@ -985,21 +1260,21 @@ function SourceTabs({
       <div ref={rail.ref}
         className="flex items-center gap-4 border-b border-edge overflow-x-auto no-scrollbar">
         {/*
-          `Tasks`, and it is the unfiltered view it has always been.
+          `Tasks`, and it now holds tasks.
 
-          The word `All` is gone because it named the mechanism rather than the
-          contents: it told you what the filter was doing and nothing about what
-          you were looking at. Every row on this desk is something somebody is
-          waiting on him for, which is the only sense in which this product has
-          ever used the word, so the first tab says that and the five source tabs
-          beside it narrow it.
+          It used to be the unfiltered view — every card from every pipe — on the
+          argument that everything on this desk is something somebody is waiting
+          on him for. That argument was about cards, and the word on the tab was
+          not: he read `Tasks` and got a hundred rows of Slack, Sentry and Gmail
+          with nothing he had written down among them. A task and a card are two
+          tables and only one of them is his.
 
-          It carries no `SourceMark`, unlike the five, and that is deliberate: a
-          mark here would make it look like a sixth source when it is the exact
-          opposite — the absence of a source filter. See `filter` above, where
-          that absence is `null` rather than a sixth name.
+          It carries no `SourceMark`, unlike the five, and that is still
+          deliberate — but the reason has changed. It is not the absence of a
+          source filter any more; it is the one tab whose rows have no source at
+          all, so there is no mark that could honestly go here. See `DeskTab`.
         */}
-        <button aria-selected={value === null} role="tab" className={tab(value === null)}
+        <button aria-selected={value === 'tasks'} role="tab" className={tab(value === 'tasks')}
           onClick={() => { setParam('src', null); setParam('page', null) }}>
           Tasks
         </button>
@@ -1050,8 +1325,9 @@ function SourceTabs({
  * already on the row above for the reader who does not believe it.
  */
 function Blank({
-  query, filtered, source,
-}: { query: string; filtered: boolean; source: SourceName | null }) {
+  query, filtered, tab, onNewTask,
+}: { query: string; filtered: boolean; tab: DeskTab; onNewTask: () => void }) {
+  const source = tab === 'tasks' ? null : tab
   /* Everything but the tab, and the page with it: page 3 of a list you are
      about to widen is not where the answer starts. The tab is left alone
      because the strip above says which one is pressed and unpressing it is one
@@ -1071,26 +1347,47 @@ function Blank({
             ? 'Nothing on the desk matches this search.'
             : 'Nothing on the desk matches these filters.'
           : source === null
-            ? 'Nothing is on you.'
+            ? 'Nothing on your list.'
             : `Nothing from ${SOURCE_LABEL[source]} is on you.`}
       </p>
+      {/*
+        Three states, and only two of them have a way out.
+
+        A filtered miss offers the filters back. An empty Tasks tab offers the
+        one control that fills it — which is the whole difference between this
+        and a source tab, where the way out used to be `Show every source` and
+        is gone with the view it pointed at. A source with genuinely nothing on
+        it is the good state and is not offered an escape from itself; `Fetch`
+        is on the row above for the reader who does not believe it.
+      */}
       {filtered ? (
         <Button size="lg" variant="secondary" className="mt-3" onClick={clear}>
           Clear filters
         </Button>
-      ) : source !== null ? (
-        <Button size="lg" variant="secondary" className="mt-3"
-          onClick={() => { setParam('src', null); setParam('page', null) }}>
-          Show every source
+      ) : source === null ? (
+        <Button size="lg" variant="secondary" className="mt-3" onClick={onNewTask}>
+          <Plus size={14} aria-hidden /> Add one
         </Button>
       ) : null}
     </div>
   )
 }
 
-/** Everything that is narrowing this list besides the tab, counted. */
-const filterCount = (query: string, due: DueFilter, pri: string, status: string) =>
-  [query.trim() !== '', due !== 'any', pri !== 'any', status !== 'any'].filter(Boolean).length
+/**
+ * Everything that is narrowing this list besides the tab, counted.
+ *
+ * `pri` counts only where a priority filter exists. On the Tasks tab the
+ * control is not drawn and the predicate is inert, so a stale `?pri=0` left in
+ * the URL by a source tab would otherwise put `Filters · 1` on a phone above a
+ * list nothing was filtering — a badge pointing at a control that is not there.
+ */
+const filterCount = (query: string, due: DueFilter, pri: string, status: string, tab: DeskTab) =>
+  [
+    query.trim() !== '',
+    due !== 'any',
+    tab !== 'tasks' && pri !== 'any',
+    status !== 'any',
+  ].filter(Boolean).length
 
 /** Everything the filter row owns, and the page with it. Cleared together. */
 const FILTER_PARAMS = ['q', 'due', 'pri', 'status', 'page']
@@ -1165,11 +1462,11 @@ function useKeyboardInset(active: boolean): number {
  * grew a modal to reach its own filters would be paying for the phone's fix.
  */
 function FilterRow({
-  query, due, pri, status,
-}: { query: string; due: DueFilter; pri: string; status: string }) {
+  query, due, pri, status, tab,
+}: { query: string; due: DueFilter; pri: string; status: string; tab: DeskTab }) {
   const [open, setOpen] = useState(false)
   const set = (k: string, v: string | null) => { setParam(k, v); setParam('page', null) }
-  const count = filterCount(query, due, pri, status)
+  const count = filterCount(query, due, pri, status, tab)
   const keyboard = useKeyboardInset(open)
 
   /* The three closed sets, built once and drawn twice — the sheet and the row
@@ -1179,34 +1476,40 @@ function FilterRow({
      control in a filter row is as wide as its longest option. */
   const sets = (full: boolean): Array<[string, React.ReactNode]> => {
     const w = full ? 'w-full' : ''
-    return [
-      ['Due', (
-        <Select key="due" className={w}
-          value={due}
-          options={DUE_OPTIONS}
-          onChange={v => set('due', v === 'any' ? null : v)}
-          ariaLabel="Filter by due date"
-        />
-      )],
-      ['Priority', (
-        <Select key="pri" className={w}
-          value={pri}
-          options={[{ id: 'any', label: 'Any priority' },
-            ...PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))]}
-          onChange={v => set('pri', v === 'any' ? null : v)}
-          ariaLabel="Filter by priority"
-        />
-      )],
-      ['Status', (
-        <Select key="status" className={w}
-          value={status}
-          options={[{ id: 'any', label: 'Any status' },
-            ...STATUS_ORDER.map(s => ({ id: s as string, label: STATUS_LABEL[s] }))]}
-          onChange={v => set('status', v === 'any' ? null : v)}
-          ariaLabel="Filter by status"
-        />
-      )],
-    ]
+    const due_: [string, React.ReactNode] = ['Due', (
+      <Select key="due" className={w}
+        value={due}
+        options={DUE_OPTIONS}
+        onChange={v => set('due', v === 'any' ? null : v)}
+        ariaLabel="Filter by due date"
+      />
+    )]
+    const priority: [string, React.ReactNode] = ['Priority', (
+      <Select key="pri" className={w}
+        value={pri}
+        options={[{ id: 'any', label: 'Any priority' },
+          ...PRIORITY_ORDER.map(v => ({ id: String(v), label: PRIORITY_LABEL[v] }))]}
+        onChange={v => set('pri', v === 'any' ? null : v)}
+        ariaLabel="Filter by priority"
+      />
+    )]
+    const state_: [string, React.ReactNode] = ['Status', (
+      <Select key="status" className={w}
+        value={status}
+        options={[{ id: 'any', label: 'Any status' },
+          ...STATUS_ORDER.map(s => ({ id: s as string, label: STATUS_LABEL[s] }))]}
+        onChange={v => set('status', v === 'any' ? null : v)}
+        ariaLabel="Filter by status"
+      />
+    )]
+    /*
+     * Priority is a card's, not a task's — the `tasks` table has no such column.
+     * Offering it on that tab would be a control whose every setting but `Any`
+     * empties the list, sitting directly above the emptiness as if it were the
+     * explanation for it. `Home` refuses the same parameter in `priActive`, so a
+     * hand-typed `?pri=0` is inert rather than merely unreachable.
+     */
+    return tab === 'tasks' ? [due_, state_] : [due_, priority, state_]
   }
 
   return (

@@ -625,7 +625,7 @@ export function SessionPage({ id }: { id: string | null }) {
               )}
             />
 
-            <div className="grow min-w-0 flex items-end gap-1 rounded-control border border-edge bg-ink-850 px-2">
+            <div className="grow min-w-0 flex items-end gap-1 rounded-control border border-edge glass-card px-2">
               <textarea
                 ref={field}
                 value={text}

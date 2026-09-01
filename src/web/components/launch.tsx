@@ -291,7 +291,7 @@ function LaunchPage({ footer, children }: { footer: React.ReactNode; children: R
   return createPortal(
     <div
       style={{ bottom: kb > 0 ? `${kb}px` : 'var(--nav-h)' }}
-      className="fixed inset-x-0 top-0 z-[52] pad-top flex flex-col bg-ink-900"
+      className="fixed inset-x-0 top-0 z-[52] pad-top flex flex-col glass"
     >
       <LaunchPath onBack={closeLaunch} />
       {/* The vertical pad is on the content and not on the scroller, which is
@@ -305,7 +305,7 @@ function LaunchPage({ footer, children }: { footer: React.ReactNode; children: R
           rather than empty while `/state` is still being read: a 49px bar with
           nothing in it is a control the eye goes to and finds nothing at. */}
       {footer && (
-        <div className="shrink-0 pad-x py-3 border-t border-rule bg-ink-900">{footer}</div>
+        <div className="shrink-0 pad-x py-3 border-t border-rule glass-bar">{footer}</div>
       )}
     </div>,
     document.body,
@@ -1512,7 +1512,7 @@ function SlackPasteField({
           see. This field is behind `+ Context` now, so it is no longer in the
           path a fresh open scrolls through and cannot summon the keyboard on
           arrival. */}
-      <div className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850
+      <div className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-card
                       grow min-w-0">
         <Link2 size={14} className="text-fg-mute shrink-0" />
         <input
@@ -1631,7 +1631,7 @@ function SkillPicker({
             slot — so revealing it moves nothing below. */}
         <span className="ml-auto">
           {searching ? (
-            <span className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge bg-ink-850">
+            <span className="flex items-center gap-2 px-2 h-8 rounded-control border border-edge glass-card">
               <Search size={14} className="text-fg-mute shrink-0" aria-hidden />
               <input
                 ref={field}
