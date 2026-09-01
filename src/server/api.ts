@@ -410,7 +410,7 @@ const PRIORITY_NORMAL = 2
  * statuses that have a legacy timestamp behind them. `acked_at` is deliberately
  * not consulted: an ack suppressed a notification, it never claimed the work
  * had begun, and reading it as `in_progress` here would make that claim about
- * most of the desk (DECISIONS.md #32).
+ * most of the desk.
  */
 const statusOf = (s: Row | undefined): CardStatus =>
   (s?.status as CardStatus | undefined) ??
@@ -598,7 +598,7 @@ function logStatusChange(group: string, from: CardStatus, to: CardStatus) {
  * `done_at` and `not_mine` are no longer the truth — `status` is — but they are
  * still read by `pile()`, by the hidden-list sort, and by every `undo_json`
  * written before this shipped, so they are maintained rather than abandoned
- * (DECISIONS.md #32). Writing them here, in one place, is what stops the two
+ * Writing them here, in one place, is what stops the two
  * from drifting apart.
  *
  * `done_at` is cleared on any move away from `done`: a card that is in review

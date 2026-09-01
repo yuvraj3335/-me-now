@@ -2,9 +2,9 @@
  * The one place Wake starts a process that can reach a model.
  *
  * Wake holds no Anthropic key and runs no model in-process; migration 4 deleted
- * the tables that once made it an agent, and DECISIONS #26 said "Wake starts
+ * the tables that once made it an agent, and the rule was "Wake starts
  * nothing". This file reopens exactly one sentence of that decision, and
- * DECISIONS #31 writes down why: Fetch has to work when *Wake's* Slack login is
+ * Why: Fetch has to work when *Wake's* Slack login is
  * missing or refused, and the credential that reaches Slack in that state is the
  * box's, not Wake's. The operator has already signed this machine into those
  * connectors. Fetch borrows that reach for one bounded read.

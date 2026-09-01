@@ -2,7 +2,7 @@
  * A real MCP client: Streamable HTTP (2025-06-18) and stdio.
  *
  * No model is involved anywhere in this file. Wake calls `tools/call` directly
- * and normalizes whatever comes back — see DECISIONS.md #3.
+ * and normalizes whatever comes back.
  */
 
 const PROTOCOL_VERSION = '2025-06-18'
@@ -15,7 +15,7 @@ export type McpTool = { name: string; description?: string; inputSchema?: unknow
  * Wake's ingest path is read-only against the outside world. Rather than
  * trusting every future edit to remember that, any tool whose name looks like a
  * mutation is refused here — a mistake becomes a loud error instead of a message
- * sent to a colleague. See DECISIONS.md #7.
+ * sent to a colleague.
  *
  * `modify` and `patch` are on the list because Gmail's own mutation for marking
  * read and changing labels is `modify_message`, which the first version of this

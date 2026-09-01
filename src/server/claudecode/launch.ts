@@ -82,7 +82,7 @@ export type BuildPack = {
    *
    * Continuity, now that there is a terminal to have it in: the id names the
    * session `router.ts` will resume, and the brief becomes that conversation's
-   * next turn rather than the opening line of a new one. See DECISIONS #39 for
+   * next turn rather than the opening line of a new one. See `terminal.ts` for
    * why this reverses #35.
    */
   sessionId?: string | null
@@ -363,7 +363,7 @@ export function renderPack(p: {
    * new conversation and Wake started nothing. Both halves of that are gone.
    * Wake now resumes the session itself, in a terminal the operator is reading
    * this in — so the brief describes what actually happened rather than
-   * apologising for what could not. See DECISIONS #39.
+   * apologising for what could not.
    *
    * A session Wake could not find on this box still gets named here. Its id is
    * a true fact about where the work was, and the terminal route refuses it

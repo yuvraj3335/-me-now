@@ -21,7 +21,7 @@ Around the piles sit three more surfaces:
 **Wake runs no model.** It holds no API key, starts no process, and has no chat
 of its own. The card pipeline is deterministic code — a rule firing, not a
 generated sentence — and the one place a model is involved is the link you click
-(`DECISIONS.md` #3, #15).
+(no agent, no shell, no model key).
 
 Light and dark, following the system unless you say otherwise. Every text/ground
 pair clears WCAG AA in both.
@@ -59,7 +59,7 @@ That merge is deterministic, not a similarity guess: cards are joined by
 union-find over hard references — a PR number, a Slack `channel:thread_ts`, a
 Gmail thread id, an RFC-5322 Message-ID, or a distinctive normalized title.
 Cards sharing no such reference are left alone, because a wrong merge *hides*
-something real. See `DECISIONS.md` #4.
+something real.
 
 Acknowledgement, snoozing and notification state live on the merged group, not
 on the individual card. That is what makes two promises hold:
@@ -118,7 +118,7 @@ that reaches an existing one, so what the picker buys you is: the session's
 directory and branch fill in, its last exchanges are attached as a quoted object,
 and the brief carries a `claude --resume <id> --permission-mode <mode>` line you
 can copy into a terminal on the machine the transcript is actually on. The UI
-says that in those words. See `DECISIONS.md` #35.
+says that in those words.
 
 **Bypass permissions is the default.** A brief is written, read and approved
 before it is sent; asking again at the terminal asks the same question twice. The
@@ -137,7 +137,7 @@ does not stop the process, it leaves it appending to a file with no name.
 
 It used to spawn `claude -p` on the DevBox instead: a headless process with no
 terminal attached, whose output nobody could see and whose permission prompts
-nobody could answer. It was a session in name only. See `DECISIONS.md` #15.
+nobody could answer. It was a session in name only.
 
 A brief longer than 12k characters is trimmed to fit the URL — and *says so
 inside itself*, so the session asks rather than answering half a thread
@@ -160,7 +160,7 @@ Claude sessions ── fs│ ────────┤─ extract hard referen
 - **Server** Hono, SQLite via `bun:sqlite` (WAL)
 - **UI** React 19, Vite, Tailwind v4, motion
 - **Charts** d3-scale + d3-shape, drawn as SVG — deliberately not a chart
-  component library (`DECISIONS.md` #6)
+  component library
 - **Push** Web Push (VAPID) with a real service worker
 
 Wake speaks MCP itself rather than borrowing Claude Code's connections, because
@@ -257,4 +257,3 @@ says transcription is unavailable.
 Every push to `main` runs typecheck, tests and a build on GitHub Actions, and the
 DevBox picks the commit up within a minute — but only if those same three pass
 again on the box. A red build is a deploy that does not happen.
-- **Why it is built this way** → [DECISIONS.md](DECISIONS.md)

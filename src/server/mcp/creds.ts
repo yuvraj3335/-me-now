@@ -1,5 +1,5 @@
 /**
- * Credential resolution chain (DECISIONS.md #2). Best available wins, so the
+ * Credential resolution chain. Best available wins, so the
  * same adapter code works whether you connected through Wake, through
  * `claude mcp login` on the box, or with a token in the environment.
  *

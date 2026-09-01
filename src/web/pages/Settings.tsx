@@ -480,7 +480,7 @@ function SourceRow({
  * https://mcp.slack.com/mcp" blames the sync for a problem in the credential and
  * offers nothing. The reason is the provider's own word — `invalid_grant`,
  * `token_revoked` — and it is worth printing verbatim, because it is the thing
- * you would search for. See DECISIONS.md #36.
+ * you would search for.
  *
  * `not connected` means no credential from any link in the chain. `sync failed`
  * means a credential that was accepted and a poll that was not. `synced`

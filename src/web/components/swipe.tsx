@@ -618,7 +618,7 @@ export function SwipeDrawer({
   // A drawer that shuts while its picker is up must not reopen holding it.
   useEffect(() => { if (!live) setPicking(false) }, [live])
 
-  // Nothing at rest, and the contract in `ui-contract.test.ts` is why: a drawer
+  // Nothing at rest, and the reason is worth keeping: a drawer
   // that is always present is a control a touch device can never reveal and can
   // always press. Leaving it mounted to save the first frame's layout was tried
   // and is not worth that.

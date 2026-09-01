@@ -197,7 +197,7 @@ describe('the terminal socket refuses a stranger', () => {
 /* ---------------------------------------------------------------------------
  * The write door.
  *
- * `DECISIONS.md` §7 said "a test asserts exactly one module calls it". It did
+ * The rule was "a test asserts exactly one module calls it". It did
  * not. This is that test, written before the surfaces around mail were touched
  * so the revamp runs into it rather than past it.
  *

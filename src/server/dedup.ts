@@ -1,5 +1,5 @@
 /**
- * Dedup: union-find over hard references (DECISIONS.md #4).
+ * Dedup: union-find over hard references.
  *
  * The rule is deliberately conservative. Two cards merge only when they share a
  * reference that identifies the *same real thing* — a PR number, a thread id, a
@@ -294,7 +294,7 @@ export type MyState = {
 }
 
 /**
- * Piles are computed, never filed (DECISIONS.md #9). A manual move always wins;
+ * Piles are computed, never filed. A manual move always wins;
  * a snooze expires on its own and the card returns to where the rules put it.
  */
 export function pile(card: { pile: Pile }, state: MyState | undefined, at = Date.now()): Pile | 'hidden' {

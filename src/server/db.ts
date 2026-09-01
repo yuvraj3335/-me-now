@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS card_state (
   -- Where the WORK stands, as against where the card sits. Orthogonal to the
   -- pile on purpose: "in progress and parked until Monday" is a normal state.
   -- done_at and not_mine survive as derived timestamps kept in sync with this
-  -- column -- see DECISIONS.md #32.
+  -- column.
   status        TEXT NOT NULL DEFAULT 'not_started',
   priority      INTEGER NOT NULL DEFAULT 2,  -- 0 urgent .. 3 low; 2 draws nothing
   due_at        INTEGER,
@@ -198,7 +198,7 @@ CREATE INDEX IF NOT EXISTS events_at   ON events(at DESC);
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, at DESC);
 
 -- ---------------------------------------------------------------------------
--- CONNECTIONS. Wake's own OAuth store (chain step 1 in DECISIONS.md #2).
+-- CONNECTIONS. Wake's own OAuth store (chain step 1: Wake's own tokens win).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS oauth_tokens (
   server        TEXT PRIMARY KEY,
@@ -703,7 +703,6 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
     name: 'card-status-priority-due',
     // Where the work stands, how much it matters, and when it is due — stored,
     // because none of the three can be computed from anything the sources say.
-    // DECISIONS.md #32 and #33 carry the argument; this is the back-fill.
     //
     // The back-fill is the irreversible part of this release, so every clause
     // below is a restatement of something already on the row rather than a
@@ -769,7 +768,7 @@ UPDATE launch_packs SET status = 'opened' WHERE status NOT IN ('draft', 'opened'
   {
     id: 11,
     name: 'oauth-last-auth',
-    // A credential that cannot refresh is not connected (DECISIONS.md #36), and
+    // A credential that cannot refresh is not connected, and
     // saying so needs two facts the token row never held: when the grant last
     // completed a round-trip, and what the provider said the last time it
     // refused. Existing rows get NULL for both — nothing recorded it at the

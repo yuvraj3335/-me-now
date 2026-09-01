@@ -319,7 +319,7 @@ export const MCP_SERVERS: Record<string, { url: string; label: string; scopes?: 
     label: 'Slack',
     oauth: 'client-id',
     // The grant the operator asked for. Ingest still refuses write tools
-    // (DECISIONS.md #7). Slack MCP does not map classic `search:read` onto
+    // Slack MCP does not map classic `search:read` onto
     // a search tool — the granular `search:read.*` names are what unlock it.
     // `files:write` is omitted on purpose.
     scopes: 'canvases:read,canvases:write,channels:history,channels:read,channels:write,chat:write,emoji:read,files:read,groups:history,groups:read,groups:write,im:history,im:read,im:write,lists:read,lists:write,mpim:history,mpim:read,mpim:write,reactions:read,reactions:write,search:read,search:read.files,search:read.im,search:read.mpim,search:read.private,search:read.public,search:read.users,team:read,users:read,users:read.email',
@@ -347,7 +347,7 @@ export const IS_DEV = str('NODE_ENV') !== 'production'
  * Wake holds no model key and runs no model of its own. What it borrows here is
  * the *box's* reach: the connectors the operator has already signed into from
  * this machine, which is precisely the set Wake's own credentials cannot cover.
- * One bounded, read-only, allowlisted collection per press. See DECISIONS.md #31
+ * One bounded, read-only, allowlisted collection per press.
  * for why this reopens #26, and `src/server/fetch/claude.ts` for the envelope.
  */
 export const CLAUDE_BIN = str('WAKE_CLAUDE_BIN')

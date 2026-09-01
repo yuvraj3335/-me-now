@@ -25,7 +25,7 @@ export const PRIORITY_NORMAL: CardPriority = 2
 
 /**
  * A hard reference to a real-world entity. Two cards that share one are the
- * same thing, which is the entire basis of dedup — see DECISIONS.md #4.
+ * same thing, which is the entire basis of dedup.
  */
 export type Ref =
   | { t: 'gh'; v: string }        // owner/repo#123

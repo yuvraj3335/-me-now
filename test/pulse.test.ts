@@ -80,7 +80,7 @@ describe('what counts as still on the desk', () => {
 
   test('status is authoritative where the legacy timestamps disagree', async () => {
     // `done_at` and `not_mine` are still written and kept in sync — see
-    // DECISIONS.md #32 — but they are the old vocabulary. The predicate reads
+    // but they are the old vocabulary. The predicate reads
     // `status`, so a row where the two disagree follows the word he chose.
     const a = card('g-timestamp-only', 'github', 2)
     state('g-timestamp-only', { status: 'in_progress', done_at: Date.now() }, a.at)

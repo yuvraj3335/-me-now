@@ -13,7 +13,6 @@ export const pushSupported = () =>
  * iOS only delivers Web Push to a PWA installed on the Home Screen; in a Safari
  * tab the API exists but permission can never be granted. Detecting that lets
  * the UI say so plainly instead of showing a toggle that silently does nothing.
- * See DECISIONS.md #13.
  */
 export const isIos = () =>
   /iphone|ipad|ipod/i.test(navigator.userAgent) ||

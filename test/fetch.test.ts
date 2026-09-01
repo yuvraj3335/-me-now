@@ -2,7 +2,7 @@
  * Fetch — pipe 2, and the two places it could quietly become something else.
  *
  * The structural half (one spawn site, `--print`, a read-only allowlist, a turn
- * ceiling, a timeout, no free-text input) is asserted in `ui-contract.test.ts`.
+ * ceiling, a timeout, no free-text input) is asserted below.
  * This file tests the behaviour that decides whether a row is honest: what
  * survives validation, and where `why` comes from.
  */

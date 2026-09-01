@@ -599,8 +599,7 @@ function Row({
  * is for. Inventing one would be a second vocabulary for a word this product
  * spends carefully, and it would have to lie about which system owns the answer.
  *
- * **`Done` is right, and `Hide` was the weaker word.** DECISIONS #40 settled
- * what the archive table means — "I am done looking at this one" — and that is
+ * **`Done` is right, and `Hide` was the weaker word.** The archive table means — "I am done looking at this one" — and that is
  * `Done` in the same sense the desk uses it: the row leaves, nothing upstream is
  * touched, and it undoes. A row that behaves identically to every other row in
  * the product should not be the one row that calls it something else.

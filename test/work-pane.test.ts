@@ -25,7 +25,7 @@ const sheet = readFileSync('src/web/components/TaskSheet.tsx', 'utf8')
 /**
  * Source with every comment removed.
  *
- * The same helper `ui-contract` keeps, for the same reason: half of what this
+ * A source-reading helper, for the reason that half of what this
  * file asserts is "the product no longer says X", and both of these files
  * explain at length what X was and why it went. A note about history is not a
  * label, and an assertion that cannot tell them apart bans the explanation

@@ -270,7 +270,7 @@ describe("a subagent's transcript is not a session, and is not orphaned either",
    * history", and the obvious response is to recurse. Recursing would put five
    * rows on the Sessions page for one conversation, none of them resumable and
    * none of them anything he started. Same rule `parseSessionTurns` keeps when
-   * it drops `isSidechain` records (DECISIONS #40).
+   * it drops `isSidechain` records.
    *
    * The directory still has to be reached for deletion, though, or every delete
    * leaves a subagent tree behind. That is the second test.

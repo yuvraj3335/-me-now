@@ -71,7 +71,7 @@ export const PRIORITY_ORDER: readonly CardPriority[] = [0, 1, 2, 3] as const
 export const PRIORITY_LABEL: Record<CardPriority, string> = {
   0: 'Urgent', 1: 'High', 2: 'Normal', 3: 'Low',
 }
-/** Normal. A row at this priority draws no mark — see DECISIONS.md #33. */
+/** Normal. A row at this priority draws no mark. */
 export const PRIORITY_DEFAULT: CardPriority = 2
 
 export type Card = {
@@ -254,7 +254,7 @@ export type SourceStatus = {
   /**
    * Non-null means reconnect, and the string is the provider's own reason. A
    * credential that cannot refresh is not connected, and "sync failed" is the
-   * wrong sentence for it — see DECISIONS.md #36.
+   * wrong sentence for it.
    */
   lastAuthError?: string | null
   oauthable: boolean

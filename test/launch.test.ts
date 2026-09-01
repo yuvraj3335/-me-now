@@ -647,7 +647,7 @@ describe('the instructions direct the work', () => {
     // was true of the chat-surface hand-off and became false the moment Wake
     // started the session itself — and false in the worst place, since a session
     // with its whole transcript above it was being told in its own words that it
-    // had none. DECISIONS.md #39.
+    // had none.
     expect(t.instruction).not.toContain('not resuming')
     expect(t.instruction).not.toContain('and you cannot:')
     expect(t.instruction).not.toContain('new conversation')
@@ -676,7 +676,7 @@ describe('the instructions direct the work', () => {
 
 /* ---------------------------------------------------------------------------
  * A session is continuity now, because there is a terminal to have it in.
- * DECISIONS.md #39, which reverses #35 — see test/terminal.test.ts for the
+ * See test/terminal.test.ts for the
  * refusals that decide which sessions may actually be resumed.
  * ------------------------------------------------------------------------- */
 

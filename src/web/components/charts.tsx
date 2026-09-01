@@ -4,7 +4,6 @@
  * Deliberately not a chart component library: their defaults (gridlines, boxed
  * legends, drop-shadowed tooltips) are exactly the admin-dashboard look the
  * brief ruled out, and overriding them costs more than drawing the mark.
- * See DECISIONS.md #6.
  *
  * Every mark in this file prints its numbers as text somewhere the reader can
  * see without a pointer. The set that came before it did not: a 24-hour dial

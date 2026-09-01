@@ -815,8 +815,8 @@
     Liquid glass, and the rule that keeps it from becoming glassmorphism.
 
     This reverses "no glass", which stood for two releases and which the comment
-    above `.raised` still argued for. It was asked for by name — see DECISIONS
-    #52 — and the ban is gone rather than worked around.
+    above `.raised` still argued for. It was asked for by name, and the ban is
+    gone rather than worked around.
 
     **It goes on floating surfaces only.** A floating surface is one that sits
     *over* content and is dismissible: a sheet, a menu, a popover, the command

@@ -2,7 +2,7 @@
  * The Sessions surface, as a phone reads it.
  *
  * These read the source rather than the DOM, which is the same tool
- * `ui-contract.test.ts` uses and for the same reason: there is no layout engine
+ * this file reads the source rather than a DOM, because there is no layout engine
  * in this suite, and each rule below is one that is easy to break with a
  * plausible-looking edit and impossible to notice afterwards. A composer that
  * quietly grows an `autoFocus`, a delete that quietly grows a text field again,

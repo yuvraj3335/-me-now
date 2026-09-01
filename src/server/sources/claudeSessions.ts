@@ -255,7 +255,7 @@ export function claudeProjectsReadable(): boolean {
  * *inside* one session, and recursing to collect them would put five rows on the
  * Sessions page for one conversation, none of them resumable and none of them
  * anything he started. It is the same rule `parseSessionTurns` already keeps
- * when it drops `isSidechain` records (DECISIONS #40): a subagent's conversation
+ * when it drops `isSidechain` records: a subagent's conversation
  * is not a second conversation.
  *
  * The directory is still reached where it *should* be — `sessionFilePaths`

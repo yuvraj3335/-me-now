@@ -607,7 +607,7 @@ export function Work() {
 
                 What is uncomfortable about it: these are the actual `tasks`
                 table — first-class objects with their own rows, their own API
-                and their own provenance, per DECISIONS #10 — and the desk's
+                and their own provenance — and the desk's
                 unfiltered view is not. The word went to the surface with the
                 weaker claim on it. The URL still says `?tab=tasks` and the type
                 is still `Tab = 'tasks' | 'goals'`, because the underlying thing

@@ -1,7 +1,7 @@
 /**
  * A live Claude Code session, on this box, reachable from a phone.
  *
- * This file is the correction to DECISIONS.md #35. That decision was right about
+ * This file corrects an earlier call that was right about
  * the facts and wrong about the conclusion: `claude.ai/new?q=` really does open a
  * *new* conversation and really cannot target an existing one — so Wake stopped
  * there and shipped a link to the Claude **chat** product, plus a `claude

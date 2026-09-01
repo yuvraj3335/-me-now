@@ -148,7 +148,7 @@ the same token *and* a server that offers the right tools. Wake asks it
 (`tools/list`) rather than assuming, so if the connection can read but not send,
 Send is disabled and Settings names the tools that were actually advertised. As
 of this deployment Gmail is a claude.ai connector, so none of it is reachable and
-Mail says exactly that — see `DECISIONS.md` #22.
+Mail says exactly that.
 
 ## Notifications on your phone
 

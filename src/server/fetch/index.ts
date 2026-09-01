@@ -424,7 +424,7 @@ function promptFor(name: Connector): string {
 /**
  * Evidence becomes `why`. Nothing else is allowed to.
  *
- * This is the surviving half of DECISIONS #3: "why is this on me" is a rule
+ * The rule that survives: "why is this on me" is a rule
  * firing over text somebody actually wrote, not a sentence a model produced. The
  * rule table is `readsLikeAsk`, which the Slack poller has used since the first
  * release, so a Fetch row and a poll row of the same message reach the same
