@@ -26,8 +26,8 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  claudeArgv, isSessionId, openTerminal, resolveSessionCwd, sessionIdFromTmuxName,
-  terminalRoute, terminalSocketPath, tmuxNameFor,
+  claudeArgv, derivedSessionId, isSessionId, openTerminal, resolveSessionCwd,
+  sessionIdFromTmuxName, terminalRoute, terminalSocketPath, tmuxNameFor,
 } from '../src/server/claudecode/terminal'
 import {
   buildPack, parseSessionModel, renderPack, SESSION_MODELS,
@@ -84,7 +84,10 @@ beforeAll(() => {
   mkdirSync(`${CLAUDE_HOME}/sessions`, { recursive: true })
   writeFileSync(
     `${CLAUDE_HOME}/sessions/4242.json`,
-    JSON.stringify({ pid: 4242, sessionId: SESSION, cwd: repo, startedAt: Date.now(), name: 'the fixture' }),
+    // `process.pid`: `liveSessions()` checks the pid is a process that still
+    // exists, so an invented number would describe a *stale* file rather than a
+    // running session, and these tests would measure the wrong refusal.
+    JSON.stringify({ pid: process.pid, sessionId: SESSION, cwd: repo, startedAt: Date.now(), name: 'the fixture' }),
   )
 })
 
@@ -250,13 +253,16 @@ describe('what actually reaches a command line', () => {
     }
   })
 
-  test('the brief is the last argument, verbatim, and it is a prompt', () => {
+  test('the brief is the last argument, verbatim, behind an end-of-options marker', () => {
     const brief = '# Wake brief\n\nLook at `sync`, and say "no" if it is fine.\n- a bullet\n'
     const argv = claudeArgv({ sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions', brief })
     // Verbatim: newlines, quotes and backticks all survive, because the argv is
     // exec'd rather than handed to a shell.
     expect(argv[argv.length - 1]).toBe(brief)
-    expect(argv.length).toBe(6)
+    // And `--` immediately before it, which is the part that makes the sentence
+    // above true rather than nearly true. See the next test.
+    expect(argv[argv.length - 2]).toBe('--')
+    expect(argv.length).toBe(7)
   })
 
   test('an empty brief is no brief, not a blank first turn', () => {
@@ -266,16 +272,45 @@ describe('what actually reaches a command line', () => {
     }
   })
 
-  test('a brief cannot smuggle in a flag', () => {
-    // It is positional and last, so `claude` reads it as the prompt. Nothing
-    // here parses it, and there is no request field that appends to argv.
-    const argv = claudeArgv({
-      sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions',
-      brief: '--dangerously-skip-permissions --add-dir /etc',
-    })
-    expect(argv).toHaveLength(6)
-    expect(argv.indexOf('--dangerously-skip-permissions')).toBe(-1)
-    expect(argv[5]).toBe('--dangerously-skip-permissions --add-dir /etc')
+  /*
+   * This test used to pass while the thing it is named for was false.
+   *
+   * Its only case was a brief containing *several* words beginning with a dash,
+   * which is one argv element and was never going to be parsed as a flag — the
+   * assertion held for a reason that had nothing to do with the claim. The case
+   * that matters is a brief that is a single flag token, and against the
+   * installed binary that case was real:
+   *
+   *     $ claude -p --wake-probe-flag
+   *     error: unknown option '--wake-probe-flag'
+   *     $ claude -p --model … -- --wake-probe-flag
+   *     (parsed as the prompt)
+   *
+   * `POST /api/claude/sessions/new` takes free text straight to `claudeArgv`, so
+   * a first message beginning with a dash reached Claude Code's option parser —
+   * and `--allow-dangerously-skip-permissions` is a real single-token flag on
+   * that binary. The fix is `--`, and the single-token case is what pins it.
+   */
+  test('a brief cannot smuggle in a flag, whatever it spells', () => {
+    const smuggle = [
+      '--allow-dangerously-skip-permissions',
+      '--dangerously-skip-permissions',
+      '-p',
+      '--help',
+      '--dangerously-skip-permissions --add-dir /etc',
+      '-- --already-fenced',
+    ]
+    for (const brief of smuggle) {
+      const argv = claudeArgv({
+        sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions', brief,
+      })
+      // One element, last, and behind the marker that ends option parsing.
+      expect(argv[argv.length - 1], brief).toBe(brief)
+      expect(argv[argv.length - 2], brief).toBe('--')
+      // Wake's own flags are the only options on this command line.
+      expect(argv.slice(0, argv.indexOf('--')).filter(a => a.startsWith('-')), brief)
+        .toEqual(['--permission-mode', '--session-id'])
+    }
   })
 
   test('the command is never a caller\'s', () => {
@@ -283,7 +318,9 @@ describe('what actually reaches a command line', () => {
     // ever appears here it was added deliberately, not passed in.
     const argv = claudeArgv({ sessionId: SESSION, resume: true, permissionMode: 'bypassPermissions', brief: 'hi' })
     expect(argv[0]).toBe(CLAUDE_BIN)
-    expect(argv.filter(a => a.startsWith('--'))).toEqual(['--permission-mode', '--resume'])
+    // `--` is the end-of-options marker rather than an option, so the named
+    // flags are still exactly the two Wake chose.
+    expect(argv.filter(a => /^--\w/.test(a))).toEqual(['--permission-mode', '--resume'])
   })
 })
 
@@ -490,5 +527,71 @@ describe('the brief the session receives', () => {
     })
     expect(body).not.toContain('session:')
     expect(body).not.toContain('--resume')
+  })
+})
+
+/* ---------------------------------------------------------------------------
+ * Pressing Open twice.
+ * ------------------------------------------------------------------------- */
+
+describe('one pack, one session, however many times Open is pressed', () => {
+  /**
+   * The id a pack opens into is derived from the pack, not minted per request.
+   *
+   * Every route that opened a pack called `openTerminal` with no id, and
+   * `openTerminal` answered with a fresh `randomUUID()` each time. So a double
+   * tap — which on a phone is the natural response to a control that shows
+   * nothing until tmux has answered — started two Claude Code sessions in one
+   * repository, both carrying the same brief, and the second one appeared on the
+   * Sessions list as a stranger. Deriving the id gives the pack an identity in
+   * tmux, which makes "is this already open" a question tmux can answer with no
+   * table to reconcile and nothing to clean up after a Wake restart.
+   */
+  test('the id is a function of the pack and nothing else', () => {
+    const a = derivedSessionId('pack:0198f0c0-1111-7000-8000-000000000000')
+    expect(a, 'not a well-formed session id, so it cannot be a --session-id').toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    expect(isSessionId(a)).toBe(true)
+    expect(derivedSessionId('pack:0198f0c0-1111-7000-8000-000000000000')).toBe(a)
+    expect(derivedSessionId('pack:0198f0c0-1111-7000-8000-000000000001')).not.toBe(a)
+    // The two namespaces cannot collide: a pack and a composer send that
+    // happened to share a uuid must not land in the same conversation.
+    expect(derivedSessionId('new:x')).not.toBe(derivedSessionId('pack:x'))
+  })
+
+  /**
+   * The reattach, against a real tmux session on the suite's own socket.
+   *
+   * `available()` refuses to spawn anything here — `WAKE_CLAUDE_BIN` points at a
+   * file that does not exist — so this creates the tmux session itself and then
+   * asks `openTerminal` for it. That is exactly the state a second press finds:
+   * a tmux session already named for this work, and nothing to do but point the
+   * browser at it. What must not happen is a spawn, and what must not happen
+   * twice is the brief.
+   */
+  test('a second open reattaches instead of starting a second session', () => {
+    const repo = join(root, 'truto')
+    const id = derivedSessionId('pack:double-tap')
+    const name = tmuxNameFor(id)!
+    const tmux = (args: string[]) =>
+      Bun.spawnSync(['tmux', '-L', process.env.WAKE_TMUX_SOCKET!, ...args], { stdout: 'pipe', stderr: 'pipe' })
+
+    const made = tmux(['new-session', '-d', '-s', name, '-c', repo, 'sleep', '30'])
+    if (made.exitCode !== 0) return // no usable tmux on this machine; the unit test above still holds
+    try {
+      const r = openTerminal({ cwd: repo, newSessionId: id, brief: '# a brief\n\nlook at the sync' })
+      expect('error' in r, `openTerminal refused: ${'error' in r ? r.error : ''}`).toBe(false)
+      if ('error' in r) return
+      expect(r.sessionId).toBe(id)
+      expect(r.started, 'a second open started a second session').toBe(false)
+      expect(r.briefSent, 'the brief was delivered a second time').toBe(false)
+
+      // And exactly one tmux session carries this id.
+      const list = tmux(['list-sessions', '-F', '#{session_name}']).stdout.toString()
+      expect(list.split('\n').filter(l => l.trim() === name)).toHaveLength(1)
+    } finally {
+      tmux(['kill-session', '-t', name])
+    }
   })
 })

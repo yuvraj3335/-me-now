@@ -47,7 +47,7 @@
  * there is a prompt waiting rather than leaving him staring at one.
  */
 
-import { accessSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { resolve } from 'node:path'
@@ -103,6 +103,28 @@ export function sessionIdFromTmuxName(name: string): string | null {
   return isSessionId(id) ? id : null
 }
 
+/**
+ * The session id a given thing opens into, derived rather than remembered.
+ *
+ * A pack is opened from three places — the sheet's Open, `POST /terminals` with
+ * a `packId`, and a reload of either — and all three used to mint a fresh uuid,
+ * so the pack had no identity in tmux and no way to recognise its own session.
+ * Hashing the pack's id into a uuid gives it one, for free, with nothing to
+ * store and nothing to clean up: the same pack always maps to the same tmux
+ * name, so "is this already open" is a question tmux can answer.
+ *
+ * The digest is truncated to 128 bits and stamped with the version-5 nibbles so
+ * the result is a well-formed uuid — `isSessionId` has to accept it, because it
+ * is about to become a `--session-id`, a filename and a tmux target.
+ */
+export function derivedSessionId(seed: string): string {
+  const h = new Bun.CryptoHasher('sha256').update(`wake:session:${seed}`).digest('hex')
+  const b = (i: number, n: number) => h.slice(i, i + n)
+  const ver = `5${b(13, 3)}`
+  const variant = ((parseInt(b(16, 2), 16) & 0x3f) | 0x80).toString(16).padStart(2, '0')
+  return `${b(0, 8)}-${b(8, 4)}-${ver}-${variant}${b(18, 2)}-${b(20, 12)}`
+}
+
 /** Where the session lives in the app, and where its bytes come from. */
 export const terminalRoute = (id: string) => `/terminal/${id}`
 export const terminalSocketPath = (id: string) => `/api/claude/terminals/${id}/socket`
@@ -115,9 +137,29 @@ export const terminalSocketPath = (id: string) => `/api/claude/terminals/${id}/s
  * Exported because it is the single place a caller's input becomes a command
  * line, so it is the single thing worth testing directly. Everything variable in
  * it is either an id whose shape has been checked, a mode from a two-item list,
- * or the brief — and the brief is a positional argument that `claude` reads as a
- * prompt, not as an option, which is why it cannot become a flag however it is
- * written. There is no field anywhere in this API for "extra arguments".
+ * or the brief.
+ *
+ * **The brief is fenced off with `--`, and that sentence used to be wrong.**
+ * This comment claimed a positional argument "cannot become a flag however it is
+ * written", and it was not true. Measured against the installed binary:
+ *
+ *     $ claude -p --wake-probe-flag
+ *     error: unknown option '--wake-probe-flag'
+ *     $ claude -p --model … -- --wake-probe-flag
+ *     (parsed as the prompt; the run failed on the model instead)
+ *
+ * `POST /api/claude/sessions/new` takes free text and passes it here, so a first
+ * message beginning with a dash was reaching Claude Code's option parser. The
+ * cheap half of that is a message that starts with a list marker killing the
+ * session before it starts, with "the session exited immediately" as the only
+ * explanation. The expensive half is that `--allow-dangerously-skip-permissions`
+ * is a real single-token flag on this binary, which makes "the command is never
+ * supplied by a caller" — invariant 1 in this file's own header — false for
+ * anyone who can post a brief.
+ *
+ * `--` ends option parsing, which is the fix, and it is the whole fix: after it
+ * every remaining argument is positional whatever it spells. There is still no
+ * field anywhere in this API for "extra arguments".
  *
  * **The brief goes in as argv rather than typed into the composer.** Both work —
  * pasting the pack file through `tmux load-buffer` was measured landing a full
@@ -150,7 +192,10 @@ export function claudeArgv(o: {
   if (o.model && o.model !== 'default') argv.push('--model', o.model)
   argv.push(o.resume ? '--resume' : '--session-id', o.sessionId)
   // An empty brief is no brief. `claude ""` would submit a blank first turn.
-  if (o.brief && o.brief.trim()) argv.push(o.brief)
+  // `--` goes in with it rather than unconditionally: with no brief there is no
+  // positional argument to fence, and a bare trailing `--` is noise in a
+  // command line somebody may read out of an audit line.
+  if (o.brief && o.brief.trim()) argv.push('--', o.brief)
   return argv
 }
 
@@ -275,7 +320,13 @@ let confWritten = false
 
 function ensureDir() {
   mkdirSync(TERMINAL_SIZE_DIR, { recursive: true })
-  if (confWritten) return
+  // The flag is not enough on its own: `-f <conf>` naming a file that is not
+  // there makes tmux refuse to start the server at all, and the flag would keep
+  // claiming the file had been written for the life of the process. A stat is
+  // cheaper than the write it usually saves, and it is the only thing standing
+  // between a cleared data directory and every terminal surface answering
+  // "nothing is running" forever.
+  if (confWritten && existsSync(confPath())) return
   try {
     writeFileSync(confPath(), TMUX_CONF, 'utf8')
     confWritten = true
@@ -351,14 +402,38 @@ function infoFrom(line: string): TerminalInfo | null {
   }
 }
 
-export function listTerminals(): TerminalInfo[] {
-  if (!available().tmux) return []
+/**
+ * "no server running" is the resting state. Everything else tmux says is news.
+ *
+ * `list-sessions` exits non-zero for both, and this function used to answer the
+ * empty list to either — so a socket directory that had gone unwritable, a tmux
+ * that could not read its own config, or a server that refused to start looked
+ * exactly like a quiet morning. Every terminal would silently disappear from
+ * `/state`, the Open control would go on being offered, and nothing anywhere
+ * would say why. That is the failure mode this product is least allowed to have,
+ * living in the one function every terminal surface reads through.
+ */
+const NO_SERVER = /no server running|error connecting to|no such file or directory/i
+
+export type TerminalScan = { terminals: TerminalInfo[]; error: string | null }
+
+export function scanTerminals(): TerminalScan {
+  if (!available().tmux) return { terminals: [], error: null }
   const r = tmux(['list-sessions', '-F', LIST_FORMAT])
-  // "no server running" is the normal resting state, not a failure.
-  if (!r.ok) return []
-  return r.out.split('\n').map(l => l.trim()).filter(Boolean)
-    .map(infoFrom).filter((t): t is TerminalInfo => t !== null)
+  if (!r.ok) {
+    return {
+      terminals: [],
+      error: NO_SERVER.test(r.err) || !r.err ? null : `tmux could not be read: ${r.err}`,
+    }
+  }
+  return {
+    terminals: r.out.split('\n').map(l => l.trim()).filter(Boolean)
+      .map(infoFrom).filter((t): t is TerminalInfo => t !== null),
+    error: null,
+  }
 }
+
+export const listTerminals = (): TerminalInfo[] => scanTerminals().terminals
 
 export function getTerminal(id: string): TerminalInfo | null {
   if (!isSessionId(id)) return null
@@ -498,6 +573,28 @@ export function resolveSessionCwd(cwd: string | null | undefined):
 export type OpenInput = {
   /** Resume this session. It must already exist on this machine. */
   sessionId?: string | null
+  /**
+   * The id to give a *new* session, instead of a fresh random one.
+   *
+   * Not a way to reach an existing conversation — that is `sessionId`, and it
+   * goes through the transcript allowlist and the liveness gate. This is the
+   * opposite direction: the caller knows what it is about to create, so a second
+   * request that is about the same thing lands on the same session rather than
+   * starting a second Claude Code in the same repository.
+   *
+   * It exists because pressing Open twice did exactly that. `POST
+   * /packs/:id/open` calls `openTerminal` with no id, `openTerminal` minted a
+   * `randomUUID()` per call, and a double tap on a phone — where the first tap
+   * gives no feedback until tmux has answered — started two sessions on one
+   * brief and delivered the brief to both. `POST /sessions/new` fired twice did
+   * the same. Deriving the id from the thing being opened makes the whole path
+   * idempotent with no table to reconcile: the second call finds the tmux
+   * session already up and reattaches to it.
+   *
+   * Shape-checked like every other id here, and ignored if it is not a uuid —
+   * this becomes a tmux target and a filename, exactly as `sessionId` does.
+   */
+  newSessionId?: string | null
   /** A repository name or absolute path, for a new conversation. */
   cwd?: string | null
   /** The first message. Delivered as the process's prompt argument. */
@@ -636,15 +733,30 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
     }
   }
 
-  const ready = available()
-  if (!ready.ok) return { error: ready.missing!, status: 503 }
-
   // Wake chooses the id rather than discovering it afterwards. Without
   // `--session-id` the only way to learn what was created is to watch
   // `~/.claude/sessions` and guess by cwd and start time, which is a race with
   // every other session the operator might start in the same second.
+  //
+  // A caller that already knows what it is opening gets to name the id, which is
+  // what makes a second press of the same button land on the first session
+  // instead of beside it. See `newSessionId`.
+  const id = isSessionId(input.newSessionId) ? input.newSessionId.toLowerCase() : randomUUID()
+
+  const already = getTerminal(id)
+  if (already) {
+    // The same brief is not delivered twice. It went in as argv on the first
+    // press and it is either on screen or in the composer; pasting it again
+    // would submit the operator's message a second time to a session that is
+    // already answering it.
+    return { ...already, resumed: false, started: false, briefSent: false }
+  }
+
+  const ready = available()
+  if (!ready.ok) return { error: ready.missing!, status: 503 }
+
   return spawn({
-    id: randomUUID(), cwd: where.path, repo: where.repo,
+    id, cwd: where.path, repo: where.repo,
     resume: false, mode, model, cols, rows, brief: input.brief,
   })
 }

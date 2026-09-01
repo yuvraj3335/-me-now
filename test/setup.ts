@@ -70,7 +70,12 @@ process.env.WAKE_SLACK_CHANNELS = [
  */
 process.env.WAKE_SKILLS_TRUTO = join(root, 'catalogs', 'a')
 process.env.WAKE_SKILLS_CURSOR = join(root, 'catalogs', 'b')
-process.env.WAKE_SKILLS_REPO = join(root, 'catalogs', 'c')
+// Catalog C is a *project* catalog and its shape carries meaning: a skill at
+// `<repo>/.claude/skills/<name>` is loadable by a session running in that repo
+// and by no other, which is what `skillReaches` answers. A flat fixture
+// directory would have made every catalog-C skill unreachable and the reach
+// tests meaningless.
+process.env.WAKE_SKILLS_REPO = join(root, 'workspace', 'truto', '.claude', 'skills')
 
 /**
  * Point both subprocess binaries at paths that do not exist.
@@ -82,3 +87,17 @@ process.env.WAKE_SKILLS_REPO = join(root, 'catalogs', 'c')
  */
 process.env.WAKE_TRUTO_BIN = join(root, 'no-such-truto')
 process.env.WAKE_CLAUDE_BIN = join(root, 'no-such-claude')
+
+/**
+ * A tmux socket of the suite's own, and a directory to keep its files in.
+ *
+ * `WAKE_TMUX_SOCKET` defaults to `wake`, which is the socket the operator's
+ * real sessions are on. Nothing in the suite has ever written to it — `available()`
+ * refuses to spawn anything, because `WAKE_CLAUDE_BIN` above points at a file
+ * that does not exist — but `listTerminals()` was reading it, so a test's answer
+ * could depend on what he happened to have running at the time. It should not,
+ * and a test that wants to create a tmux session to reattach to needs somewhere
+ * safe to do it.
+ */
+process.env.WAKE_TMUX_SOCKET = 'wake-test'
+process.env.WAKE_TERMINAL_SIZE_DIR = join(root, 'terminals')
