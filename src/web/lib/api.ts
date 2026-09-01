@@ -377,7 +377,7 @@ export const sessionApi = {
    * the fix for the bug this whole surface exists to correct. The session is
    * active by Claude Code's own reckoning the instant it exists.
    */
-  create: (b: { repo: string; text?: string; permissionMode?: string }) =>
+  create: (b: { repo: string; text?: string; permissionMode?: string; model?: string }) =>
     post<{ ok: true; id: string; session: { sessionId: string; cwd: string; repo: string | null } }>(
       '/claude/sessions/new', b,
     ),

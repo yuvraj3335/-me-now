@@ -355,7 +355,24 @@ describe('the commit is a sibling of the scroll, and it names what it does', () 
     expect(src, 'the hatch stopped being an anchor')
       .toMatch(/<a\s+href=\{claudeAppUrl\(meta\.handoff, draft\?\.brief \?\? instruction\)\}/)
     expect(src, 'the hatch lost target="_blank"').toMatch(/href=\{claudeAppUrl[\s\S]{0,120}target="_blank"/)
-    expect(src, 'the hatch is not labelled').toContain('Open in the Claude app')
+    /*
+     * AMENDED: the label leads with `New chat`, not with `Open`.
+     *
+     * The old label was `Open in the Claude app`, and the old comment two lines
+     * down is why it had to change: this opens a NEW conversation and there is
+     * no URL that reaches an existing one. But the surface has a second control
+     * whose whole job is opening the Claude Code session, and both of them said
+     * `Open` and both of them said `Claude`. He pressed this one and got the
+     * chat product — no repository, no tools, nothing to resume — and reported
+     * it as "Open in Claude opens plain Claude, not the code section".
+     *
+     * The rule the assertion is for is unchanged and is now actually enforced:
+     * this control has to say it is a new chat rather than this session. What is
+     * banned is the word that made it confusable.
+     */
+    expect(src, 'the hatch is not labelled').toContain('New chat in the Claude app')
+    expect(src, 'the hatch went back to a label that reads as the code session')
+      .not.toContain('Open in the Claude app')
     expect(src, 'the hatch stopped saying it starts a new conversation')
       .toMatch(/const APP_HATCH =[\s\S]{0,200}new conversation/)
     // The href is a function of the text and nothing else. A session id in it

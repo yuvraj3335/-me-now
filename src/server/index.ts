@@ -86,6 +86,27 @@ app.get('/*', async c => {
   // Unknown API paths must 404 rather than fall through to the SPA shell.
   if (rel.startsWith('api/')) return c.json({ error: 'not found' }, 404)
 
+  /*
+   * And so must an asset that is not on disk. This one produced a white screen.
+   *
+   * `/assets/*` names are content-hashed, so a request for one that does not
+   * exist means the page asking for it was built against a different commit — a
+   * phone holding a shell from before a deploy, most often out of the service
+   * worker's own cache. Falling through returned the SPA shell: **200, with a
+   * `text/html` body, to a `<script type="module">` request.** The browser
+   * rejects that as a module, `import()` rejects, React re-throws it during
+   * render, and the whole root unmounts — a blank page with one console line.
+   * Reproduced end to end; `#root` innerHTML length 0.
+   *
+   * A 404 does not by itself put anything on screen — that is the error
+   * boundary's job, in `src/web/main.tsx` — but it is the difference between a
+   * failure the client can recognise as "my build is stale" and one that looks
+   * like the server sending nonsense. It also stops the service worker storing
+   * an HTML body under a `.js` key and serving it back for as long as the cache
+   * lives.
+   */
+  if (rel.startsWith('assets/')) return c.text('not found', 404)
+
   const shell = await serveFile(join(DIST, 'index.html'), c)
   if (shell) return shell
   return c.text(

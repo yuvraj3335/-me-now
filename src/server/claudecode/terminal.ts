@@ -59,6 +59,7 @@ import { getRepo } from '../registry/scan'
 import { getSession, isSessionActive } from '../sources/claudeSessions'
 import {
   DEFAULT_PERMISSION_MODE, resolveCwd, type PermissionMode,
+  DEFAULT_SESSION_MODEL, type SessionModel,
 } from './launch'
 
 /* ------------------------------- identity --------------------------------- */
@@ -139,9 +140,14 @@ export function claudeArgv(o: {
   sessionId: string
   resume: boolean
   permissionMode: PermissionMode
+  model?: SessionModel
   brief?: string | null
 }): string[] {
   const argv = [CLAUDE_BIN, '--permission-mode', o.permissionMode]
+  // `default` is the absence of the flag rather than a value for it: Claude Code
+  // chooses for itself when `--model` is missing, which is what respects
+  // whatever the operator has configured. See `parseSessionModel`.
+  if (o.model && o.model !== 'default') argv.push('--model', o.model)
   argv.push(o.resume ? '--resume' : '--session-id', o.sessionId)
   // An empty brief is no brief. `claude ""` would submit a blank first turn.
   if (o.brief && o.brief.trim()) argv.push(o.brief)
@@ -497,6 +503,8 @@ export type OpenInput = {
   /** The first message. Delivered as the process's prompt argument. */
   brief?: string | null
   permissionMode?: PermissionMode
+  /** Which model to start on. `default` (or absent) passes no `--model` at all. */
+  model?: SessionModel
   cols?: number
   rows?: number
   /** The pack file, when there is one, so a resend pastes the same artifact. */
@@ -530,6 +538,7 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
    * that can start real Claude Code sessions. Validate, then check, then spawn.
    */
   const mode = input.permissionMode ?? DEFAULT_PERMISSION_MODE
+  const model = input.model ?? DEFAULT_SESSION_MODEL
   const cols = size(input.cols, TERMINAL_COLS, 500)
   const rows = size(input.rows, TERMINAL_ROWS, 300)
 
@@ -589,7 +598,7 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
     const ready = available()
     if (!ready.ok) return { error: ready.missing!, status: 503 }
 
-    return spawn({ id, cwd: where.path, repo: where.repo, resume: true, mode, cols, rows, brief: input.brief })
+    return spawn({ id, cwd: where.path, repo: where.repo, resume: true, mode, model, cols, rows, brief: input.brief })
   }
 
   /* --- a new conversation ------------------------------------------------ */
@@ -636,7 +645,7 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
   // every other session the operator might start in the same second.
   return spawn({
     id: randomUUID(), cwd: where.path, repo: where.repo,
-    resume: false, mode, cols, rows, brief: input.brief,
+    resume: false, mode, model, cols, rows, brief: input.brief,
   })
 }
 
@@ -646,6 +655,7 @@ function spawn(o: {
   repo: string | null
   resume: boolean
   mode: PermissionMode
+  model: SessionModel
   cols: number
   rows: number
   brief?: string | null
@@ -654,7 +664,7 @@ function spawn(o: {
   if (!name) return { error: `"${o.id}" is not a session id`, status: 400 }
 
   const argv = claudeArgv({
-    sessionId: o.id, resume: o.resume, permissionMode: o.mode, brief: o.brief,
+    sessionId: o.id, resume: o.resume, permissionMode: o.mode, model: o.model, brief: o.brief,
   })
 
   // Detached, so the session's life is tmux's business rather than this

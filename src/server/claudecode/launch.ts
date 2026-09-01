@@ -122,6 +122,43 @@ export function parsePermissionMode(v: unknown): { mode: PermissionMode } | { er
   return { error: `"${String(v)}" is not a permission mode — use ${PERMISSION_MODES.join(' or ')}` }
 }
 
+/* ------------------------------- the model -------------------------------- */
+
+/**
+ * Which model a session runs on.
+ *
+ * Read off the installed binary rather than remembered. `claude --help` on
+ * 2.1.252 says:
+ *
+ *   > `--model <model>`  Model for the current session. Provide an alias for
+ *   > the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full
+ *   > name (e.g. 'claude-fable-5').
+ *
+ * **Aliases only, and a closed list.** A full name pins a version that will be
+ * retired from under it, and the aliases are what Claude Code itself documents;
+ * `claude-opus-4-5` works today and is the wrong thing to write into a picker
+ * somebody keeps for a year. The list is closed because this value becomes a
+ * process argument — `argv` rather than a shell string, so there is nothing to
+ * inject, but an unrecognised model still means `claude` exits immediately
+ * inside a tmux nobody is watching, which reads as "the session did not start"
+ * with no reason attached.
+ *
+ * `default` is the absence of the flag, not a value passed to it. Claude Code
+ * picks for itself when `--model` is missing — which respects whatever the
+ * operator configured — and passing a literal `default` would be Wake asserting
+ * a preference it does not have.
+ */
+export type SessionModel = 'default' | 'opus' | 'sonnet' | 'haiku' | 'fable'
+export const SESSION_MODELS = ['default', 'opus', 'sonnet', 'haiku', 'fable'] as const satisfies readonly SessionModel[]
+export const DEFAULT_SESSION_MODEL: SessionModel = 'default'
+
+/** Same shape as `parsePermissionMode`, and unrecognised is an error there too. */
+export function parseSessionModel(v: unknown): { model: SessionModel } | { error: string } {
+  if (v === undefined || v === null || v === '') return { model: DEFAULT_SESSION_MODEL }
+  if (SESSION_MODELS.includes(v as SessionModel)) return { model: v as SessionModel }
+  return { error: `"${String(v)}" is not a model — use ${SESSION_MODELS.join(', ')}` }
+}
+
 /* -------------------------------- the cwd --------------------------------- */
 
 /**

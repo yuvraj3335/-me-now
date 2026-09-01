@@ -22,7 +22,8 @@ import {
 } from '../sources/claudeSessions'
 import { listRepos } from '../registry/scan'
 import {
-  DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode, resolveCwd,
+  DEFAULT_PERMISSION_MODE, buildPack, getPack, listPacks, openPack, parsePermissionMode,
+  parseSessionModel, SESSION_MODELS, resolveCwd,
 } from './launch'
 import {
   available, closeTerminal, getTerminal, isRunning, listTerminals, openTerminal, sendBrief,
@@ -221,13 +222,15 @@ claudecode.post('/sessions/new', async c => {
   const b = await c.req.json<any>().catch(() => ({}))
   const mode = parsePermissionMode(b.permissionMode)
   if ('error' in mode) return c.json(bad(mode.error), 400)
+  const model = parseSessionModel(b.model)
+  if ('error' in model) return c.json(bad(model.error), 400)
 
   const cwd = typeof b.repo === 'string' && b.repo.trim() ? b.repo.trim()
     : typeof b.cwd === 'string' ? b.cwd : null
   if (!cwd) return c.json(bad('name a repository to start in'), 400)
 
   const text = typeof b.text === 'string' ? b.text : null
-  const r = openTerminal({ cwd, brief: text, permissionMode: mode.mode })
+  const r = openTerminal({ cwd, brief: text, permissionMode: mode.mode, model: model.model })
   if ('error' in r) {
     audit('claude.session.new', { target: cwd, ok: false, error: r.error })
     return c.json(bad(r.error), r.status)
@@ -503,12 +506,19 @@ claudecode.post('/terminals', async c => {
 
   const mode = parsePermissionMode(b.permissionMode)
   if ('error' in mode) return c.json(bad(mode.error), 400)
+  // Refused by name rather than silently defaulted, for the same reason the
+  // mode above is: an unrecognised model would make `claude` exit immediately
+  // inside a tmux nobody is watching, which reads as "the session did not
+  // start" with no reason attached to it.
+  const model = parseSessionModel(b.model)
+  if ('error' in model) return c.json(bad(model.error), 400)
 
   const input: OpenInput = {
     sessionId: typeof b.sessionId === 'string' ? b.sessionId : null,
     cwd: typeof b.cwd === 'string' ? b.cwd : null,
     brief: typeof b.brief === 'string' ? b.brief : null,
     permissionMode: mode.mode,
+    model: model.model,
     cols: b.cols,
     rows: b.rows,
   }

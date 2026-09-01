@@ -6,7 +6,7 @@
  * cards on a page whose entire purpose is telling you what is true right now.
  */
 
-const SHELL = 'wake-shell-v2'
+const SHELL = 'wake-shell-v3'
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -50,12 +50,22 @@ self.addEventListener('fetch', event => {
   }
 
   // Hashed assets are immutable: cache first is safe and makes reopens instant.
+  //
+  // Only a *successful* response is stored, and that is not a detail. The server
+  // used to answer an unknown `/assets/` path with the SPA shell — 200, and
+  // `text/html` — so a phone on a shell from before a deploy asked for a chunk
+  // that no longer exists, got HTML, and cached it under a `.js` key. Every
+  // later load then failed from cache, with no network involved, for as long as
+  // the cache lived. The server 404s that path now; this is the half that stops
+  // a bad answer outliving the deploy that caused it.
   if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/')) {
     event.respondWith(
       caches.match(request).then(hit =>
         hit ?? fetch(request).then(res => {
-          const copy = res.clone()
-          caches.open(SHELL).then(c => c.put(request, copy)).catch(() => {})
+          if (res.ok && !(res.headers.get('content-type') || '').includes('text/html')) {
+            const copy = res.clone()
+            caches.open(SHELL).then(c => c.put(request, copy)).catch(() => {})
+          }
           return res
         }),
       ),

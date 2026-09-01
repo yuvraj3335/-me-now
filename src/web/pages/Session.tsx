@@ -48,8 +48,8 @@ import {
   sessionApi, type OpenSession, type SessionStarting, type SessionTurn,
 } from '../lib/api'
 import {
-  PERMISSION_MODES, launchApi, openLaunch,
-  type LaunchState, type PermissionMode, type Session,
+  DEFAULT_SESSION_MODEL, PERMISSION_MODES, SESSION_MODELS, launchApi, openLaunch,
+  type LaunchState, type PermissionMode, type SessionModel, type Session,
 } from '../lib/launch'
 import { navigate, setParam, useParam } from '../lib/route'
 import { ago, wallClock } from '../lib/time'
@@ -178,6 +178,17 @@ export function SessionPage({ id }: { id: string | null }) {
   const askedRepo = useParam('repo')
   const [repo, setRepo] = useState<string | null>(null)
   const [mode, setMode] = useState<PermissionMode | null>(null)
+  /**
+   * Which model a *new* conversation starts on.
+   *
+   * Local state rather than the launch basket's remembered preference: this
+   * composer is reached directly (`/sessions/new`) rather than through the
+   * pack composer, and the two do not share a surface. It resets to `Default`
+   * each time, which is the honest resting state — Wake has no opinion until
+   * he expresses one, and a sticky model on a page he opens to start something
+   * unrelated is a preference applying itself where it was not meant to.
+   */
+  const [model, setModel] = useState<SessionModel>(DEFAULT_SESSION_MODEL)
   const [sheet, setSheet] = useState<'menu' | 'delete' | null>(null)
 
   /* ------------------------------- reading ------------------------------- */
@@ -330,7 +341,9 @@ export function SessionPage({ id }: { id: string | null }) {
     try {
       if (!id) {
         if (!cwd) { setRefused('Name a repository to start in.'); return }
-        const r = await sessionApi.create({ repo: cwd, text: body, permissionMode: permission })
+        const r = await sessionApi.create({
+          repo: cwd, text: body, permissionMode: permission, model,
+        })
         setText('')
         // The session exists and is running by the time this resolves, so the
         // page it lands on is a live one rather than a hopeful one.
@@ -345,7 +358,7 @@ export function SessionPage({ id }: { id: string | null }) {
     } finally {
       setBusy(false)
     }
-  }, [text, busy, id, cwd, permission])
+  }, [text, busy, id, cwd, permission, model])
 
   /**
    * The composer grows with what is in it, up to about six lines.
@@ -506,6 +519,21 @@ export function SessionPage({ id }: { id: string | null }) {
                   label="Permission"
                   ariaLabel="Permission mode"
                 />
+                {/*
+                  Only while starting one. A conversation that is already
+                  running was started on a model and cannot be moved to
+                  another, so the control would do nothing but imply it could
+                  — the same rule the permission sentence keeps further down.
+                */}
+                {!id && (
+                  <Menu
+                    items={SESSION_MODELS.map(m => ({ id: m.id, label: m.label }))}
+                    value={model}
+                    onPick={m => setModel(m)}
+                    label="Model"
+                    ariaLabel="Model"
+                  />
+                )}
                 <Menu
                   items={contextItems}
                   value={null}
@@ -876,8 +904,8 @@ function SessionSheet({
                          rounded-control text-sm text-fg-dim
                          hover:text-fg hover:bg-ink-800 transition-colors duration-100"
             >
-              Open the Claude app
-              <span className="shrink-0 text-fg-mute">a new conversation</span>
+              New chat in the Claude app
+              <span className="shrink-0 text-fg-mute">not this session</span>
             </a>
           </>
         )}

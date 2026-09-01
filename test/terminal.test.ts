@@ -29,7 +29,9 @@ import {
   claudeArgv, isSessionId, openTerminal, resolveSessionCwd, sessionIdFromTmuxName,
   terminalRoute, terminalSocketPath, tmuxNameFor,
 } from '../src/server/claudecode/terminal'
-import { buildPack, renderPack } from '../src/server/claudecode/launch'
+import {
+  buildPack, parseSessionModel, renderPack, SESSION_MODELS,
+} from '../src/server/claudecode/launch'
 import { CLAUDE_BIN, CLAUDE_HOME, CLAUDE_PROJECTS_DIR, WORKSPACE_ROOT } from '../src/server/env'
 import { terminalIdOf } from '../src/web/lib/route'
 import { rescan } from '../src/server/registry/scan'
@@ -150,6 +152,64 @@ describe('what actually reaches a command line', () => {
   test('bypassPermissions is the mode unless the other one was chosen', () => {
     expect(claudeArgv({ sessionId: SESSION, resume: false, permissionMode: 'acceptEdits' })[2])
       .toBe('acceptEdits')
+  })
+
+  test('a named model reaches --model, and Default passes no flag at all', () => {
+    /*
+     * There was no `--model` anywhere in the spawn path, so every session Wake
+     * started ran on whatever Claude Code picked and nothing on a phone could
+     * say otherwise.
+     *
+     * `default` is deliberately the *absence* of the flag rather than a literal
+     * passed to it: Claude Code chooses for itself when `--model` is missing,
+     * which respects whatever the operator configured, and passing the word
+     * would be Wake asserting a preference it does not have.
+     */
+    const withModel = claudeArgv({
+      sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions', model: 'opus',
+    })
+    expect(withModel).toEqual(
+      [CLAUDE_BIN, '--permission-mode', 'bypassPermissions', '--model', 'opus', '--session-id', SESSION],
+    )
+
+    for (const quiet of [undefined, 'default' as const]) {
+      const argv = claudeArgv({
+        sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions', model: quiet,
+      })
+      expect(argv, `model=${String(quiet)} put a flag on the command line`)
+        .not.toContain('--model')
+    }
+
+    // The flag goes before the session id, so the brief stays the last argument
+    // — which is the property the positional-prompt test below depends on.
+    const withBrief = claudeArgv({
+      sessionId: SESSION, resume: false, permissionMode: 'bypassPermissions',
+      model: 'sonnet', brief: 'hello',
+    })
+    expect(withBrief[withBrief.length - 1]).toBe('hello')
+  })
+
+  test('an unrecognised model is refused by name rather than defaulted', () => {
+    /*
+     * Silently falling back would make `claude` start on a model he did not
+     * choose; passing it through would make `claude` exit immediately inside a
+     * tmux nobody is watching, which reads as "the session did not start" with
+     * no reason attached. Both are worse than a sentence.
+     *
+     * The list is aliases only. A full name like `claude-opus-4-5` works today
+     * and pins a version that gets retired from under a picker kept for a year.
+     */
+    for (const ok of SESSION_MODELS) {
+      expect(parseSessionModel(ok), `${ok} is not accepted`).toEqual({ model: ok })
+    }
+    // Absent means default, which is what an old client sends.
+    for (const empty of [undefined, null, '']) {
+      expect(parseSessionModel(empty)).toEqual({ model: 'default' })
+    }
+    for (const no of ['claude-opus-4-5', 'gpt-4', 'Opus', 'opus ', '__proto__', 'sonnet;rm -rf /']) {
+      const r = parseSessionModel(no)
+      expect('error' in r, `${no} was accepted as a model`).toBe(true)
+    }
   })
 
   test('the brief is the last argument, verbatim, and it is a prompt', () => {

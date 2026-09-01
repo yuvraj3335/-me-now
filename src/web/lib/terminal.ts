@@ -20,6 +20,16 @@ import { navigate } from './route'
 /** The two real `--permission-mode` values a session may be started under. */
 export type PermissionMode = 'bypassPermissions' | 'acceptEdits'
 
+/**
+ * The `--model` aliases a session may be started on. `default` passes no flag.
+ *
+ * Declared here rather than imported from `lib/launch`, matching the mode above:
+ * this module is the wire contract for `/api/claude/terminals` and is meant to
+ * be readable without the composer's state machine. The labels live in
+ * `lib/launch`; the server validates the value either way.
+ */
+export type SessionModel = 'default' | 'opus' | 'sonnet' | 'haiku' | 'fable'
+
 export type Terminal = {
   /**
    * The Claude Code session id — not a handle Wake invented.
@@ -73,6 +83,8 @@ export type OpenTerminal = {
   /** A repository name or absolute path, for a new conversation. */
   cwd?: string | null
   permissionMode?: PermissionMode
+  /** Which model to start on. Absent or `default` passes no `--model` at all. */
+  model?: SessionModel
   cols?: number
   rows?: number
 }

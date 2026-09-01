@@ -74,10 +74,10 @@ import {
   Button, Chip, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
 } from './primitives'
 import {
-  PERMISSION_MODES, PHONE_COMPOSER, claudeAppUrl, closeLaunch, composerIsAPage, launchApi,
-  launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch, resolveSkillIds,
-  setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
-  type LaunchState, type PackItem, type PermissionMode, type Session,
+  PERMISSION_MODES, PHONE_COMPOSER, SESSION_MODELS, claudeAppUrl, closeLaunch, composerIsAPage,
+  launchApi, launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
+  resolveSkillIds, setLaunchModel, setLaunchPermissionMode, setLaunchSession, useLaunchBasket,
+  type LaunchState, type PackItem, type PermissionMode, type SessionModel, type Session,
 } from '../lib/launch'
 import { navigate, useDetailKey, useRoute } from '../lib/route'
 import { useOverlay } from '../lib/overlay'
@@ -251,6 +251,7 @@ export function LaunchSheet() {
       suggestedTitle={basket.title}
       session={basket.session}
       permissionMode={basket.permissionMode}
+      model={basket.model}
       page={page}
     />
   )
@@ -361,7 +362,7 @@ function LaunchPath({ onBack }: { onBack: () => void }) {
 /* -------------------------------- the state ------------------------------- */
 
 function LaunchComposer({
-  items, preferred, repoHint, suggestedTitle, session, permissionMode, page,
+  items, preferred, repoHint, suggestedTitle, session, permissionMode, model, page,
 }: {
   items: PackItem[]
   preferred: string[]
@@ -369,6 +370,7 @@ function LaunchComposer({
   suggestedTitle: string | null
   session: string | null
   permissionMode: PermissionMode
+  model: SessionModel
   /** Drawn as a full-viewport page rather than as a modal. See `LaunchSheet`. */
   page: boolean
 }) {
@@ -580,7 +582,7 @@ function LaunchComposer({
         await launchApi.send(session, brief)
         navigate(terminalRoute(session))
       } else {
-        await openTerminalAndGo({ packId, brief })
+        await openTerminalAndGo({ packId, brief, model })
       }
       resetLaunch()
     } catch (e) {
@@ -719,7 +721,7 @@ function LaunchComposer({
 
       {panel === 'run' && (
         <RunPanel
-          mode={permissionMode} session={session} page={page}
+          mode={permissionMode} model={model} session={session} page={page}
           draft={draft} setBrief={setBrief} onWrite={pack} provenance={provenance}
         />
       )}
@@ -759,7 +761,7 @@ function LaunchComposer({
                      text-sm font-medium text-fg-mute hover:text-fg-dim hover:bg-ink-800
                      transition-colors duration-100"
         >
-          <span className="truncate">Open in the Claude app</span>
+          <span className="truncate">New chat in the Claude app</span>
         </a>
 
         {/* The one commit on this surface, and the only amber on it. */}
@@ -1731,9 +1733,10 @@ function SkillPicker({
  * not a step the product should ask for.
  */
 function RunPanel({
-  mode, session, page, draft, setBrief, onWrite, provenance,
+  mode, model, session, page, draft, setBrief, onWrite, provenance,
 }: {
   mode: PermissionMode
+  model: SessionModel
   /** The session being resumed, if one was chosen. It changes what the mode means. */
   session: string | null
   page: boolean
@@ -1770,6 +1773,36 @@ function RunPanel({
           </p>
         )}
       </section>
+
+      {/*
+        Which model, on the same surface and in the same shape as the mode.
+
+        `--model` was never passed at all, so every session Wake started ran on
+        whatever Claude Code picked and there was no way to say otherwise from
+        here — which on a phone means no way at all.
+
+        Aliases rather than full names: `claude --help` documents `'fable'`,
+        `'opus'`, `'sonnet'` as "an alias for the latest model", and a pinned
+        `claude-opus-4-5` in a picker he keeps for a year is a version that gets
+        retired from under him. `Default` passes no flag, which leaves the
+        choice where it already was.
+
+        Hidden while resuming, for the same reason the sentence above exists: a
+        running process was started with a model and cannot be moved to another
+        one, so offering the control would be offering something that does
+        nothing.
+      */}
+      {!session && (
+        <section className="py-4">
+          <h3 className="text-eyebrow uppercase text-fg-mute mb-2">Model</h3>
+          <Segmented
+            options={SESSION_MODELS.map(m => ({ id: m.id, label: m.label }))}
+            value={model}
+            onChange={setLaunchModel}
+            ariaLabel="Model"
+          />
+        </section>
+      )}
 
       <section className="py-4">
         <h3 className="text-eyebrow uppercase text-fg-mute mb-2">The packed brief</h3>

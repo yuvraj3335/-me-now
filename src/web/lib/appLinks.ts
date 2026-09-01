@@ -50,6 +50,34 @@ export function gmailWebUrl(account: string, threadId: string): string {
 }
 
 /**
+ * `Open` plus where it goes, for a control that needs to say so.
+ *
+ * Used on the card pane when the same surface is also offering `Open session`,
+ * because there the bare word is genuinely ambiguous — a Claude Code session
+ * that opened a pull request carries the PR as its url, so the prominent `Open`
+ * went to GitHub while the session button sat elsewhere with a different name.
+ *
+ * The host, not a curated table of product names: a table is a thing to keep up
+ * to date, and `github.com` is already the word a person would use. `www.` goes
+ * because it is never information, and a non-http scheme (`slack://`) names the
+ * scheme instead, which is what those links are.
+ */
+export function openWord(url: string): string {
+  try {
+    const u = new URL(url)
+    if (u.protocol === 'http:' || u.protocol === 'https:') {
+      return `Open ${u.hostname.replace(/^www\./, '')}`
+    }
+    return `Open ${u.protocol.replace(':', '')}`
+  } catch {
+    // A url this cannot parse is one the anchor probably cannot follow either;
+    // the bare word is still true and still better than a thrown exception in a
+    // render path.
+    return 'Open'
+  }
+}
+
+/**
  * What the Open button should navigate to for a card.
  *
  * `href` is always the durable web form and is what a person can copy or share.

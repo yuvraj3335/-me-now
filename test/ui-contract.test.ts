@@ -96,6 +96,62 @@ describe('client paths match the routes that exist', () => {
   })
 })
 
+describe('a failure shows him something', () => {
+  /*
+   * The white screen, and the three things that produced it.
+   *
+   * Reproduced before it was fixed: a clean profile navigating to a session
+   * whose lazy chunk could not be fetched left `#root` with an innerHTML length
+   * of **0** and one uncaught `TypeError` in a console that, on a phone, does
+   * not exist. The backend was fine throughout — a real session was running on
+   * the box the whole time.
+   *
+   * The chain: a redeploy changes the content-hashed `/assets/*` names; a tab or
+   * a home-screen app holding the old shell asks for a chunk that is gone; the
+   * server answered that with the SPA shell (200, `text/html`) instead of a 404;
+   * the browser rejected the HTML as a module; React re-threw the rejected
+   * `lazy()` during render; and with no error boundary anywhere, the whole root
+   * unmounted.
+   *
+   * Each link is pinned separately, because any one of them alone brings the
+   * blank page back.
+   */
+  test('an asset that is not on disk 404s instead of returning the shell', () => {
+    const server = read('src/server/index.ts')
+    expect(server, 'an unknown asset falls through to the SPA shell again')
+      .toMatch(/rel\.startsWith\('assets\/'\)[\s\S]{0,80}404/)
+  })
+
+  test('there is an error boundary, and it is above the router', () => {
+    // Above `App`, not inside it: a rejected `lazy()` is re-thrown from inside
+    // `App`'s own render, so a boundary nested any deeper is unmounted by the
+    // very throw it exists to catch.
+    const main = read('src/web/main.tsx')
+    expect(main, 'the root lost its error boundary').toMatch(/<ErrorBoundary>[\s\S]{0,120}<App \/>/)
+
+    const boundary = read('src/web/components/ErrorBoundary.tsx')
+    expect(boundary, 'the boundary stopped catching').toContain('getDerivedStateFromError')
+    // It has to put the reason on screen. "It went white" is not a report
+    // anybody can act on, and a console is not a surface a phone has.
+    expect(boundary, 'the boundary swallowed the message').toMatch(/\{error\.message\}/)
+    // And a way out that actually works: the stale shell is served from the
+    // service worker's cache, so a plain reload gets the same broken page back.
+    expect(boundary, 'the recovery cannot clear the cache that caused this')
+      .toMatch(/caches\.delete/)
+    expect(boundary, 'the recovery leaves the old worker registered')
+      .toMatch(/unregister\(\)/)
+  })
+
+  test('the worker never caches a shell under an asset name', () => {
+    // The half that makes a bad answer outlive the deploy that caused it: the
+    // HTML body got stored under a `.js` key and served from cache afterwards,
+    // with no network involved, for as long as the cache lived.
+    const sw = read('public/sw.js')
+    expect(sw, 'the asset cache stores whatever it is given again')
+      .toMatch(/res\.ok && !\(res\.headers\.get\('content-type'\)/)
+  })
+})
+
 describe('navigation cannot stall', () => {
   test('the page transition has no exit animation to wait on', () => {
     // AnimatePresence mode="wait" holds the outgoing page until its exit
@@ -546,8 +602,12 @@ describe('the hand-off reaches a session, not a chat', () => {
 
     // The one call, with the edited brief. `openTerminalAndGo` records the
     // hand-off, writes the brief back to the pack file and starts the session.
+    // The model rides along now — `--model` was never passed at all, so every
+    // session Wake started ran on whatever Claude Code picked. What is pinned is
+    // that the commit still goes through this one call with the packed id and
+    // the edited brief, not the exact shape of its argument.
     expect(sheet, 'the sheet no longer starts a session')
-      .toMatch(/openTerminalAndGo\(\{\s*packId,\s*brief\s*\}\)/)
+      .toMatch(/openTerminalAndGo\(\{\s*packId,\s*brief[^}]*\}\)/)
 
     // Not both. `POST /packs/:id/open` does the same recording and starts its
     // own session, so calling it as well would leave two running for one brief.

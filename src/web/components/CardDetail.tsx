@@ -56,7 +56,7 @@ import { useStill } from '../lib/motion'
 import { cardKind, KindGlyph } from './kinds'
 import { plainMarkdown, StatusPicker, titleOf } from './CardTable'
 import { PriorityGlyph, isSettled } from './status'
-import { openTarget } from '../lib/appLinks'
+import { openTarget, openWord } from '../lib/appLinks'
 import { DETAIL_BODY, DETAIL_TITLE, EYEBROW } from '../lib/typography'
 import { openLaunch } from '../lib/launch'
 import { openTerminalAndGo } from '../lib/terminal'
@@ -470,7 +470,24 @@ export function CardDetail({
                          whitespace-nowrap transition-colors duration-100 hit h-8 px-3 text-sm gap-2
                          bg-ink-800 border border-edge text-fg font-medium hover:bg-ink-700"
             >
-              Open <ArrowUpRight size={14} />
+              {/*
+                Named for where it goes, whenever this pane is also offering a
+                session.
+
+                A Claude Code session that opened a pull request carries the PR
+                as its `url`, so `openTarget` returns a github.com link and this
+                control — the prominent one, in the action bar — said `Open` and
+                went to GitHub, while the control that actually opens the session
+                is a differently-worded secondary button further up the pane.
+                Reported as "Open in Claude opens the wrong thing", and correctly.
+
+                Only when there is something to confuse it with: on an ordinary
+                Slack or GitHub row there is one `Open` and no ambiguity, and
+                putting a host name on every card would be noise bought with a
+                word.
+              */}
+              {sessionId && sessionLive ? openWord(app ?? href) : 'Open'}
+              <ArrowUpRight size={14} />
             </a>
           )}
           {/*

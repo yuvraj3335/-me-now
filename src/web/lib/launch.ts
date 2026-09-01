@@ -159,6 +159,33 @@ export const PERMISSION_MODES: ReadonlyArray<{ id: PermissionMode; label: string
 ]
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'bypassPermissions'
 
+/**
+ * Which model a session starts on.
+ *
+ * Aliases, not full names, and the list is the one `claude --help` documents on
+ * the installed version (2.1.252): "an alias for the latest model (e.g. 'fable',
+ * 'opus', or 'sonnet')". A full name like `claude-opus-4-5` pins a version that
+ * will be retired from under a picker somebody keeps for a year.
+ *
+ * `default` is the absence of the flag rather than a value for it — Claude Code
+ * chooses for itself, which respects whatever the operator configured. It is
+ * first because it is the honest resting state: Wake has no opinion about which
+ * model his work wants until he expresses one.
+ *
+ * Mirrored on the server in `src/server/claudecode/launch.ts`, which is what
+ * actually validates it; a picker cannot be the guard, because the request does
+ * not have to come from the picker.
+ */
+export type SessionModel = 'default' | 'opus' | 'sonnet' | 'haiku' | 'fable'
+export const SESSION_MODELS: ReadonlyArray<{ id: SessionModel; label: string }> = [
+  { id: 'default', label: 'Default' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
+  { id: 'fable', label: 'Fable' },
+]
+export const DEFAULT_SESSION_MODEL: SessionModel = 'default'
+
 export type Pack = {
   id: string
   template: string
@@ -351,6 +378,8 @@ type Basket = {
    */
   session: string | null
   permissionMode: PermissionMode
+  /** Which model a started session runs on. A standing preference, like the mode. */
+  model: SessionModel
   /**
    * What this composer was opened *about* — see `subjectOf`.
    *
@@ -431,9 +460,20 @@ const storedMode = (): PermissionMode => {
   }
 }
 
+/** The model, remembered the same way and for the same reason as the mode. */
+const MODEL_KEY = 'wake.launch.model'
+const storedModel = (): SessionModel => {
+  try {
+    const v = localStorage.getItem(MODEL_KEY)
+    return SESSION_MODELS.some(m => m.id === v) ? (v as SessionModel) : DEFAULT_SESSION_MODEL
+  } catch {
+    return DEFAULT_SESSION_MODEL
+  }
+}
+
 let basket: Basket = {
   open: false, items: [], templates: [], repoHint: null, title: null,
-  session: null, permissionMode: storedMode(), subject: '', draft: NO_DRAFT(),
+  session: null, permissionMode: storedMode(), model: storedModel(), subject: '', draft: NO_DRAFT(),
 }
 const listeners = new Set<() => void>()
 const set = (p: Partial<Basket>) => {
@@ -541,6 +581,11 @@ export const setLaunchSession = (id: string | null) => set({ session: id })
 export function setLaunchPermissionMode(mode: PermissionMode) {
   set({ permissionMode: mode })
   try { localStorage.setItem(MODE_KEY, mode) } catch { /* see storedMode */ }
+}
+
+export function setLaunchModel(model: SessionModel) {
+  set({ model })
+  try { localStorage.setItem(MODEL_KEY, model) } catch { /* see storedModel */ }
 }
 export const removeFromLaunch = (ref: string) => set({ items: basket.items.filter(i => i.ref !== ref) })
 
