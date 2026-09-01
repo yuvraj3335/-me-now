@@ -398,3 +398,76 @@ describe('on Sessions, a live session sorts to the top', () => {
     expect(bySessionActivity({ lastTs: T0 }, { lastTs: T0 - HOUR, live: true })).toBeGreaterThan(0)
   })
 })
+
+/**
+ * How far along a thing is decides where it sits, before anything else does.
+ *
+ * The desk was ordered by pile and then by `activity_at`, so status — the one
+ * fact a reader sets by hand — moved nothing. Measured on the live box: the two
+ * cards actually in progress were at positions five and seven of seventy-three,
+ * with sixty-odd things nobody had started above them. Work has grouped by
+ * status since it learned the five words, so the two surfaces were giving
+ * different answers about the same five.
+ */
+describe('the desk is ordered by how far along a thing is', () => {
+  const status = (group: string, s: string) =>
+    api.request(`/cards/${encodeURIComponent(group)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: s }),
+    })
+
+  test('in progress, then in review, then not started', async () => {
+    // Deliberately seeded in the *reverse* of the wanted order and with the
+    // newest activity on the least-started row, so recency alone would produce
+    // exactly the wrong list.
+    putCard({ id: 'c:1', source: 'github', group: 'g:not-started', ts: T0 - 1 * MINUTE })
+    putCard({ id: 'c:2', source: 'github', group: 'g:in-review', ts: T0 - 2 * MINUTE })
+    putCard({ id: 'c:3', source: 'github', group: 'g:in-progress', ts: T0 - 3 * MINUTE })
+
+    expect(await order(), 'the fixture is not in recency order to begin with')
+      .toEqual(['g:not-started', 'g:in-review', 'g:in-progress'])
+
+    await status('g:in-review', 'in_review')
+    await status('g:in-progress', 'in_progress')
+
+    expect(await order()).toEqual(['g:in-progress', 'g:in-review', 'g:not-started'])
+  })
+
+  test('recency still decides the order inside one status', async () => {
+    // The new term is a grouping, not a replacement: within a status the row
+    // something just landed on is still the one at the top.
+    putCard({ id: 'c:1', source: 'github', group: 'g:older', ts: T0 - 9 * MINUTE })
+    putCard({ id: 'c:2', source: 'github', group: 'g:newer', ts: T0 - 1 * MINUTE })
+    await status('g:older', 'in_progress')
+    await status('g:newer', 'in_progress')
+
+    expect(await order()).toEqual(['g:newer', 'g:older'])
+  })
+
+  test('a pin still outranks it', async () => {
+    // A pin is a standing instruction about one row; status is a fact about
+    // every row. The one asked for by hand wins.
+    putCard({ id: 'c:1', source: 'github', group: 'g:pinned', ts: T0 - 9 * MINUTE })
+    putCard({ id: 'c:2', source: 'github', group: 'g:doing', ts: T0 - 1 * MINUTE })
+    await status('g:doing', 'in_progress')
+    await api.request(`/cards/${encodeURIComponent('g:pinned')}/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned: true }),
+    })
+
+    expect((await order())[0]).toBe('g:pinned')
+  })
+
+  test('a settled card is not on the desk to be ordered at all', async () => {
+    // `done` and `wont_do` are the separate section: `pileOf` sends them to
+    // `hidden` and `groupedCards` drops them, so they are read through
+    // `GET /cards/done` rather than sorted to the bottom of this list.
+    putCard({ id: 'c:1', source: 'github', group: 'g:live', ts: T0 - 1 * MINUTE })
+    putCard({ id: 'c:2', source: 'github', group: 'g:settled', ts: T0 - 2 * MINUTE })
+    await status('g:settled', 'wont_do')
+
+    expect(await order(), 'a settled card stayed on the desk').toEqual(['g:live'])
+  })
+})

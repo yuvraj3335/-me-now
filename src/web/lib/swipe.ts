@@ -39,11 +39,19 @@ export const SWIPE_ENGAGE_PX = 12
  * How much more horizontal than vertical a gesture has to be to count as one.
  *
  * A finger sliding across a phone travels a real arc; requiring a pure
- * horizontal line would make the swipe fail for most humans. 1.5 is loose
- * enough for a thumb and tight enough that a scroll begun with a slight lean
- * never opens anything.
+ * horizontal line would make the swipe fail for most humans.
+ *
+ * 1.5 was too tight, and it is the reason the drawer was reported as *hard to
+ * open* rather than as broken. A thumb anchored at the bottom-right of a phone
+ * does not travel along a row, it travels along the arc its joint allows: a
+ * deliberate 60px swipe that drifts 40px down the screen is 1.5 exactly, which
+ * this rejected, and every one of those became a page scroll instead. 1.2 still
+ * refuses the case this defends against — a *vertical* scroll begun with a
+ * lean, where the vertical component is the larger one and `axisFor` answers
+ * `y` on the tie regardless — because that gesture is not 1.2 horizontal, it is
+ * less than 1.
  */
-export const SWIPE_AXIS_RATIO = 1.5
+export const SWIPE_AXIS_RATIO = 1.2
 
 /**
  * One action's width.

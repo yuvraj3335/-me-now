@@ -11,6 +11,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { axisFor, SWIPE_AXIS_RATIO } from '../src/web/lib/swipe'
 
 const walk = (dir: string): string[] =>
   readdirSync(dir).flatMap(entry => {
@@ -1552,6 +1553,33 @@ describe('a row can be acted on without being opened', () => {
       expect(read(f), `${f}: a swipe action is hidden behind opacity`)
         .not.toMatch(/opacity-0\s+group-hover:opacity-100/)
     }
+  })
+
+  test('the drawer is revealed by a transform, not by its own width', () => {
+    /*
+     * `width` was the animation: it was written from `dx` on every pointermove,
+     * and width is a layout property — so each frame of a swipe re-laid-out the
+     * row, its cells and the strip of buttons inside it, on the main thread,
+     * while the finger was still moving. Reported as "it's not smooth", and it
+     * is the one part of that complaint the code could be blamed for.
+     *
+     * The box is a constant size now and the strip inside it is moved with a
+     * transform, which the compositor can do without laying anything out.
+     */
+    expect(swipe, 'the drawer went back to animating its own width')
+      .not.toMatch(/style=\{\{ width: shown \}\}/)
+    expect(swipe, 'the revealed strip is no longer moved with a transform')
+      .toMatch(/transform: `translate3d\(\$\{width - shown\}px, 0, 0\)`/)
+  })
+
+  test('a thumb travelling in an arc still counts as a swipe', () => {
+    // 1.5 rejected a deliberate 60px swipe that drifted 40px down — the arc a
+    // thumb anchored at the corner of a phone actually makes — and every one of
+    // those became a page scroll. The tie still goes to the page: `axisFor`
+    // answers `y` whenever the vertical component is the larger one.
+    expect(SWIPE_AXIS_RATIO, 'the axis ratio tightened again').toBeLessThanOrEqual(1.2)
+    expect(axisFor(-25, 20), 'a thumb arc stopped registering as a swipe').toBe('x')
+    expect(axisFor(-6, 18), 'a leaning scroll started opening drawers').toBe('y')
   })
 
   test('the gesture works with a trackpad as well as a thumb', () => {

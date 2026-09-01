@@ -353,17 +353,37 @@ function groupedCards(opts: { hidden?: boolean } = {}) {
   }
 
   /*
-   * Pinned, then pile, then the newest activity.
+   * Pinned, then how far along it is, then pile, then the newest activity.
    *
-   * The third term is the whole of change two: a row moves to the top of its
-   * list when anything lands on it — a Slack reply, a mail reply, another
-   * Sentry event, another turn in a session, a session going live — because all
-   * five of those feed `activity_at` and nothing else decides this order. The
-   * first two terms are untouched: a pin is a standing instruction and the pile
-   * is where a card belongs, and recency does not outrank either.
+   * **Status is the new second term and it is the one a reader asked for.**
+   * The desk was ordered by pile and recency alone, so the two cards actually
+   * in progress sat at positions five and seven of seventy-three, between
+   * things nobody had started — measured on this box. Work has grouped by
+   * status since it learned the five (`LIVE_GROUPS` there is this same order),
+   * and the desk reading differently from Work about the same five words is
+   * two answers to one question.
+   *
+   * `in_progress` first because it is what he is holding, `in_review` next
+   * because it is waiting on someone else, `not_started` last because it is
+   * the biggest and the least urgent. `done` and `wont_do` are in the map for
+   * completeness and never reach it: `pileOf` sends a settled card to `hidden`
+   * and the `continue` above drops it from this list entirely — they are read
+   * through `GET /cards/done`, which is the separate section they belong in.
+   *
+   * A pin still outranks it. A pin is a standing instruction about one row and
+   * status is a fact about every row, so the one that was asked for by hand
+   * wins. Pile and `activity_at` keep their jobs underneath: within a status,
+   * someone waiting on you still comes first, and a row still rises when
+   * anything lands on it — a Slack reply, another Sentry event, a session
+   * going live.
    */
+  const STATUS_RANK: Record<string, number> = {
+    in_progress: 0, in_review: 1, not_started: 2, done: 3, wont_do: 4,
+  }
+
   out.sort((a, b) =>
     Number(b.state?.pinned ?? 0) - Number(a.state?.pinned ?? 0) ||
+    (STATUS_RANK[a.status] ?? 9) - (STATUS_RANK[b.status] ?? 9) ||
     (RANK[a.pile] ?? 9) - (RANK[b.pile] ?? 9) ||
     b.activity_at - a.activity_at,
   )

@@ -16,9 +16,17 @@
  * from under the table — the first cell's title slides across the nav rail and
  * the page grows a horizontal scrollbar, which is the one thing this product
  * measures itself against. So the actions live in a window pinned to the row's
- * right edge whose *width* tracks the finger. The reveal is identical to the eye
- * — the panel's left edge follows the thumb, pixel for pixel — and it cannot
- * paint outside the row it belongs to under any container.
+ * right edge, and the strip of buttons *inside* that window is what tracks the
+ * finger. The reveal is identical to the eye — the leading edge follows the
+ * thumb, pixel for pixel — and it cannot paint outside the row it belongs to
+ * under any container.
+ *
+ * The window's own size is fixed and the strip moves by `transform`, which is
+ * the difference between a swipe that follows a thumb and one that does not.
+ * The width used to be the animation, written from `dx` on every `pointermove`;
+ * width is a layout property, so every frame of every swipe re-laid-out the
+ * row, its cells and the buttons, on the main thread, while the finger was
+ * still moving. Reported as "it's not smooth", and correctly.
  *
  * **Nothing is rendered while the drawer is shut.** Not at `opacity: 0`, not at
  * `width: 0` with buttons inside it. `group-hover:opacity-100` on a phone is a
@@ -454,6 +462,10 @@ export function SwipeDrawer({
   // A drawer that shuts while its picker is up must not reopen holding it.
   useEffect(() => { if (dx === 0) setPicking(false) }, [dx])
 
+  // Nothing at rest, and the contract in `ui-contract.test.ts` is why: a drawer
+  // that is always present is a control a touch device can never reveal and can
+  // always press. Leaving it mounted to save the first frame's layout was tried
+  // and is not worth that.
   if (dx === 0) return null
 
   const shown = Math.min(width, Math.max(0, -dx))
@@ -567,9 +579,26 @@ export function SwipeDrawer({
       /* See the picker branch above: a drawer action must not also open the
          row it was pressed on. */
       onClick={e => e.stopPropagation()}
-      style={{ width: shown }}
+      /*
+       * A fixed box that the actions slide *inside*, rather than a box whose
+       * width is the animation.
+       *
+       * `width` changed on every pointermove, and width is a layout property:
+       * each frame of a swipe re-laid-out the row, its cells and the strip of
+       * buttons inside it, on the main thread, while the finger was still
+       * moving. That is the whole of "it is not smooth". The box is a constant
+       * size now and the strip inside it is moved with a transform, which the
+       * compositor can do without laying anything out again.
+       *
+       * The box is only here while the row is open at all, so a constant width
+       * costs a closed row nothing — see the `return null` above.
+       */
+      style={{ width }}
     >
-      <div className="absolute inset-y-0 right-0 flex items-stretch" style={{ width }}>
+      <div
+        className="absolute inset-y-0 right-0 flex items-stretch"
+        style={{ width, transform: `translate3d(${width - shown}px, 0, 0)` }}
+      >
         <SwipeButton tone="ok" label="Done" onClick={act(onDone)} />
         {status && (
           <SwipeButton tone="ink" label="Status" onClick={() => setPicking(true)} />
