@@ -276,6 +276,34 @@
     --color-on-accent:   #14141a;  /* 8.5:1 on the accent */
     --color-scrim:       #08080a;
 
+    /*
+      Liquid glass. Floating surfaces only — see `.glass` for the rule.
+
+      Four values rather than one, because a translucent panel is a material and
+      not a colour: what it is tinted with, how far it blurs what is behind it,
+      how much it lifts that colour back up, and the bright edge along its top.
+
+      `tint` is 0.78 and not lower, and that number is a contrast floor rather
+      than a taste. #27 put every text token above 4.5:1 against its own ground,
+      and a panel you can see through has no fixed ground. So it was measured
+      through the composite rather than reasoned about: at 0.78, `fg` on this
+      panel is **17.2:1** over the page and **11.3:1** with the amber accent
+      directly behind it, which is the brightest thing on the desk and therefore
+      the worst case. Both clear the floor with room. Thin the tint much further
+      and that stops being true, so this number is not free to drift.
+
+      The blur is what makes the rest safe: 24px is enough that whatever shows
+      through is a low-frequency wash rather than legible shapes, so text never
+      sits on an edge. `saturate` is the part that makes it read as glass and not
+      as fog — blurring alone greys the colour out, and lifting it back is what
+      Apple's own material does.
+    */
+    --glass-tint: rgb(16 16 20 / 0.78);
+    --glass-blur: 24px;
+    --glass-sat:  180%;
+    /* The specular line along the top edge. One pixel, inset, never a border. */
+    --glass-edge: rgb(255 255 255 / 0.10);
+
     --color-src-slack:  #c2a3e8;
     --color-src-github: #9db1ce;
     --color-src-gmail:  #e29d99;
@@ -346,6 +374,16 @@
     --color-on-accent:   #241703;  /* 8.1:1 on the accent */
     --color-scrim:       #14141a;
 
+    /* Liquid glass, light. Same four values, inverted ground — see the dark
+       block for what each one is and why `tint` cannot go much thinner. The
+       specular edge is near-white here because the panel is lighter than the
+       page rather than darker, so the highlight sits on top of it rather than
+       inside it. */
+    --glass-tint: rgb(255 255 255 / 0.80);
+    --glass-blur: 24px;
+    --glass-sat:  180%;
+    --glass-edge: rgb(255 255 255 / 0.70);
+
     --color-src-slack:  #6d3fa0;
     --color-src-github: #3c5680;
     --color-src-gmail:  #a83b36;
@@ -398,6 +436,12 @@
       --color-accent-soft: #fdf1dd;
       --color-on-accent:   #241703;
       --color-scrim:       #14141a;
+
+      /* Liquid glass, light — the same values as the explicit light block. */
+      --glass-tint: rgb(255 255 255 / 0.80);
+      --glass-blur: 24px;
+      --glass-sat:  180%;
+      --glass-edge: rgb(255 255 255 / 0.70);
 
       --color-src-slack:  #6d3fa0;
       --color-src-github: #3c5680;
@@ -765,6 +809,84 @@
   */
   .raised {
     box-shadow: 0 1px 2px var(--color-shadow), 0 12px 28px -10px var(--color-shadow);
+  }
+
+  /*
+    Liquid glass, and the rule that keeps it from becoming glassmorphism.
+
+    This reverses "no glass", which stood for two releases and which the comment
+    above `.raised` still argued for. It was asked for by name — see DECISIONS
+    #52 — and the ban is gone rather than worked around.
+
+    **It goes on floating surfaces only.** A floating surface is one that sits
+    *over* content and is dismissible: a sheet, a menu, a popover, the command
+    palette, the toast bar, the phone tab bar, a sticky header. Content itself
+    is never glass — not a card, not a table row, not the page. That is the
+    whole difference between the material doing something and a product that has
+    been dipped in it: glass reads as depth precisely because most of the screen
+    is not glass. Nine surfaces used `backdrop-blur` the last time this was
+    tried, over a near-black page, and it read as smear.
+
+    **The edge is a highlight, not a border.** `inset 0 1px 0` along the top only
+    — that is the specular line a real pane catches, and it is what stops a
+    translucent panel looking like a hole. Panels keep their `border-edge` as
+    well; the highlight sits inside it.
+
+    **`-webkit-` is not optional.** iOS Safari has never shipped the unprefixed
+    property, and this product is read on a phone.
+
+    **And it degrades to the opaque token.** Firefox with the pref off, an old
+    WebView, a device that refuses the filter under memory pressure: without the
+    fallback the panel is 78% transparent with no blur, which is not a softer
+    version of this, it is unreadable text over live content. `@supports` makes
+    that a different rendering rather than a broken one.
+  */
+  .glass {
+    background: var(--glass-tint);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-edge),
+      0 1px 2px var(--color-shadow),
+      0 12px 28px -10px var(--color-shadow);
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass { background: var(--color-ink-850); }
+  }
+
+  /*
+    The one place the material is the whole point rather than a treatment.
+
+    A scrim's job is to say "the thing behind this is still there and you are not
+    in it". A flat 70% black says the first half and loses the second. Blurring
+    it keeps the shape of the desk visible underneath while making every word on
+    it unreadable, which is exactly the statement the surface is trying to make.
+
+    Lighter than the old scrim on purpose — the blur is doing the work that the
+    opacity used to do alone, so stacking both would just be a darker room.
+  */
+  .glass-scrim {
+    background: color-mix(in srgb, var(--color-scrim) 55%, transparent);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    backdrop-filter: blur(12px) saturate(120%);
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .glass-scrim { background: color-mix(in srgb, var(--color-scrim) 70%, transparent); }
+  }
+
+  /*
+    Motion is not free on a translucent surface.
+
+    `backdrop-filter` re-samples what is behind the element on every frame it is
+    composited, so a glass panel that is also animating its transform is the one
+    combination that can drop frames on a phone. Reduced motion is already a
+    request to stop paying for effects; this makes it a real one.
+  */
+  @media (prefers-reduced-motion: reduce) {
+    .glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
+    .glass-scrim { -webkit-backdrop-filter: none; backdrop-filter: none; }
   }
 
   /*

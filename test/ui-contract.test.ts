@@ -304,14 +304,95 @@ describe('the console does not become a feed again', () => {
     }
   })
 
-  test('there is no glass anywhere', () => {
-    // Elevation is a 1px edge on a flat surface. Nine sites used backdrop-blur;
-    // over a near-black page it reads as smear, and over an off-white one as
-    // nothing at all.
+  test('glass is a material with a rule, not a coat of paint', () => {
+    /*
+     * REPLACES 'there is no glass anywhere'.
+     *
+     * That test banned `backdrop-blur` outright, on sound reasoning about the
+     * last attempt: nine surfaces used it, over a near-black page it read as
+     * smear, and over an off-white one as nothing at all. It was asked for again
+     * by name and the ban is lifted — see DECISIONS #52.
+     *
+     * What the old rule was really protecting is not "no translucency", it is
+     * "most of the screen is not translucent". Glass reads as depth precisely
+     * because content is solid underneath it. So the ban is replaced by the
+     * distinction the last attempt did not make:
+     *
+     *   * **floating surfaces may be glass** — a sheet, a menu, the palette, the
+     *     toast, the phone tab bar, a sticky header. Things that sit *over*
+     *     content and can be dismissed.
+     *   * **content may never be glass** — not a card, not a table row, not the
+     *     page. That is the line, and it is what stops this becoming the
+     *     whole-product glassmorphism pass that was refused twice.
+     *
+     * Enforced by requiring the material to come from the two shared classes
+     * rather than from a utility spelled out per component: one place to change
+     * the blur, one place the fallback lives, and a `backdrop-blur-sm` sprinkled
+     * on a row is a lint failure rather than a design decision nobody made.
+     */
     for (const f of tsx) {
-      expect(read(f), `${f}: reintroduced a blurred translucent surface`)
+      expect(codeOf(f), `${f}: reached for backdrop-blur directly instead of \`glass\``)
         .not.toMatch(/backdrop-blur/)
     }
+
+    const css = read('src/web/styles.css')
+    expect(css, 'the glass material is gone').toMatch(/^\s*\.glass \{/m)
+    expect(css, 'the scrim material is gone').toMatch(/^\s*\.glass-scrim \{/m)
+
+    // iOS Safari has never shipped the unprefixed property, and this product is
+    // read on a phone. Losing the prefix means no glass on the one device.
+    expect(css, 'the webkit prefix went, which is the phone losing the effect')
+      .toMatch(/-webkit-backdrop-filter: blur/)
+
+    // And it has to degrade to something readable rather than to 78% transparent
+    // text over live content.
+    expect(css, 'glass no longer falls back to an opaque surface')
+      .toMatch(/@supports not \(\(backdrop-filter[\s\S]{0,200}var\(--color-ink-850\)/)
+
+    // The tokens exist in every theme, like every other token in this file.
+    for (const block of [":root[data-theme='dark'] {", ":root[data-theme='light'] {"]) {
+      const at = css.indexOf(block)
+      const body = css.slice(at, css.indexOf('\n  }', at))
+      for (const t of ['--glass-tint', '--glass-blur', '--glass-sat', '--glass-edge']) {
+        expect(body, `${t} is missing from ${block}`).toContain(`${t}:`)
+      }
+    }
+  })
+
+  test('content is not glass', () => {
+    /*
+     * The half of the rule that a component can quietly break.
+     *
+     * `glass` on a row, a card or the page turns the product into the thing
+     * DECISIONS refused twice — and it would not look obviously wrong in the
+     * commit that did it, because one translucent row over a solid page reads
+     * fine. It is the twentieth that reads as smear.
+     *
+     * So the class is pinned to a list of surfaces, and adding a surface to that
+     * list is a deliberate edit to this test rather than a className somebody
+     * typed. Every one of these sits over content and is dismissible or fixed;
+     * none of them scrolls with the list.
+     */
+    const ALLOWED: Array<[string, string]> = [
+      ['src/web/components/primitives.tsx', 'the sheet panel and the menu'],
+      ['src/web/components/palette.tsx', 'the command palette'],
+      ['src/web/components/toast.tsx', 'the toast bar'],
+      ['src/web/App.tsx', 'the phone tab bar'],
+      ['src/web/components/CardTable.tsx', "the desk's sticky header"],
+    ]
+    const allowed = new Set(ALLOWED.map(([f]) => f))
+
+    for (const f of tsx) {
+      const uses = /className=[^\n]*\bglass(-scrim)?\b/.test(codeOf(f))
+      if (uses && !allowed.has(f)) {
+        throw new Error(`${f}: glass on a surface that is not on the floating list`)
+      }
+    }
+
+    // And the desk's rows, which are the content this rule exists to protect.
+    const table = read('src/web/components/CardTable.tsx')
+    const row = table.slice(table.indexOf('export function CardRow('), table.indexOf('export function CardLine('))
+    expect(row, 'a desk row became glass').not.toMatch(/\bglass\b/)
   })
 
   test('no structural edge is hard-coded against one theme', () => {

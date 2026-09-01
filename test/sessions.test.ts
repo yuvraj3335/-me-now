@@ -256,6 +256,66 @@ describe('which repository a session is in', () => {
   })
 })
 
+describe("a subagent's transcript is not a session, and is not orphaned either", () => {
+  /*
+   * `~/.claude/projects` invites exactly the wrong fix, so both halves are
+   * pinned here.
+   *
+   * Measured on this box: of 545 `.jsonl` files only 113 are sessions, at
+   * `<project>/<id>.jsonl`. The other 432 are `<project>/<id>/subagents/
+   * agent-*.jsonl` — the private transcripts of subagents spawned inside one
+   * session — and some of those have `subagents/` of their own.
+   *
+   * Read as a raw count that looks like "Wake can only see a fifth of your
+   * history", and the obvious response is to recurse. Recursing would put five
+   * rows on the Sessions page for one conversation, none of them resumable and
+   * none of them anything he started. Same rule `parseSessionTurns` keeps when
+   * it drops `isSidechain` records (DECISIONS #40).
+   *
+   * The directory still has to be reached for deletion, though, or every delete
+   * leaves a subagent tree behind. That is the second test.
+   */
+  const project = flatten('/Users/me/work/nested')
+  const parent = uuid(700)
+
+  beforeAll(() => {
+    write(project, parent, transcript('/Users/me/work/nested', 'parent'))
+    // The shape Claude Code actually writes: a directory named for the session,
+    // beside the session's own transcript.
+    mkdirSync(`${CLAUDE_PROJECTS_DIR}/${project}/${parent}/subagents`, { recursive: true })
+    writeFileSync(
+      `${CLAUDE_PROJECTS_DIR}/${project}/${parent}/subagents/agent-abc123.jsonl`,
+      transcript('/Users/me/work/nested', 'a subagent'),
+    )
+  })
+
+  test('the list does not recurse into it', () => {
+    const ids = listAllSessions({ windowDays: 3650 }).map(s => s.id)
+    expect(ids, 'the parent session went missing').toContain(parent)
+    expect(
+      ids.filter(id => id.startsWith('agent-')),
+      'a subagent transcript is being listed as a session',
+    ).toEqual([])
+  })
+
+  test('deleting the session takes its subagents with it', () => {
+    const sub = `${CLAUDE_PROJECTS_DIR}/${project}/${parent}/subagents/agent-abc123.jsonl`
+    expect(existsSync(sub), 'the fixture did not write a subagent transcript').toBe(true)
+
+    // The sibling directory is in the list precisely so this works.
+    expect(sessionFilePaths(parent), 'the session directory is not a delete target')
+      .toContain(`${CLAUDE_PROJECTS_DIR}/${project}/${parent}`)
+
+    const r = deleteSession(parent)
+    expect(r.error, 'the delete refused').toBeUndefined()
+    expect(existsSync(sub), 'a subagent transcript survived its session').toBe(false)
+    expect(
+      existsSync(`${CLAUDE_PROJECTS_DIR}/${project}/${parent}.jsonl`),
+      'the transcript itself survived',
+    ).toBe(false)
+  })
+})
+
 describe('archiving a session', () => {
   const id = uuid(105)
 

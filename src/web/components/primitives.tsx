@@ -446,7 +446,7 @@ export function Menu<T extends string>({
           animate={{ opacity: 1, y: 0 }}
           transition={spring}
           className="fixed z-[55] overflow-y-auto overscroll-contain py-1
-                     rounded-panel border border-edge bg-ink-850 raised"
+                     rounded-panel border border-edge glass"
         >
           {items.map(it => {
             const head = it.group && it.group !== lastGroup ? it.group : null
@@ -617,7 +617,7 @@ export function Sheet({
           style={{ paddingBottom: keyboard > 0 ? 0 : undefined }}
         >
           <motion.div
-            className="absolute inset-0 bg-scrim/70"
+            className="absolute inset-0 glass-scrim"
             initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
             exit={still ? undefined : { opacity: 0 }}
             transition={{ duration: 0.18 }}
@@ -638,7 +638,7 @@ export function Sheet({
               goes. Every other height in this app was already `dvh`; this was
               the one that was not.
             */
-            className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} bg-ink-850
+            className={`relative w-full ${wide ? 'sm:max-w-[760px]' : 'sm:max-w-[460px]'} glass
                        border border-edge sm:rounded-panel rounded-t-panel
                        max-h-[88dvh] flex flex-col`}
             /*

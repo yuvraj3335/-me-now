@@ -37,7 +37,7 @@ export function ToastBar() {
                      z-[70] flex justify-center px-4 pointer-events-none"
         >
           <div className="pointer-events-auto flex items-center gap-3 max-w-[min(30rem,100%)]
-                          rounded-panel bg-ink-850 border border-edge
+                          rounded-panel glass border border-edge
                           pl-4 pr-1.5 py-1.5">
             <span className="text-sm text-fg-dim truncate">{t.text}</span>
             {t.action && (

@@ -359,7 +359,7 @@ export function TableHead({
        comes after a `<thead>` — so an open drawer painted its solid 264px
        block over Title / Status / Kind / Due as its row scrolled up under
        the header. */
-    <thead className="sticky top-0 z-20 bg-ink-900">
+    <thead className="sticky top-0 z-20 glass">
       <tr className="border-b border-edge">
         <th className={HEAD} scope="col">Title</th>
         <th className={HEAD} scope="col">Status</th>

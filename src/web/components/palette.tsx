@@ -120,7 +120,7 @@ export function Palette({
       {open && (
         <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4">
           <motion.div
-            className="absolute inset-0 bg-scrim/70"
+            className="absolute inset-0 glass-scrim"
             initial={still ? false : { opacity: 0 }} animate={{ opacity: 1 }}
             exit={still ? undefined : { opacity: 0 }}
             transition={{ duration: 0.14 }}
@@ -135,7 +135,7 @@ export function Palette({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={still ? undefined : { opacity: 0, y: -6, scale: 0.99 }}
             transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-            className="relative w-full max-w-[560px] rounded-panel bg-ink-850
+            className="relative w-full max-w-[560px] rounded-panel glass
                        border border-edge overflow-hidden"
           >
             <div className="flex items-center gap-2 px-4 h-12 hairline">

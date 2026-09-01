@@ -301,7 +301,7 @@ export default function App() {
           instead — it reports 0 the moment it is `display: none`, which is
           exactly the answer wanted from `sm` up. See `navStrip`. */}
       <nav data-navbar
-        className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom bg-ink-900 border-t border-edge">
+        className="sm:hidden fixed bottom-0 inset-x-0 z-30 pad-bottom glass border-t border-edge">
         <div className="flex">
           {TABS.map(t => (
             <TabItem key={t.path} label={t.label} Icon={t.Icon} active={active.path === t.path}

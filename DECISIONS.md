@@ -2071,3 +2071,114 @@ are right on their own. The script refuses to run at all on a dirty tree —
 before the merge, before the backup — so the rollback can only ever undo its own
 checkout. Untracked files are deliberately not counted: agent litter in the
 working directory is the normal state of this box and is not work to protect.
+
+---
+
+## 52. Liquid Glass, asked for a second time and shipped
+
+**Reverses the "no glass" half of #43, and the `backdrop-blur` ban #30 put in
+`ui-contract.test.ts`.** He asked for it by name, was told the file said no
+twice, and said override the file. That is his call to make, and the honest way
+to take it is to delete the rule rather than to work around it.
+
+Worth being clear about what #43 got right before overturning it. The complaint
+that produced it was *"it's not smooth"*, and the causes were all motion: an
+offset in React state written sixty times a second, no spring on release, and a
+private copy of the drawer still doing layout per frame. Blur would have fixed
+none of that, and a translucent panel that re-renders every frame is a
+translucent panel that stutters. So the motion work stands, and this is built on
+top of it rather than instead of it.
+
+### What the last attempt got wrong, and what is different
+
+#30 banned `backdrop-blur` after nine surfaces used it and it read as smear over
+a near-black page and as nothing at all over an off-white one. That is a real
+observation and this pass would reproduce it exactly if it were applied the same
+way.
+
+The distinction that was missing is between **floating** and **content**:
+
+* A **floating** surface sits *over* content and is dismissible or fixed — a
+  sheet, a menu, the palette, the toast, the phone tab bar, a sticky header.
+  Six of them, and rarely more than one at a time.
+* **Content** is the desk, the rows, the cards, the page. None of it is glass.
+
+Glass reads as depth precisely because most of the screen is *not* glass. Nine
+translucent surfaces is not more of the effect, it is the effect cancelled — and
+that is what the last attempt discovered. So the ban is replaced by that line,
+and `ui-contract.test.ts` enforces it from the other side: the class may only
+appear in five named files, and a desk row carrying it is a test failure.
+
+### The four things that make it a material rather than a filter
+
+`.glass` and `.glass-scrim` are the only two places it is spelled, so there is
+one blur radius, one fallback and one thing to change.
+
+1. **Tint at 0.78, which is a contrast floor rather than a taste.** #27 put every
+   text token above 4.5:1 against its own ground, and a panel you can see through
+   has no fixed ground — so it was measured through the composite in a real
+   browser rather than argued about. `fg` on a glass panel is **17.2:1** over the
+   page and **11.3:1** with the amber accent directly behind it, which is the
+   brightest thing the desk can put there. Both clear the floor with room.
+   Thinner than 0.78 and that stops holding, so the number is not free to drift.
+2. **24px of blur, which is what makes the tint safe.** Enough that whatever
+   shows through is a low-frequency wash rather than legible shapes, so no line
+   of text ever sits across a hard edge.
+3. **`saturate(180%)`, which is the part that reads as glass and not as fog.**
+   Blurring alone greys colour out; lifting it back is what Apple's own material
+   does and it is the difference between a pane and a smudge.
+4. **A specular edge, `inset 0 1px 0` along the top only.** Not a border — panels
+   keep their `border-edge` and the highlight sits inside it. It is the line a
+   real pane catches, and without it a translucent panel looks like a hole
+   rather than a thing in front of another thing.
+
+### Three refusals inside it
+
+**`-webkit-backdrop-filter` is not optional.** iOS Safari has never shipped the
+unprefixed property, and this product is read on a phone at 7am. Dropping the
+prefix would mean the one device it exists for is the one device with no glass.
+
+**It degrades to the opaque token, not to nothing.** Firefox with the pref off,
+an old WebView, a device refusing the filter under memory pressure: without
+`@supports`, the panel is 78% transparent with no blur, which is not a softer
+version of this — it is unreadable text over live content. The fallback makes
+that a different rendering rather than a broken one.
+
+**Reduced motion turns it off.** `backdrop-filter` re-samples what is behind the
+element on every composited frame, so a glass panel that is also animating a
+transform is the one combination that can drop frames on a phone. "Reduce
+motion" is already a request to stop paying for effects; here it is a real one.
+
+### What is deliberately still not glass
+
+The desk. The rows. The cards. The page. Every input. Every button.
+
+If it still reads flatter than he wants, the next surface to consider is the
+detail pane — but that one is content wearing a panel's clothes, and it is the
+surface a person actually reads, so it is a decision rather than a sprinkle.
+
+## 53. A subagent's transcript is not a session, and was never lost
+
+Recorded because I reported it as broken and it was not.
+
+An audit noted that `sessionFiles()` walks one level deep while 432 of 545
+`.jsonl` files under `~/.claude/projects` sit deeper, and read that as Wake
+seeing a fifth of the history. Measured, the deeper files are all
+`<project>/<id>/subagents/agent-*.jsonl` — the private transcripts of subagents
+spawned *inside* one session, some with `subagents/` of their own.
+
+Recursing would put five rows on the Sessions page for one conversation, none of
+them resumable and none of them anything he started. It is the same rule
+`parseSessionTurns` already keeps by dropping `isSidechain` records (#40): a
+subagent's conversation is not a second conversation. **Depth-1 is correct, and
+it is now said out loud in the function rather than left looking accidental.**
+
+The half worth checking was deletion, and it already worked: `sessionFilePaths`
+returns `<project>/<id>` beside `<project>/<id>.jsonl`, and `rmSync` is
+recursive, so a delete takes the subagent tree with it. Verified against the real
+layout — every session-id directory on this box has its sibling transcript, and
+the only directories without one are the `memory/` folders, which are not
+sessions.
+
+Both halves have a test now. The finding was not a bug; the absence of a test
+was, because the behaviour looked accidental in both directions.

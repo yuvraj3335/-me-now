@@ -244,6 +244,24 @@ export function claudeProjectsReadable(): boolean {
  * Transcript files in the window, newest first. Nothing is opened here — a
  * readdir and a stat each — which is what lets `sessionExcerpt` look one up by
  * id over all of history without parsing two hundred transcripts to find it.
+ *
+ * **One level deep, deliberately, and this needs saying because the shape of
+ * `~/.claude/projects` invites the opposite.** Of 545 `.jsonl` files on this box
+ * only 113 sit at `<project>/<id>.jsonl`; the other 432 are two and four levels
+ * further down, under `<project>/<id>/subagents/agent-*.jsonl` — and a few of
+ * those have `subagents/` of their own.
+ *
+ * Those are not sessions. They are the private transcripts of subagents spawned
+ * *inside* one session, and recursing to collect them would put five rows on the
+ * Sessions page for one conversation, none of them resumable and none of them
+ * anything he started. It is the same rule `parseSessionTurns` already keeps
+ * when it drops `isSidechain` records (DECISIONS #40): a subagent's conversation
+ * is not a second conversation.
+ *
+ * The directory is still reached where it *should* be — `sessionFilePaths`
+ * returns `<project>/<id>` beside `<project>/<id>.jsonl`, so deleting a session
+ * takes its subagents with it rather than orphaning them. Both halves are pinned
+ * in `test/sessions.test.ts`.
  */
 export function sessionFiles(windowDays: number): SessionFile[] {
   let projects: string[]
