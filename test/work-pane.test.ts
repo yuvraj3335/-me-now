@@ -137,18 +137,48 @@ describe('the list is grouped, and the finished half is folded away', () => {
     expect(body).toMatch(/setParam\('wpage'/)
   })
 
-  test('the glyph is a switch, not a five-way cycle', () => {
-    // A cycle on the one control a thumb hits without aiming puts the fourth
-    // state four presses away and makes every mis-tap a thing to undo.
-    expect(body, 'the tick stopped remembering where the row came from')
-      .toMatch(/beforeDone\.get\(t\.id\) \?\? 'not_started'/)
-    expect(work, 'the previous status is no longer recorded on the way to done')
-      .toMatch(/if \(status === 'done'\) beforeDone\.set\(t\.id, was\)/)
+  test('the glyph is the same picker every other surface uses', () => {
+    /*
+     * REPLACES 'the glyph is a switch, not a five-way cycle'.
+     *
+     * The old test pinned a two-state toggle and a `beforeDone` map, on the
+     * reasoning that a five-step **cycle** puts the fourth state four presses
+     * away and makes every mis-tap something to undo. That reasoning is sound
+     * and it is not an argument against a picker: the picker shows the five at
+     * once, so no state is further away than any other, and the value is seen
+     * before it is written rather than after.
+     *
+     * What the toggle actually cost is why it is gone — one glyph with two
+     * behaviours depending which page it was drawn on. The identical chip on the
+     * desk opened a picker; here it silently sent `In review` to `Done`.
+     *
+     * The quick path the old comment was defending is still one motion. It is
+     * the swipe drawer's `Done`, asserted below.
+     */
+    const row = work.slice(work.indexOf('function TaskRow('), work.indexOf('function GoalList('))
+    expect(row, 'the task row went back to its own status control')
+      .toMatch(/<StatusPicker\s+value=\{task\.status\}/)
+    // The declaration and the prop, not the word: the note beside
+    // `setTaskStatus` quotes the old comment in full so the reasoning it
+    // carried is answered rather than deleted, and prose about history is not
+    // a control coming back.
+    expect(work, 'the tap-to-toggle came back')
+      .not.toMatch(/const toggleDone =|onToggle[=:]/)
+    expect(work, 'the tick is remembering a previous status again')
+      .not.toMatch(/beforeDone\.(set|get)\(/)
+
+    // One motion for the common case, which is what the toggle was for.
+    expect(row, 'the one-gesture Done went missing with the toggle')
+      .toMatch(/onDone=\{/)
   })
 
   test('a row is a status, a title and its meta', () => {
     const row = work.slice(work.indexOf('function TaskRow('), work.indexOf('function GoalList('))
-    expect(row, 'the row paints a status of its own again').toContain('<StatusChip')
+    // The chip is inside `StatusPicker` now rather than painted by this row.
+    // What is pinned is that the row draws exactly one status control and does
+    // not grow a second one of its own beside it.
+    expect(row, 'the row paints a status of its own again').not.toContain('<StatusChip')
+    expect(row, 'the row stopped showing a status at all').toContain('<StatusPicker')
     expect(row, 'a terminal came back onto every row in the list')
       .not.toContain('SquareTerminal')
   })

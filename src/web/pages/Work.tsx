@@ -61,7 +61,7 @@ import { STATUS_LABEL, STATUS_ORDER } from '../lib/types'
 import { StatusChip, StatusGlyph, StatusSlot, isSettled } from '../components/status'
 import { deadlineWords, shortDate, wallClock } from '../lib/time'
 import { SwipeDrawer, useSwipe } from '../components/swipe'
-import { PANE_MIN, useViewport } from '../components/CardTable'
+import { PANE_MIN, StatusPicker, useViewport } from '../components/CardTable'
 import { toast } from '../lib/toast'
 import {
   Button, DateTimePicker, Field, PageTitle, Pager, Segmented, Select, Sheet,
@@ -125,7 +125,7 @@ const GOAL_CHOICES = [
  * unticks to `Not started` — the honest default, and the one it names out loud
  * in the toast that follows.
  */
-const beforeDone = new Map<string, CardStatus>()
+
 
 /**
  * Put back a deleted task, field for field.
@@ -413,10 +413,6 @@ export function Work() {
   const setTaskStatus = async (t: Task, status: CardStatus) => {
     if (status === t.status) return
     const was = t.status
-    // Where it came from, so the tick can be unticked back to it rather than to
-    // a default. Recorded here rather than in `toggleDone` so the swipe's own
-    // `Done` — which is the same move by a different gesture — remembers too.
-    if (status === 'done') beforeDone.set(t.id, was)
     optimistic(s => {
       const x = s.tasks.find(i => i.id === t.id)
       if (x) x.status = status
@@ -430,17 +426,43 @@ export function Work() {
     void reload()
   }
 
-  /**
-   * The glyph, which is a switch and not a cycle.
+  /*
+   * The glyph used to be a switch, and it is a picker now. The reasoning it
+   * carried was right about the thing it was arguing against, and that thing is
+   * not what replaced it.
    *
-   * Done, or back to whatever it was before it was done — `Not started` when
-   * this tab has forgotten. The other three are reachable from the swipe's
-   * Status picker and from the read sheet, both of which show the five at once;
-   * a control that steps through five states one press at a time makes the
-   * fourth one four presses away and every mis-tap a state to undo.
+   * It said:
+   *
+   *   > Done, or back to whatever it was before it was done — `Not started`
+   *   > when this tab has forgotten. The other three are reachable from the
+   *   > swipe's Status picker and from the read sheet, both of which show the
+   *   > five at once; a control that steps through five states one press at a
+   *   > time makes the fourth one four presses away and every mis-tap a state
+   *   > to undo.
+   *
+   * Every word of that is a case against a **cycle**, and a cycle is not what a
+   * picker is. In a five-step cycle the fourth state costs four presses and each
+   * one commits; in the picker the five are on screen at once, none is further
+   * away than any other, and you see the value before it is written rather than
+   * after. The cost the comment was protecting against does not arrive.
+   *
+   * What the toggle cost instead, and why it had to go: it was a hidden two-
+   * state machine wearing a control that draws five. Tapping a chip reading
+   * `In review` sent it to `Done` with no warning, and the identical chip on the
+   * identical row on the desk opened a picker — one glyph, two behaviours,
+   * depending which page you were on. That is the complaint, and it is not
+   * fixable while the tap means something this narrow.
+   *
+   * **The quick path survives, and it is still one motion.** It moved from a tap
+   * to the swipe's `Done`, which was already there, already the same call, and
+   * already remembered where the task came from. So the common case costs one
+   * gesture, the other four cost a press and a pick, and nothing on this row now
+   * behaves differently from the same row on the desk.
+   *
+   * `beforeDone` went with it. It existed so an untick could land on the state a
+   * tick replaced; `setTaskStatus` already hands its own undo the exact previous
+   * value, which is the same fact with a shorter life and no map to keep.
    */
-  const toggleDone = (t: Task) =>
-    setTaskStatus(t, t.status === 'done' ? beforeDone.get(t.id) ?? 'not_started' : 'done')
 
   /** Delete, and a way back — see `recreateTask` for what a way back costs. */
   const removeTask = async (t: Task) => {
@@ -496,7 +518,7 @@ export function Work() {
     // pull request it was about.
     origin: cardByGroup.get(t.source_card_group ?? ''),
     selected: openKey === paneKey('task', t.id),
-    onToggle: toggleDone, onOpen: openRow,
+    onOpen: openRow,
     onStatus: setTaskStatus, onDelete: removeTask,
   })
 
@@ -1232,14 +1254,13 @@ export type TaskRowProps = {
   /** This is the row the pane is showing. */
   selected: boolean
   /** The glyph: Done, or back to where it came from. Not a five-way cycle. */
-  onToggle: (t: Task) => void
   onOpen: (t: Task) => void
   onStatus: (t: Task, s: CardStatus) => void
   onDelete: (t: Task) => void
 }
 
 function TaskRow({
-  task, goals, reminders, origin, selected, onToggle, onOpen, onStatus, onDelete,
+  task, goals, reminders, origin, selected, onOpen, onStatus, onDelete,
 }: TaskRowProps) {
   /*
    * `pan-y`, on every task row, which is the split every other row in the
@@ -1310,13 +1331,18 @@ function TaskRow({
         else on the row is within reach of the collar except the first few
         pixels of the title, which opens the row this chip is already on.
       */}
-      <button
-        onClick={e => { e.stopPropagation(); onToggle(task) }}
-        className="hit relative shrink-0"
-        aria-label={`Mark ${task.status === 'done' ? 'not done' : 'done'} — ${task.title}`}
-      >
-        <StatusChip status={task.status} />
-      </button>
+      {/*
+        The same picker the desk row and the detail pane use, rather than this
+        page's own tap-to-toggle. See the note beside `setTaskStatus` for why the
+        toggle's reasoning did not survive contact with the picker, and where the
+        one-motion `Done` it was protecting went.
+
+        `stopPropagation` still, and for the unchanged reason: setting a status
+        is not asking to read the task.
+      */}
+      <span className="shrink-0" onClick={e => e.stopPropagation()}>
+        <StatusPicker value={task.status} onChange={(s: CardStatus) => onStatus(task, s)} />
+      </span>
 
       <div className="min-w-0 grow cursor-pointer" onClick={() => onOpen(task)}>
         <div className={`text-base ${isSettled(task.status) ? 'text-fg-mute line-through' : 'text-fg'}`}>
