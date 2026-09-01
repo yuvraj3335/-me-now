@@ -1253,7 +1253,7 @@ export type TaskRowProps = {
   origin?: { title: string; url: string; sources: Array<{ source: keyof typeof SOURCE_LABEL }> }
   /** This is the row the pane is showing. */
   selected: boolean
-  /** The glyph: Done, or back to where it came from. Not a five-way cycle. */
+  /** Open this row in the pane. The glyph beside it is the shared status picker. */
   onOpen: (t: Task) => void
   onStatus: (t: Task, s: CardStatus) => void
   onDelete: (t: Task) => void

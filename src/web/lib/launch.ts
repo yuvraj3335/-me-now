@@ -629,9 +629,11 @@ export const resetLaunch = () => {
 /**
  * The basket with one hand-off's worth of state taken out of it.
  *
- * `permissionMode` deliberately survives — it is a standing preference, not
- * something this brief chose. Everything else that belongs to one brief goes,
- * including the draft and the subject that says which brief it was.
+ * `permissionMode` and `model` deliberately survive — they are standing
+ * preferences about how he works, not things this brief chose, and re-picking
+ * them on every hand-off is the kind of small tax that makes a control feel like
+ * paperwork. Everything else that belongs to one brief goes, including the draft
+ * and the subject that says which brief it was.
  */
 const clearLaunch = () =>
   set({

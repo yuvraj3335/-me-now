@@ -1791,6 +1791,14 @@ function RunPanel({
         running process was started with a model and cannot be moved to another
         one, so offering the control would be offering something that does
         nothing.
+
+        Five segments fit, and that was measured rather than assumed: the group
+        is **316px** at `text-sm`, against the 327 a 375px phone leaves inside
+        `pad-x`, and the document's `scrollWidth` still equals its `clientWidth`
+        — which is the rule this product actually holds itself to. Eleven pixels
+        is not much margin, so the number is written down here: a sixth alias, or
+        a longer word than `Default`, is the point at which this has to become a
+        `Menu` like the one on the `/sessions/new` composer.
       */}
       {!session && (
         <section className="py-4">
