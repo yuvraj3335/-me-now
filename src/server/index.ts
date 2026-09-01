@@ -117,6 +117,23 @@ app.get('/*', async c => {
 
 /* ------------------------------ scheduler -------------------------------- */
 
+/**
+ * How often the repository registry is re-read.
+ *
+ * It used to be read **once**, at boot, by `boot()` — there was no timer, no
+ * route and no expiry, so the branch and the uncommitted count a repository
+ * picker showed were as old as the process. Frequent restarts from the deploy
+ * timer were the only thing hiding it; on a quiet week the numbers would be days
+ * stale. Observed directly: the cache said `wake` had 15 uncommitted files
+ * several minutes after they had been committed and the real answer was 0.
+ *
+ * Five minutes rather than every poll, because a rescan shells out to `git` once
+ * per repository and the answer only changes when he is working — at which
+ * point he is the one making it change, and a five-minute-old branch name has
+ * never been the thing that misled anybody.
+ */
+const REGISTRY_RESCAN_MS = 5 * 60_000
+
 function every(ms: number, label: string, fn: () => Promise<unknown>) {
   const tick = async () => {
     try { await fn() } catch (e) { console.error(`${label} failed:`, (e as Error).message) }

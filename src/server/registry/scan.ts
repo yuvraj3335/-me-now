@@ -332,7 +332,27 @@ export function scanRepo(repoPath: string): Repo {
     }
   }
 
-  const status = sh(repoPath, ['git', 'status', '--porcelain'])
+  /*
+   * `dirty` is **tracked** changes, and the flag is the whole finding.
+   *
+   * This was bare `git status --porcelain`, whose default counts untracked
+   * paths as well — collapsing an untracked directory to one line, which is its
+   * own kind of wrong. Measured across the workspace: `truto` 37, `truto-app`
+   * 37, `wake` 4, and `--untracked-files=no` **0 for every repository on the
+   * box**. There was not one uncommitted tracked change anywhere. All 78 of
+   * those lines were agent debris — QA reports, `.playwright-mcp/`, and 27
+   * screenshots in `truto` alone, which expand to 327 under `-uall`.
+   *
+   * So the picker said "37 dirty" beside a repository with nothing uncommitted
+   * in it. Arithmetically correct, semantically the opposite of what a person
+   * reads it as, and on the one control where the number is supposed to answer
+   * "is there work in progress here".
+   *
+   * `-uno` is the number that answers that question. An untracked file is also
+   * the one thing git cannot lose in a merge or a checkout, so it is not work at
+   * risk; a modified tracked file is.
+   */
+  const status = sh(repoPath, ['git', 'status', '--porcelain', '--untracked-files=no'])
   const dirty = status ? status.split('\n').filter(Boolean).length : 0
 
   let ahead = 0

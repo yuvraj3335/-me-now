@@ -496,11 +496,22 @@ function anchorFor(el: HTMLElement): PickerAt {
  * still press the focused row the way they do on any button.
  */
 export function StatusPicker({
-  value, onChange, className = '',
+  value, onChange, className = '', of,
 }: {
   value: CardStatus
   onChange: (s: CardStatus) => void
   className?: string
+  /**
+   * What this control is the status *of*, for a reader who cannot see the row.
+   *
+   * On the desk the picker sits in a table cell with a row header beside it, so
+   * the column and the title are already announced and the bare word is enough.
+   * On Work it is a list, and twenty of these announcing "Status — Not started"
+   * with nothing to tell them apart is a list you cannot navigate. The old
+   * tap-toggle this replaced named its row; nothing should have got worse in
+   * that direction on the way past.
+   */
+  of?: string
 }) {
   const [open, setOpen] = useState(false)
   const [at, setAt] = useState<PickerAt | null>(null)
@@ -595,7 +606,7 @@ export function StatusPicker({
         /* The word is printed on the chip, but it is printed *inside* a control
            whose accessible name would otherwise be that word alone — `Not
            started` says nothing about what pressing it does. */
-        aria-label={`Status — ${STATUS_LABEL[value]}`}
+        aria-label={of ? `Status — ${STATUS_LABEL[value]} — ${of}` : `Status — ${STATUS_LABEL[value]}`}
         title={`Status — ${STATUS_LABEL[value]}`}
         className="hit relative inline-flex items-center gap-0.5 min-w-0 max-w-full
                    rounded-full transition-colors duration-100 hover:bg-ink-800"

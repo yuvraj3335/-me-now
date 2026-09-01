@@ -54,7 +54,7 @@
 import { animate, motion, useMotionValue, useTransform, type MotionValue } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  axisFor, clampSwipe, elasticSwipe, openSwipeKey, setOpenSwipe, snapSwipe,
+  axisFor, clampSwipe, openSwipeKey, setOpenSwipe, snapSwipe,
   SWIPE_ENGAGE_PX, SWIPE_SPRING, swipeWidth, useOpenSwipe, type SwipeAxis,
 } from '../lib/swipe'
 import { statusColor, statusWash } from './status'
@@ -201,10 +201,31 @@ export function useSwipe(
   const settle = useCallback((target: number) => {
     if (running.current?.to === target) return
     running.current?.stop()
+    running.current = null
     if (target !== 0) setLive(true)
     const ctl = animate(offset, target, {
       ...SWIPE_SPRING,
-      onUpdate: v => { dxRef.current = v },
+      onUpdate: v => {
+        dxRef.current = v
+        /*
+         * Unmount on what is on screen, not on `onComplete`.
+         *
+         * The spring is a touch under critically damped, so a flick-close
+         * crosses zero within about 18ms and then spends the rest of its life
+         * oscillating by a pixel or two in a range the drawer's own transform
+         * clamps to "fully hidden". Waiting for `onComplete` therefore kept the
+         * drawer mounted for ~340ms after it looked shut — and it is an
+         * `absolute` 264px box with `onClick={stopPropagation}` on it, over a
+         * 343px row. Measured: tapping a row's title within a third of a second
+         * of closing it did nothing, and on the phone list the second tap of a
+         * deliberate double-tap-to-peek was eaten.
+         *
+         * `v >= 0` is exactly the condition under which the strip is drawn fully
+         * hidden, so unmounting there is invisible and gives the row its clicks
+         * back on the frame it looks shut.
+         */
+        if (target === 0 && v >= 0) setLive(false)
+      },
       onComplete: () => {
         running.current = null
         dxRef.current = target
@@ -214,9 +235,21 @@ export function useSwipe(
     running.current = { stop: () => ctl.stop(), to: target }
   }, [offset])
 
-  // A row that unmounts mid-spring must not leave one running against a motion
-  // value nothing is reading any more.
-  useEffect(() => () => { running.current?.stop() }, [])
+  /**
+   * A row that unmounts mid-spring must not leave one running against a motion
+   * value nothing is reading any more.
+   *
+   * `running.current` is cleared as well as stopped. `stop()` fires neither
+   * `onUpdate` nor `onComplete`, so without this the ref keeps a dead controller
+   * — and `settle`'s `running.current?.to === target` early-return then reads it
+   * and skips a spring that should have run. In StrictMode that happens on every
+   * mount: this effect's cleanup stops the `settle(0)` the sync effect just
+   * started, and the re-run then sees a stale `{ to: 0 }` and does nothing.
+   */
+  useEffect(() => () => {
+    running.current?.stop()
+    running.current = null
+  }, [])
 
   const from = useRef<{ x: number; y: number; base: number } | null>(null)
   const axis = useRef<SwipeAxis>('undecided')
@@ -227,7 +260,21 @@ export function useSwipe(
   /** A wheel gesture is in flight: no finger to read, so it says so itself. */
   const wheeling = useRef(false)
 
-  const close = useCallback(() => { setOpenSwipe(null); put(0) }, [put])
+  /**
+   * Shut it, on a spring, the way a finger-release shuts it.
+   *
+   * This used to be `put(0)` — a teleport from `-width` to `0` in one `set`.
+   * Two things went wrong with that. The drawer vanished instead of sliding
+   * shut, which is what the docblock at the top of this file promises it does.
+   * And `setOpenSwipe(null)` then flips `open`, so the sync effect below fires
+   * `settle(0)`, and framer seeds a spring with `value.getVelocity()` — which
+   * after an instantaneous 264px jump reads as **8800 px/s**. Measured: the
+   * value overshot to +133px and took 409ms to come back, all of it invisible,
+   * all of it written into `dxRef`. A second swipe on that row inside ~160ms
+   * read `base` from that ref and needed 133px of travel before the drawer
+   * moved at all, which is a gesture that feels dead for no reason on screen.
+   */
+  const close = useCallback(() => { setOpenSwipe(null); settle(0) }, [settle])
 
   // The store decides which row is open; the offset follows it. That is what
   // lets one row opening close another without every row watching every other.
@@ -342,7 +389,7 @@ export function useSwipe(
       idle = setTimeout(end, 120)
       if (travelled < SWIPE_ENGAGE_PX) return
 
-      const next = elasticSwipe(dxRef.current - e.deltaX, width)
+      const next = clampSwipe(dxRef.current - e.deltaX, width)
       if (next === 0 && dxRef.current === 0) return
 
       /*
@@ -391,6 +438,11 @@ export function useSwipe(
       // A finger on a row whose table still has somewhere to scroll belongs to
       // the table. Once it does not, it belongs here. See `touchIsOurs`.
       if (e.pointerType === 'touch' && !touchIsOurs(e.target)) return
+      // A finger outranks physics: stop whatever is still settling before
+      // reading where the row is, or `base` is a value from mid-flight rather
+      // than where the row actually sits.
+      running.current?.stop()
+      running.current = null
       from.current = { x: e.clientX, y: e.clientY, base: dxRef.current }
       axis.current = 'undecided'
       engaged.current = false
@@ -438,7 +490,7 @@ export function useSwipe(
       // Elastic, not clamped: a thumb that keeps pulling past the last action
       // still gets movement, just less of it. A row that goes dead under a
       // finger reads as a stuck app; resistance reads as an end.
-      put(elasticSwipe(start.base + ddx, width))
+      put(clampSwipe(start.base + ddx, width))
     },
 
     onPointerUp: () => {
@@ -557,8 +609,9 @@ export function SwipeDrawer({
    * Derived from the offset rather than computed in render, so it updates on
    * the compositor with the gesture instead of once per React render. The clamp
    * is here rather than in the hook because the hook now lets a finger pull
-   * past the end — see `elasticSwipe` — and the strip must not travel further
-   * left than its own window however hard the row is pulled.
+   * clamped — the offset cannot leave `[-width, 0]` — so this `min`/`max` is
+   * belt and braces rather than the thing doing the work, and it is what keeps
+   * a stray value from ever drawing the strip outside its own window.
    */
   const x = useTransform(offset, v => width - Math.min(width, Math.max(0, -v)))
 

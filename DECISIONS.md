@@ -1731,16 +1731,51 @@ the work.
 
 So: the offset is a `MotionValue` written straight to the transform, and a
 gesture now costs **two renders** — the drawer mounting and unmounting — instead
-of one per frame. The release runs a critically-damped spring. Both limits
-rubber-band. Sheets and menus settle on the two springs that were already
-sitting in the file.
+of one per frame. The release runs a spring. Sheets and menus settle on the two
+springs that were already sitting in the file.
 
-**The rubber band is not a reversal of #38.** That decision banned a resting
-state in the *middle* — a drawer stopped 40% open with half-labelled actions —
-and that still cannot happen: `snapSwipe` is unchanged and the release still
-lands on exactly open or exactly shut. This is resistance at the two *ends*,
-which is the opposite thing. A row that goes dead under a finger reads as a
-stuck app; a row that gives reads as an end.
+### The rubber band was built, and then removed, and that is the honest half
+
+I added give at both limits and wrote a paragraph here defending it against #38
+— the argument being that #38 banned a resting state in the *middle*, and this
+was resistance at the *ends*, which is a different thing. That argument is still
+sound. It was also irrelevant, because **the give never reached the screen.**
+
+The drawer is a clip window: the row itself never translates (that is #38's
+whole point — translating a `<tr>` takes the title out from under the table),
+and the strip inside the window is drawn at `width - min(width, max(0, -v))`.
+That expression maps *every* offset past `-width` to fully-open and *every*
+offset above `0` to fully-shut. Both overdrag ranges rendered identically to the
+limit they were past. Measured: not one pixel.
+
+And the right-hand band was worse than nothing. Pulling right on a closed row
+lifted the offset above zero, which mounted the drawer — 264px of invisible,
+click-absorbing overlay across a 343px row — in exchange for no feedback at all.
+
+So it is a hard clamp again, and #38's sentence stands unamended. The lesson is
+the one this file keeps relearning: a feature that cannot be seen is not a
+feature, and the way to find that out is to measure the thing on screen rather
+than to reason about the value behind it.
+
+### Two regressions the spring introduced, both found by measuring
+
+**The drawer kept eating taps for ~340ms after it looked shut.** The spring is
+just under critically damped (ζ = 0.935), so a flick-close crosses zero in about
+18ms and then oscillates by a pixel or two inside the range the transform clamps
+to hidden. Unmounting on `onComplete` therefore left that 264px overlay on the
+row long after it had visually gone: tapping a title straight after closing it
+did nothing, and the second tap of a double-tap-to-peek was swallowed. It
+unmounts from `onUpdate` at `v >= 0` now — the exact condition under which the
+strip is already drawn fully hidden.
+
+**`close()` teleported, and poisoned the next gesture.** `put(0)` from `-width`
+is an instantaneous 264px jump, so when the store flip fired the sync effect's
+`settle(0)`, framer seeded it from `getVelocity()` — **8800 px/s**. The value
+overshot to +133px and took 409ms to return, all of it invisible and all of it
+written into `dxRef`. A second swipe on that row within ~160ms read its `base`
+from there and needed 133px of travel before anything moved. `close()` settles
+on the same spring as a finger-release now, and `pointerdown` stops whatever is
+in flight before reading where the row is.
 
 **What was not done, and what would have to happen for it to be.** No blur, no
 translucency, not on one surface and not as a scrim. The brief offered a narrow

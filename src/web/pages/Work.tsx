@@ -112,20 +112,6 @@ const GOAL_CHOICES = [
   { id: 'done', label: STATUS_LABEL.done },
 ] as const satisfies ReadonlyArray<{ id: GoalState; label: string }>
 
-/**
- * What a task was before it was ticked, so unticking can put it back.
- *
- * The glyph is a two-way switch — Done, and back to wherever it came from —
- * rather than a five-way cycle, because a cycle on the one control a thumb hits
- * without aiming means every mis-tap lands on a state he has to notice and
- * undo. Nothing on the server records the status a task held before this one,
- * and adding a column to hold it would make an undo of a tick outlive the
- * session it happened in, which is not what an undo is for. So it is a map that
- * lives as long as the tab does, and a tick whose origin has been forgotten
- * unticks to `Not started` — the honest default, and the one it names out loud
- * in the toast that follows.
- */
-
 
 /**
  * Put back a deleted task, field for field.
@@ -1341,7 +1327,11 @@ function TaskRow({
         is not asking to read the task.
       */}
       <span className="shrink-0" onClick={e => e.stopPropagation()}>
-        <StatusPicker value={task.status} onChange={(s: CardStatus) => onStatus(task, s)} />
+        <StatusPicker
+          value={task.status}
+          onChange={(s: CardStatus) => onStatus(task, s)}
+          of={task.title}
+        />
       </span>
 
       <div className="min-w-0 grow cursor-pointer" onClick={() => onOpen(task)}>

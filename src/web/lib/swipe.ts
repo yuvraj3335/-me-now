@@ -19,18 +19,23 @@
  *  2. **Vertical wins ties.** The page scrolling and a task reordering are both
  *     vertical, they are both more common than the swipe, and getting them wrong
  *     costs more: a scroll that refuses to scroll reads as a frozen app.
- *  3. **The drawer is bounded and it snaps.** There is no resting state between
- *     open and shut, because a drawer stopped 40% of the way open is a row whose
- *     actions are all half-labelled.
+ *  3. **The drawer is bounded and it snaps.** There is no rubber band and no
+ *     resting state between open and shut, because a drawer stopped 40% of the
+ *     way open is a row whose actions are all half-labelled.
  *
- *     There *is* a rubber band now, and it is not a reversal of that. #38 banned
- *     a resting state in the middle; this is resistance at the two ends, which
- *     is the opposite thing — it is what tells a thumb it has reached the end of
- *     the drawer instead of the row going dead under it. A finger that keeps
- *     pulling past `-width` still gets movement, just less and less of it, and
- *     the release still snaps to open or shut. Both limits behave the same way,
- *     so a right-drag on a closed row gives a little and takes it back rather
- *     than promising a second drawer that is not there.
+ *     A rubber band was tried, at both ends, and **removed — the architecture
+ *     cannot show one.** The drawer is a clip window (see `swipe.tsx`): the row
+ *     itself never translates, and the strip inside the window is drawn at
+ *     `width - min(width, max(0, -v))`. That expression maps every offset past
+ *     `-width` to "fully open" and every offset above `0` to "fully shut", so
+ *     both overdrag ranges rendered *identically to the limit they were past*.
+ *     Measured: not one pixel of the give reached the screen.
+ *
+ *     It was not merely invisible, it was negative. A right-drag on a closed row
+ *     put the offset above zero, which mounted the drawer — 264px of an
+ *     invisible, click-absorbing overlay across a 343px row — in exchange for no
+ *     feedback at all. A hard clamp is the honest shape for a window that cannot
+ *     stretch.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -131,39 +136,6 @@ export function clampSwipe(dx: number, width: number): number {
   return Math.max(-width, Math.min(0, dx))
 }
 
-/**
- * How much of an overdrag actually reaches the row.
- *
- * iOS's own curve rather than a linear fraction: the ratio itself decays, so
- * the first few pixels past the limit move nearly one-to-one and the fiftieth
- * moves almost not at all. A linear 0.5 would still travel half a screen if you
- * pulled half a screen, which reads as a broken clamp rather than as an end.
- *
- * `dim` is the distance the resistance is measured against — the drawer's own
- * width — so a two-action drawer and a four-action one feel the same.
- */
-export const RUBBER = 0.55
-
-export function rubberBand(over: number, dim: number): number {
-  if (!(dim > 0) || over <= 0) return 0
-  return (1 - 1 / ((over * RUBBER) / dim + 1)) * dim
-}
-
-/**
- * The offset a row is drawn at *during* a gesture, ends included.
- *
- * `clampSwipe` is the hard truth — where the drawer may come to rest — and it is
- * still what the snap is computed from. This is the same range with give at both
- * ends, and it is deliberately only used while a finger is down: a row at rest
- * is exactly open or exactly shut, never a pixel of leftover stretch.
- */
-export function elasticSwipe(dx: number, width: number): number {
-  if (!(width > 0)) return 0
-  if (dx > 0) return rubberBand(dx, width)
-  if (dx < -width) return -width - rubberBand(-dx - width, width)
-  return dx
-}
-
 /** Where the drawer lands when the finger lifts: open past halfway, else shut. */
 export function snapSwipe(dx: number, width: number): number {
   return clampSwipe(dx, width) <= -width / 2 ? -width : 0
@@ -175,9 +147,17 @@ export function snapSwipe(dx: number, width: number): number {
  * A spring rather than a duration, because the gesture it is continuing has no
  * duration either — the row was tracking a thumb one-to-one a frame ago, and a
  * fixed 180ms ease-out from wherever that thumb happened to stop is the moment
- * the surface stops feeling attached to the hand. Critically damped and quick:
- * this is a control settling, not a thing bouncing, so `damping` is high enough
- * that it never overshoots past its own labels.
+ * the surface stops feeling attached to the hand.
+ *
+ * Damping ratio 0.935 — just under critical, measured rather than claimed:
+ * `42 / (2√(560 × 0.9))`. That is deliberately not 1. A touch under critical
+ * settles visibly faster than a critically-damped spring of the same stiffness
+ * and its single overshoot is a fraction of a pixel at these distances, so the
+ * drawer never appears past its own labels. What it does mean is that the value
+ * keeps moving for a few hundred milliseconds after the drawer looks shut — see
+ * the `onUpdate` in `settle`, which unmounts on what is on screen rather than on
+ * `onComplete`, because for a while it was leaving an invisible overlay across
+ * the row eating taps.
  *
  * `restDelta` is the pixel it is allowed to stop short by. Without it a spring
  * animates for another few hundred milliseconds converging on a difference no

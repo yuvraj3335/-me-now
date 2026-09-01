@@ -1232,7 +1232,11 @@ function RepoChip({
       label: r.name,
       // Uncommitted work, because that is the fact that decides whether this is
       // the checkout he means — and a `<select>` could not have carried it.
-      ...(r.dirty > 0 ? { meta: `${r.dirty} dirty` } : {}),
+      // `uncommitted`, because that is now what the number counts — tracked
+      // changes only. `dirty` was the git word for a count that also included
+      // untracked agent litter, and it read as "37 things going on here" beside
+      // a repository with nothing uncommitted in it. See `registry/scan.ts`.
+      ...(r.dirty > 0 ? { meta: `${r.dirty} uncommitted` } : {}),
     })),
   ], [repos])
 

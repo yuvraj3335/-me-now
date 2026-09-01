@@ -12,7 +12,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  axisFor, clampSwipe, elasticSwipe, snapSwipe, swipeActionWidth, swipeWidth, SWIPE_AXIS_RATIO,
+  axisFor, clampSwipe, snapSwipe, swipeActionWidth, swipeWidth, SWIPE_AXIS_RATIO,
 } from '../src/web/lib/swipe'
 
 const walk = (dir: string): string[] =>
@@ -1739,43 +1739,67 @@ describe('a row can be acted on without being opened', () => {
       .not.toMatch(/const \[dx, setDx\]|setDx\(/)
   })
 
-  test('the drawer settles on a spring and gives at its limits', () => {
+  test('the drawer settles on a spring, and stays hard-clamped', () => {
     /*
-     * Two halves of the same complaint — "extremely smooth", asked for by name.
+     * "Extremely smooth", asked for by name. A gesture that tracks a thumb
+     * one-to-one and then jumps to its end value the instant the thumb lifts is
+     * where a surface stops feeling attached to the hand, so the release runs a
+     * spring rather than a hard set.
      *
-     * A gesture that tracks a thumb one-to-one and then jumps to its end value
-     * the instant the thumb lifts is where a surface stops feeling attached to
-     * the hand, so the release is a spring rather than a hard set. And a row
-     * that goes dead the moment it reaches `-width` reads as a stuck app, so
-     * both ends give and take it back.
-     *
-     * DECISIONS #38 said "no rubber band", and that sentence was about a resting
-     * state in the MIDDLE — a drawer stopped 40% open with half-labelled
-     * actions. That still cannot happen: `snapSwipe` is unchanged and the
-     * release still lands on exactly open or exactly shut.
+     * A rubber band at the two limits was built and then removed, and the
+     * removal is what is pinned here. The drawer is a clip window: the row never
+     * translates, and the strip is drawn at `width - min(width, max(0, -v))`.
+     * That maps every offset past `-width` to fully-open and every offset above
+     * `0` to fully-shut, so overdrag rendered *identically to the limit it was
+     * past* — not one pixel of give reached the screen. And the right-hand band
+     * was worse than nothing: it lifted the offset above zero, which mounted the
+     * drawer's invisible 264px click-absorbing overlay across the row in
+     * exchange for no feedback at all.
      */
     expect(swipe, 'the drawer went back to snapping without physics')
       .toMatch(/settle\(/)
     const lib = read('src/web/lib/swipe.ts')
     expect(lib, 'the settle stopped being a spring').toMatch(/type: 'spring'/)
-    expect(lib, 'the limits went back to a dead clamp').toMatch(/export function elasticSwipe/)
+    expect(lib, 'an invisible rubber band came back')
+      .not.toMatch(/elasticSwipe|rubberBand/)
+    expect(swipe, 'the gesture stopped clamping to the drawer it can actually draw')
+      .toMatch(/put\(clampSwipe\(start\.base \+ ddx, width\)\)/)
 
-    // Give at the ends, and no travel that a clamp would not also allow to rest.
-    expect(elasticSwipe(40, 264), 'a closed row no longer gives to the right')
-      .toBeGreaterThan(0)
-    expect(elasticSwipe(40, 264), 'the give is not resistance, it is free travel')
-      .toBeLessThan(40)
-    expect(elasticSwipe(-400, 264), 'an overdragged row travels unresisted')
-      .toBeGreaterThan(-400)
-    expect(elasticSwipe(-400, 264), 'the drawer stopped opening fully')
-      .toBeLessThan(-264)
-    expect(elasticSwipe(-100, 264), 'travel inside the range stopped being 1:1')
-      .toBe(-100)
+    // The clamp is total in both directions, and the snap has two answers.
+    expect(clampSwipe(40, 264), 'a closed row travels right').toBe(0)
+    expect(clampSwipe(-400, 264), 'an open row travels past its own width').toBe(-264)
+    expect(clampSwipe(-100, 264), 'travel inside the range stopped being 1:1').toBe(-100)
+    expect(snapSwipe(-200, 264), 'past halfway no longer opens').toBe(-264)
+    expect(snapSwipe(-100, 264), 'short of halfway no longer shuts').toBe(0)
+  })
 
-    // The stretch is never a resting place: the snap is computed from the hard
-    // range, so an overdragged release still lands on one of the two.
-    expect(snapSwipe(clampSwipe(elasticSwipe(-400, 264), 264), 264)).toBe(-264)
-    expect(snapSwipe(clampSwipe(elasticSwipe(40, 264), 264), 264)).toBe(0)
+  test('the drawer gives the row its clicks back on the frame it looks shut', () => {
+    /*
+     * The spring is a touch under critically damped, so a flick-close crosses
+     * zero in about 18ms and then oscillates by a pixel or two for a few hundred
+     * more inside a range the transform clamps to fully-hidden. Unmounting on
+     * `onComplete` therefore left an `absolute` 264px box with
+     * `onClick={stopPropagation}` sitting over a 343px row for ~340ms after it
+     * looked shut: tapping a title straight after closing it did nothing, and
+     * the second tap of a double-tap-to-peek was eaten.
+     *
+     * So `live` is cleared from `onUpdate` at `v >= 0` — exactly the condition
+     * under which the strip is already drawn fully hidden — with `onComplete`
+     * left as the backstop.
+     */
+    expect(swipe, 'the drawer went back to unmounting only when the spring finishes')
+      .toMatch(/if \(target === 0 && v >= 0\) setLive\(false\)/)
+
+    // And closing it is a spring, not a teleport: `put(0)` from `-width` seeds
+    // the follow-up spring with ~8800px/s of phantom velocity, which overshot
+    // `dxRef` to +133 and made the next swipe within ~160ms feel dead.
+    expect(swipe, 'close() teleports the row again')
+      .not.toMatch(/setOpenSwipe\(null\); put\(0\)/)
+    expect(swipe, 'close() no longer settles').toMatch(/setOpenSwipe\(null\); settle\(0\)/)
+
+    // A press stops whatever is still moving before it reads where the row is.
+    expect(swipe, 'a new gesture reads a base from a spring still in flight')
+      .toMatch(/running\.current\?\.stop\(\)[\s\S]{0,80}from\.current = \{ x: e\.clientX/)
   })
 
   test('a four-action drawer still leaves the row readable', () => {
