@@ -494,9 +494,16 @@ export function Pulse() {
             time had a whole panel and it rendered an em dash at every range,
             because a line needs two days with a sample and the median needs one.
             The median is the fact; the panel was the wrong shape for it. */}
+        {/* `col-span-2` on a phone, where the grid is two wide and this is the
+            third of three: a half-width tile alone on its own row beside a hole
+            was fine while a stat was three lines of text on the page ground and
+            is not now that it is a pane with a visible edge. From `sm` the grid
+            is three across and the three tiles fill the row. */}
         {a.responseTime.count > 0 && (
-          <Stat value={duration(a.responseTime.p50)} label={`median reply · ${period}`}
-            foot={`p90 ${duration(a.responseTime.p90)}`} />
+          <div className="col-span-2 sm:col-span-1">
+            <Stat value={duration(a.responseTime.p50)} label={`median reply · ${period}`}
+              foot={`p90 ${duration(a.responseTime.p90)}`} />
+          </div>
         )}
       </section>
 

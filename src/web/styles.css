@@ -17,12 +17,29 @@
   and which several comments below still argue for; where one of those survives
   it is because the argument under it is still true of something else.
 
-  Two rules keep it from becoming glassmorphism, and both live in `.glass-*`
-  below. **Depth is relative** — glass reads as depth precisely because the
-  ground it floats over is not glass. And **the blur is rationed**: real
-  `backdrop-filter` is the most expensive thing a phone's compositor can be
-  asked for, and fifty blurred rows are not a richer version of this, they are a
-  slideshow. Chrome blurs; content only tints. See `.glass-card`.
+  Three rules keep it from becoming glassmorphism, and all three live in
+  `.glass-*` below.
+
+  **Depth is relative** — glass reads as depth precisely because the ground it
+  floats over is not glass.
+
+  **The blur is rationed** — real `backdrop-filter` is the most expensive thing
+  a phone's compositor can be asked for, and fifty blurred rows are not a richer
+  version of this, they are a slideshow. Chrome blurs; content only tints. See
+  `.glass-card`.
+
+  **Elevation is a ladder and every rung is a different rung** — `.glass-well`
+  under `.glass-card` under `.glass-raise` under `.glass-bar` under `.glass`. A
+  surface may hold something one rung above it or one rung below it; it may not
+  hold its own rung. Breaking that is what made the half-converted version of
+  this read as flat even where the material had landed: a chip on a row wore the
+  row's own tint, so the nesting said nothing.
+
+  And the thing all three of them rest on: **chroma is free**. Contrast is a
+  luminance ratio, so a tinted surface costs exactly what a neutral one of the
+  same lightness costs, which is nothing extra. The version of this file that
+  spent 2% of neutral white over a colourless page could only ever produce grey,
+  at any alpha, and no amount of tuning that number was going to change it.
 
   What it is still not: a reading column, or a settings README with headings.
 */

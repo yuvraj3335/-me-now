@@ -163,12 +163,20 @@ export function Segmented<T extends string>({
        to the 32px the group paints — three theme segments measured 30px tall on
        a phone. The fill rounds its own outer corner instead: 5px, which is the
        group's 6px radius less the 1px border it sits inside. */
-    /* A well with a raised segment in it, which is what a segmented control
-       physically is and what iOS draws. It used to be a bordered box with one
-       segment painted `ink-800` — the same token as hover — so the chosen
-       segment and the one under the pointer were the same picture. The group is
-       `.glass-well` (pressed in), the chosen segment `.glass-raise` (standing
-       proud of it), and the two are two rungs apart rather than none. */
+    /*
+       A well with the chosen segment standing at the surface's own level, which
+       is what a segmented control physically is and what iOS draws. It used to
+       be a bordered box with one segment painted `ink-800` — the same token as
+       hover — so the chosen segment and the one under the pointer were the same
+       picture.
+
+       The chosen one is `.glass-card` and not `.glass-raise`, and that is the
+       one place the distinction matters. `raise` is a *wash*: it darkens in
+       light and lightens in dark, which is right for a hover state and exactly
+       backwards here — over a well, in light, it made the chosen segment darker
+       than the two beside it, so the selection read as the recess. `card` is the
+       surface the well is cut into, so the chosen segment sits back up at the
+       page's own level in both themes: a lift in dark, white in light. */
     <div role="group" aria-label={ariaLabel}
       className={`glass-well inline-flex h-8 rounded-control border border-edge ${className}`}>
       {options.map((o, i) => (
@@ -181,7 +189,7 @@ export function Segmented<T extends string>({
             first:rounded-l-[5px] last:rounded-r-[5px]
             disabled:opacity-40 disabled:pointer-events-none
             ${i > 0 ? 'border-l border-rule' : ''}
-            ${value === o.id ? 'glass-raise text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}
+            ${value === o.id ? 'glass-card glass-edge text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}
         >
           {o.label}
         </button>
