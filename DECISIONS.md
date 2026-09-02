@@ -2440,3 +2440,19 @@ at 0.66 over amber composited to `#6f5637`, where `warn` measured **3.59:1**, `b
 5.55, 5.77 and 5.83. The tint moved; no text token did. The sheen is held at or
 under 0.06 alpha by the same test, so a highlight that exists only under a pointer
 can never be the difference between a token clearing its floor and missing it.
+
+
+### The one regression this refinement shipped, and what it taught
+
+`.glass` briefly carried `position: relative`, added so the pointer sheen's
+`::before` would anchor to its panel, with a comment reasoning that the utility
+layer is written after `base` and would keep winning `fixed`. The rule is *in*
+`@layer utilities`, later in the file than Tailwind's own `.fixed`, so the later
+declaration won: the phone's detail page and the phone composer — both `fixed
+inset-x-0 top-0 z-50 glass` — dropped into document flow and rendered 4,991px
+below the list on the deployed site. Nothing in the suite noticed, because no
+test asks where a surface *is*; it was found by driving the deployed page over
+CDP with touch events and reading the detail's bounding rect. The rule is gone,
+every glass surface is positioned by its own utility, and `material.test.ts`
+refuses a `position` in any `.glass*` rule: **the material paints; the call site
+places.**
