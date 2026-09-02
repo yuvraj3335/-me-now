@@ -114,7 +114,11 @@ describe('somebody named him', () => {
     const t0 = slackTs(now() - 10 * 60_000)
     const t1 = slackTs(now() - 5 * 60_000)
     const id = card('C04D9HKDWAV:' + t0, {
-      kind: 'mention', title: 'can you look at this', who: 'Roopi', pile: 'now',
+      // First seen on an earlier poll. Left at `now()`, a fast machine lands the
+      // fixture and the re-poll in the same millisecond, and the 🔔 rule for a
+      // brand-new row fires on the second run — a flake CI caught and this Mac
+      // did not.
+      kind: 'mention', title: 'can you look at this', who: 'Roopi', pile: 'now', firstSeen: now() - 60_000,
       meta: thread([
         { ts: t0, who: 'Roopi', tagged: false, text: 'Deploy is red' },
         { ts: t1, who: 'Roopi', tagged: true, text: '@Yuvraj can you look at this' },
