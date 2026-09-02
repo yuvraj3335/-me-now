@@ -17,7 +17,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { db, now, uid } from '../src/server/db'
-import { notifyOnNewWork, notifySessions } from '../src/server/push'
+import { notifyOnNewWork, notifySessions, tabFor } from '../src/server/push'
 import { CLAUDE_HOME, CLAUDE_PROJECTS_DIR, PUBLIC_URL } from '../src/server/env'
 import { sessionsNeedingAttention } from '../src/server/sources/claudeSessions'
 import { detailKeyOf } from '../src/web/lib/route'
@@ -191,13 +191,25 @@ describe('a monitor', () => {
   const alert = (group: string, meta: Record<string, unknown>) =>
     card(group, { kind: 'alert', title: 'API Error Triage in the Last 24 Hours', pile: meta.paged ? 'now' : 'open', meta })
 
-  test('a page buzzes once, ever', async () => {
+  test('a page buzzes once, ever, and its link lands on the Alerts tab', async () => {
     const id = alert('C05UPHVT2CQ:' + slackTs(now() - 60_000), { paged: true, family: 'datadog' })
     await run([id])
     await run([id])
     const n = notifications()
     expect(n).toHaveLength(1)
     expect(n[0]!.title).toBe('🚨 Paged: API Error Triage in the Last 24 Hours')
+    // The pipe is Slack; the tab is Alerts. The first deployed push said `slack`
+    // and opened a tab that did not hold the card.
+    expect(new URL(n[0]!.url!).searchParams.get('src')).toBe('alerts')
+  })
+
+  test('the tab mirror agrees with the browser\'s bucketOf', async () => {
+    const { bucketOf } = await import('../src/web/lib/bucket')
+    const m = (source: any, kind: string) =>
+      bucketOf({ source, kind, url: '', ts: 0, title: '', why: '', meta: {} })
+    for (const [source, kind] of [['slack', 'alert'], ['slack', 'crisp'], ['slack', 'mention'], ['sentry', 'issue'], ['gmail', 'mail'], ['github', 'review'], ['claude', 'session']] as const) {
+      expect(tabFor(source, kind), `${source}/${kind}`).toBe(m(source, kind))
+    }
   })
 
   test('routine volume never does — that is the noise the desk just took off', async () => {

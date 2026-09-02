@@ -164,8 +164,22 @@ export async function notify(dedupKey: string, p: PushPayload): Promise<boolean>
  * .test.ts` parses this URL with `detailKeyOf` and asserts the group key comes
  * back exactly, which is what keeps the two ends from drifting apart.
  */
-function cardUrl(source: string, groupKey: string): string {
-  return `${PUBLIC_URL}/?src=${encodeURIComponent(source)}#card/${encodeURIComponent(groupKey)}`
+function cardUrl(source: string, groupKey: string, kind?: string): string {
+  return `${PUBLIC_URL}/?src=${encodeURIComponent(tabFor(source, kind))}#card/${encodeURIComponent(groupKey)}`
+}
+
+/**
+ * The tab a row is filed under, mirrored from `bucketOf` in
+ * `src/web/lib/bucket.ts`: a Sentry member and any Slack member a monitor posted
+ * (`kind: 'alert'`) are on the Alerts tab, whatever pipe carried them. The first
+ * paged push this shipped with linked to `?src=slack#card/sentry:TRUTO-Q` — the
+ * pipe, not the tab — and landed on a tab that did not hold the card.
+ * `test/push-events.test.ts` pins the mirror.
+ */
+export function tabFor(source: string, kind?: string): string {
+  if (source === 'sentry') return 'alerts'
+  if (source === 'slack' && kind === 'alert') return 'alerts'
+  return source
 }
 
 const CRISP = '💬 '
@@ -267,7 +281,7 @@ async function notifyPaged(row: any, meta: any): Promise<void> {
   if (!meta?.paged || meta?.alert_state === 'recovered') return
   await notify(`paged:${row.source_id}`, {
     title: `${PAGED}Paged: ${row.title}`,
-    url: cardUrl(row.source, row.group_key),
+    url: cardUrl(row.source, row.group_key, row.kind),
     kind: 'paged',
   })
 }
@@ -335,7 +349,7 @@ export async function notifyOnNewWork(report: { at: number; cardIds: string[] })
     if (row.pile === 'now' && row.who && row.first_seen_at === report.at) {
       await notify(`now:${row.group_key}`, {
         title: `${NOW_WAITING}${row.who} is waiting: ${row.title}`,
-        url: cardUrl(row.source, row.group_key),
+        url: cardUrl(row.source, row.group_key, row.kind),
         kind: 'now',
       })
     }
