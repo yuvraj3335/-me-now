@@ -1202,15 +1202,18 @@
   */
   .glass {
     /*
-      A positioning context of its own, so `.glass::before` below always
-      anchors to the panel it paints on rather than to whatever positioned
-      ancestor happens to be nearest — which for a `.glass` surface with no
-      position utility of its own (a toast, a menu row's parent) would be some
-      unrelated fixed wrapper, sized to fit it rather than this. Every call
-      site that IS itself `fixed` or `absolute` keeps that: the utility layer
-      is written after `base`, so it always wins the same property.
+      No `position` here, and that is a scar rather than an omission. A pass
+      added `position: relative` so `.glass::before` would anchor to the panel,
+      reasoning that the utility layer is written after `base` and would keep
+      winning `fixed`. This rule is IN the utility layer — `@layer utilities`
+      opens above — and later in it than Tailwind's own `.fixed`, so the
+      later declaration won: the phone's detail page and the phone composer,
+      both `fixed inset-x-0 top-0 z-50 glass`, dropped into document flow and
+      rendered five thousand pixels below the list, measured on the deployed
+      site. Every surface that wears `.glass` is already positioned by its own
+      utility (`fixed`, `relative`), which is all `::before` needs.
+      `material.test.ts` refuses a `position` in any `.glass*` rule.
     */
-    position: relative;
     background-color: var(--glass-tint);
     /* The diagonal sheen. One gradient, painted on the panel's own background,
        running from the corner nearest the light. A large surface with a single

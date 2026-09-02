@@ -305,6 +305,28 @@ describe.each([
   })
 })
 
+describe('the material never decides where a surface sits', () => {
+  test('no .glass rule sets position', () => {
+    /*
+     * `.glass` is written inside `@layer utilities`, after Tailwind's own
+     * utilities, so a `position` here out-ranks `fixed` on every element that
+     * wears the class. One release did exactly that to anchor `::before`, and
+     * the phone's detail page and composer — `fixed inset-x-0 top-0 z-50
+     * glass` — fell into document flow and rendered 4,991px below the list on
+     * the deployed site. Positioning is the call site's; the material only
+     * paints.
+     */
+    const rules = [...css.matchAll(/\n  \.glass(?:-[a-z]+)?(?:::before)? \{([^}]*)\}/g)]
+    expect(rules.length).toBeGreaterThan(3)
+    for (const m of rules) {
+      if (m[0].includes('::before')) continue
+      const body = m[1]!.replace(/\/\*[\s\S]*?\*\//g, '')
+      expect(body, `${m[0].slice(0, 30).trim()} sets position — that is the call site's decision`)
+        .not.toMatch(/(^|[\s;])position\s*:/)
+    }
+  })
+})
+
 describe('a row is a pane, and the pane holds its own drawer', () => {
   /** The three lists whose rows carry a swipe drawer. Mail's does not. */
   const swipeRows = {
