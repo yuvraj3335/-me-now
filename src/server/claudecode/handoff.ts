@@ -1,16 +1,25 @@
 /**
- * The hand-off.
+ * The hand-off — now the secondary one.
  *
  * Wake packs the context — the Slack thread, the mail thread, the Sentry issue,
- * the card, the session — and then gets out of the way. What it produces is a
- * URL, and the arithmetic behind that URL lives in `src/shared/handoff.ts`
- * because the editor in the browser needs the same numbers live.
+ * the card, the session — and this is what turns the packed brief into a URL.
+ * The arithmetic behind that URL lives in `src/shared/handoff.ts` because the
+ * editor in the browser needs the same numbers live.
  *
- * Wake used to spawn `claude -p` on the box it runs on: a headless process with
- * no terminal attached, whose output nobody could see and whose permission
- * prompts nobody could answer. It was a session in name only. A link is better
- * on every axis that matters — it opens the Claude app on a phone and a tab on a
- * laptop, both already signed in, and nothing runs on the DevBox at all.
+ * This used to be the whole feature: Wake stopped spawning `claude -p` — a
+ * headless process with no terminal attached, whose output nobody could see and
+ * whose permission prompts nobody could answer — and a link to the Claude app
+ * was what replaced it, on the reasoning that it opens on a phone and a tab on
+ * a laptop, both already signed in, with nothing running on the DevBox at all.
+ *
+ * `terminal.ts` is what replaced *that* reasoning: `claude.ai/new?q=` opens a
+ * different product, with no repository, no tools and no way to reach an
+ * existing conversation — a link cannot resume a session, however good the
+ * arithmetic behind its URL is. So `HANDOFF_MAX_CHARS` below and the trimming
+ * it does are still real, but they bound one link on the composer's footer, the
+ * one to use away from this box entirely — not the brief a session actually
+ * receives, which travels whole as a process argument and answers to
+ * `MAX_BRIEF_BYTES` in `terminal.ts` instead.
  */
 
 import { HANDOFF_MAX_CHARS, HANDOFF_PARAM, HANDOFF_URL } from '../env'

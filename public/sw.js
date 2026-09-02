@@ -111,7 +111,13 @@ self.addEventListener('notificationclick', event => {
       if (client.url.startsWith(origin)) {
         await client.focus()
         if (target.startsWith(origin) || target.startsWith('/')) {
-          const path = target.startsWith('/') ? target : new URL(target).pathname
+          // A relative target is already `path?query#hash` verbatim. An
+          // absolute one has to be re-assembled from the URL's own pieces —
+          // `.pathname` alone drops `?src=` and `#card/…`, which is how a
+          // card's push used to land on a bare, unfiltered, un-opened desk.
+          const path = target.startsWith('/')
+            ? target
+            : (u => u.pathname + u.search + u.hash)(new URL(target))
           client.postMessage({ type: 'navigate', path })
         } else {
           await self.clients.openWindow(target)

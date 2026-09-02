@@ -42,9 +42,9 @@ import {
   Button, CountBadge, Field, PAGE_SIZE, PageTitle, Pager, Select, Sheet, inputClass,
   pageCount, pageSlice, useRail,
 } from '../components/primitives'
-import { SOURCE_LABEL } from '../components/sources'
+import { BUCKET_LABEL, SOURCE_LABEL } from '../components/sources'
 import { cardKind, cleanChannel, contextLine, SourceMark, whereOf } from '../components/kinds'
-import { bucketsOf, inBucket, pipesFor } from '../lib/bucket'
+import { bucketsOf, inBucket, pipesFor, primaryPipe, type Bucket } from '../lib/bucket'
 import { registerPaletteActions } from '../components/palette'
 import { toast } from '../lib/toast'
 import { overlayOpen, useOverlay } from '../lib/overlay'
@@ -67,8 +67,13 @@ import { closeDetail, openDetail, setParam, useDetailKey, useParams } from '../l
  * disabled either. A source whose last poll failed carries its own mark at a
  * quarter weight and the reason on `title`, and that is the only sync mark on
  * this page.
+ *
+ * `alerts` reads `Sentry` for the reason `bucket.ts` states at length: a row
+ * belongs to what it is about, and a Datadog page is not Sentry's. `?src=`
+ * still accepts the old value — see `tab` below — so a bookmark or a push link
+ * minted before the rename still lands on the same rows it always did.
  */
-const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
+const FILTERS: Bucket[] = ['slack', 'gmail', 'github', 'alerts', 'claude']
 
 /**
  * Where the desk's rows come from, which is six answers and not five.
@@ -86,7 +91,7 @@ const FILTERS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
  * still one tap away on the source tab it belongs to, and `?src=` still holds
  * whichever that is.
  */
-export type DeskTab = 'tasks' | SourceName
+export type DeskTab = 'tasks' | Bucket
 
 /** Stable empty task list, for the same reason `NO_CARDS` exists. */
 const NO_TASKS: Task[] = []
@@ -181,17 +186,31 @@ export function Home() {
    * screen to say why. Checked, an unrecognised value means what no value means:
    * no source filter. Same whitelist `sort` keeps four lines down, for the same
    * reason.
-   */
-  const tab: DeskTab = FILTERS.find(s => s === p.src) ?? 'tasks'
-  /**
-   * The tab as a *source*, which is what the chrome around the list wants.
    *
-   * `Sync`, `Fetch` and the empty state are all scoped by pipe, and the Tasks
-   * tab has no pipe — so this is `null` there, which is the value those three
-   * already treat as "everything" and which `inBucket` already reads as "no
-   * source predicate". Nothing downstream had to learn a sixth name.
+   * `sentry` is read as `alerts` here, and nowhere does the reverse happen: a
+   * bookmark or a push notification minted before the tab was renamed still
+   * says `?src=sentry`, and it has to keep landing on the rows it always did
+   * rather than falling through to "no source filter" and rendering the whole
+   * desk. `setParam` below only ever writes `alerts`, so this is a read-side
+   * alias rather than a second spelling the strip itself uses.
    */
-  const filter: SourceName | null = tab === 'tasks' ? null : tab
+  const src = p.src === 'sentry' ? 'alerts' : p.src
+  const tab: DeskTab = FILTERS.find(s => s === src) ?? 'tasks'
+  /**
+   * The tab as a *bucket*, which is what `inBucket` and the search haystack
+   * below want — see `lib/bucket.ts`. The Tasks tab has no bucket, so this is
+   * `null` there, which both of those already read as "no source predicate".
+   */
+  const filter: Bucket | null = tab === 'tasks' ? null : tab
+  /**
+   * The tab as a *pipe*, which is what the header's two poll controls want.
+   *
+   * `Sync` and `Fetch` ask a `SourceName` and `alerts` is not one — see
+   * `primaryPipe`. Scoped to the Alerts tab they still ask Sentry by name and
+   * still carry Slack alongside it via `pipesFor`, exactly as they did before
+   * the tab that fed them had this word on it.
+   */
+  const pipeSource: SourceName | null = filter === null ? null : primaryPipe(filter)
   const isTasks = tab === 'tasks'
   const query = p.q ?? ''
   const due = (p.due ?? 'any') as DueFilter
@@ -306,7 +325,7 @@ export function Home() {
       channel ? cleanChannel(String(channel)) : null,
       STATUS_LABEL[c.status],
       ...c.sources.map(s => s.account ?? ''),
-      ...bucketsOf(c).map(b => SOURCE_LABEL[b]),
+      ...bucketsOf(c).map(b => BUCKET_LABEL[b]),
     ]
     return hay.some(v => v && String(v).toLowerCase().includes(q))
   }, [query])
@@ -797,7 +816,7 @@ export function Home() {
   // Nothing at all until the first read lands. A 200ms loader is worse than a
   // beat of nothing, and a sentence explaining that a page is loading is chrome
   // that teaches.
-  if (!state) return <div className="pad-x pt-4"><Header source={filter} tab={tab} /></div>
+  if (!state) return <div className="pad-x pt-4"><Header source={pipeSource} tab={tab} /></div>
 
   /**
    * Whether anything is narrowing this list besides the tab.
@@ -837,7 +856,7 @@ export function Home() {
       style={{ paddingBottom: 'calc(var(--nav-h) + 24px)' }}
       className="min-w-0 grow pad-x"
     >
-      <Header count={rows.length} source={filter} tab={tab} onNewTask={() => setNewTask(true)} />
+      <Header count={rows.length} source={pipeSource} tab={tab} onNewTask={() => setNewTask(true)} />
       {/*
         The tabs and the filters pin; the title does not.
 
@@ -1239,8 +1258,15 @@ function SourceTabs({
 }) {
   const runs = new Map(state.lastSync.map(r => [r.source, r]))
 
-  const wordFor = (s: SourceName) => {
-    const r = runs.get(s)
+  /**
+   * Connectivity is a fact about a pipe, not about a bucket — `lastSync` is
+   * keyed by the five real sources and has never heard of `alerts` — so this
+   * asks `primaryPipe(s)` rather than `s` itself. On the Alerts tab that is
+   * `sentry`, which is the same connection the strip has always reported here,
+   * under the tab's old name.
+   */
+  const wordFor = (s: Bucket) => {
+    const r = runs.get(primaryPipe(s))
     if (!r || !r.connected) return 'not connected'
     if (!r.ok) return 'sync failed'
     return null
@@ -1280,20 +1306,22 @@ function SourceTabs({
         </button>
         {FILTERS.map(s => {
           const bad = wordFor(s)
+          const pipe = primaryPipe(s)
+          const run = runs.get(pipe)
           return (
             <button
               key={s}
               role="tab"
               aria-selected={value === s}
               className={tab(value === s)}
-              title={bad ? `${SOURCE_LABEL[s]} · ${bad}${runs.get(s)?.error ? ` — ${runs.get(s)!.error}` : ''}` : SOURCE_LABEL[s]}
+              title={bad ? `${BUCKET_LABEL[s]} · ${bad}${run?.error ? ` — ${run.error}` : ''}` : BUCKET_LABEL[s]}
               onClick={() => { setParam('src', value === s ? null : s); setParam('page', null) }}
             >
-              <SourceMark source={s} failed={!!bad} />
+              <SourceMark source={pipe} failed={!!bad} />
               {/* The name from `sm` up, where six of them fit. On a phone the six
                   marks are the strip, and the pressed one keeps its name so the
                   answer to "which am I in" never needs a hover. */}
-              <span className={value === s ? '' : 'hidden sm:inline'}>{SOURCE_LABEL[s]}</span>
+              <span className={value === s ? '' : 'hidden sm:inline'}>{BUCKET_LABEL[s]}</span>
             </button>
           )
         })}
@@ -1348,7 +1376,7 @@ function Blank({
             : 'Nothing on the desk matches these filters.'
           : source === null
             ? 'Nothing on your list.'
-            : `Nothing from ${SOURCE_LABEL[source]} is on you.`}
+            : `Nothing from ${BUCKET_LABEL[source]} is on you.`}
       </p>
       {/*
         Three states, and only two of them have a way out.

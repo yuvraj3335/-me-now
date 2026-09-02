@@ -20,7 +20,7 @@
  */
 
 import {
-  BellRing, CircleDot, GitPullRequest, GitPullRequestArrow, Mail, MessageSquare,
+  BellRing, CircleDot, GitPullRequest, GitPullRequestArrow, Mail, MessageCircle, MessageSquare,
   SquareCheck, SquareTerminal, TriangleAlert, type LucideIcon,
 } from 'lucide-react'
 import type { Card, CardSource, SourceName } from '../lib/types'
@@ -73,18 +73,23 @@ export const TASK_KIND: Kind = {
  * describes *why* rather than *what* — `assigned` is an issue or a pull request
  * depending on `meta.is_pr`. Both facts are already on the card.
  *
- * Slack splits two ways now, and the split is the point of reading the alert
- * channels at all: a person typed the one, a monitor emitted the other, and
- * they want different things from him. `Alert` and Sentry's `Alert` share a
- * word deliberately — they are the same event told by two systems, and the
- * dedup engine merges them into one row wherever it can prove it.
+ * Slack splits three ways now. A person typed a thread, a monitor emitted an
+ * alert, and a visitor on the website opened a Crisp conversation — three
+ * different things want three different reactions from him. `Alert` and
+ * Sentry's `Alert` share a word deliberately — they are the same event told by
+ * two systems, and the dedup engine merges them into one row wherever it can
+ * prove it.
  */
 export function kindOf(source: SourceName, kind: string, meta: Record<string, any> = {}): Kind {
   switch (source) {
     case 'slack':
-      return kind === 'alert'
-        ? { word: 'Alert', Icon: BellRing, source }
-        : { word: 'Thread', Icon: MessageSquare, source }
+      if (kind === 'alert') return { word: 'Alert', Icon: BellRing, source }
+      // A visitor talking to support through Crisp, relayed into Slack. Its
+      // own word and its own glyph, same as a thread or an alert get — see
+      // `crispMeta` for the one further wrinkle: an unresolved one overrides
+      // both below, in `cardKind`.
+      if (kind === 'crisp') return { word: 'Chat', Icon: MessageCircle, source }
+      return { word: 'Thread', Icon: MessageSquare, source }
     case 'gmail':
       return { word: 'Mail', Icon: Mail, source }
     case 'sentry':
@@ -116,6 +121,14 @@ export function kindOf(source: SourceName, kind: string, meta: Record<string, an
  * the row itself is an issue. One fact, claimed in two places, has to be
  * computed once — so the mark asks `bucketOf` too.
  *
+ * `alerts` is not a real source and `kindOf` does not know the word — it
+ * speaks in pipe names, on purpose, so a unit test can call it with a literal
+ * `SourceName` and mean something. Every row on the Alerts tab draws as
+ * `sentry` would regardless of which monitor or which channel actually
+ * carried it, which is the whole ruling read as a colour: a Datadog page and a
+ * Sentry issue are one kind of thing now, and one kind of thing does not
+ * finish the sentence with two different glyphs.
+ *
  * Only the *identity* moves. `card.meta` and the lead's own meta are still what
  * they were, because they are the row's facts and the row really did arrive
  * through Slack; `whereOf` still answers `sentry-alerts` from them, which is
@@ -128,7 +141,41 @@ export function cardKind(card: Card): Kind {
   if (card.kind === 'task' && !card.sources.length) return TASK_KIND
   const lead = card.sources[0]
   if (!lead) return kindOf('github', card.kind, card.meta)
-  return kindOf(bucketOf(lead), card.kind || lead.kind, { ...lead.meta, ...card.meta })
+  const bucket = bucketOf(lead)
+  const meta = { ...lead.meta, ...card.meta }
+  const kind = bucket === 'alerts'
+    ? kindOf('sentry', card.kind || lead.kind, meta)
+    : kindOf(bucket, card.kind || lead.kind, meta)
+
+  // A visitor still waiting spends none of the amber accent and all of the
+  // urgency: the glyph keeps its shape — this is still a `Chat` — and borrows
+  // `--color-bad` the way `tint` already does for `TASK_KIND`, and the word
+  // itself becomes the state rather than the kind, the one place on a row
+  // where a kind word is allowed to say that instead.
+  const crisp = crispMeta(card)
+  if (crisp?.unresolved) return { ...kind, word: 'waiting', tint: 'var(--color-bad)' }
+  return kind
+}
+
+/**
+ * A Crisp conversation's own state, or `null` for every card that is not one.
+ *
+ * Read off the lead member rather than `card.kind` alone, because a merged
+ * card's own `kind` is whichever member's the dedup engine kept, and a Crisp
+ * row is identified the same way a Sentry one is — by what it says about
+ * itself, not by guessing from prose. `reply_total` defaults to 0 rather than
+ * going unprinted, because "waiting, 0 replies" is the honest answer for a
+ * visitor's opening message and a banner with no number reads as broken.
+ */
+export function crispMeta(card: Card): { unresolved: boolean; replies: number } | null {
+  const lead = card.sources[0]
+  if (!lead || lead.source !== 'slack') return null
+  if (card.kind !== 'crisp' && lead.kind !== 'crisp') return null
+  const meta = { ...lead.meta, ...card.meta }
+  return {
+    unresolved: meta.crisp_state === 'unresolved',
+    replies: typeof meta.reply_total === 'number' ? meta.reply_total : 0,
+  }
 }
 
 /** The glyph, in its source's hue. Sized for a row (16px) or a pane (14px). */

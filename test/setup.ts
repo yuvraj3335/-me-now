@@ -26,40 +26,6 @@ process.env.WAKE_CLAUDE_HOME = join(root, 'claude')
 process.env.WAKE_EMAILS = 'me@example.com,team@example.com'
 
 /**
- * The suite pins its own Slack scope, rather than borrowing the shipped one.
- *
- * This was not deliberate before and it bit: narrowing `DESK_CHANNELS` to the
- * sixteen channels the operator named took `#truto` off the list, and thirty-
- * nine tests failed that have nothing to do with which channels he wants. They
- * failed because `test/fixtures/slack.ts` is a real capture from `#truto`, and
- * every thread, dedup, recency and activity test is built on it.
- *
- * Reshaping the capture was the obvious way out and is the wrong one — that file
- * says so at the top, and it is right: a fixture edited to suit a test stops
- * proving anything. So the fixture stays verbatim and the *scope* becomes the
- * suite's own business, which is what it should always have been. A test about
- * thread parsing must not change its answer because somebody edited a
- * configuration list.
- *
- * The ids are carried, not just the names, because `isAllowedSlackChannel`
- * matches on the id first and several tests here pin exactly that — a channel
- * whose name arrived unreadable, and a channel that was renamed.
- *
- * `slack-channels.test.ts` is the one file this must not speak for: it is the
- * specification of the shipped list, so it asserts against `DESK_CHANNELS`
- * directly rather than against whatever is configured.
- */
-process.env.WAKE_SLACK_CHANNELS = [
-  'truto:C04D9HKDWAV',
-  'clonepartner:C09BRBLNXNH', 'sprinto:C050LJAMFSN', 'maximor-truto:C0A8B267EE9',
-  'spendflo-truto:C05CJ0CUV35', '15five-truto:C0AHHQMF08L', 'komplai-truto:C0A437E7UAU',
-  'evergrowth-truto:C0A25L2QEB0', 'thoropass-truto:C05P80HPYSK', 'open-truto:C08SS821JHG',
-  'stax-truto:C09TKFVP6AY', 'naq-truto:C09REMSHL14', 'docsbot-truto:C093QFW4U3E',
-  'truto-balkanid:C07PMS3UYKB', 'ex-superhawk-truto:C0AACN2HYM7', 'truto-zen:C07AVEG7ZHN',
-  'framer-clonepartner:C06UP5J326B', 'crisp-chats:C07351C8Z8E',
-].join(',')
-
-/**
  * Skill catalogs point at a fixture, not at ~/work.
  *
  * The index used to read whatever the machine happened to have cloned, so the
@@ -101,3 +67,38 @@ process.env.WAKE_CLAUDE_BIN = join(root, 'no-such-claude')
  */
 process.env.WAKE_TMUX_SOCKET = 'wake-test'
 process.env.WAKE_TERMINAL_SIZE_DIR = join(root, 'terminals')
+
+/**
+ * The suite's Slack scope now comes from the seeded `slack_channels` table
+ * (`db.ts` migration 15) rather than a `WAKE_SLACK_CHANNELS` allowlist, which
+ * no longer exists — and neither does the allowlist behaviour it fed. A
+ * channel `slack_channels` has never heard of now defaults to *reachable*
+ * (`slackScope.scopeFor` answers `mode: 'mentions'`), which is the property
+ * that used to bite here: narrowing the old array to the channels the
+ * operator actually named took `#truto` off it, and thirty-nine tests failed
+ * that had nothing to do with which channels he wants — they failed because
+ * `test/fixtures/slack.ts` is a real capture from `#truto`, and every thread,
+ * dedup, recency and activity test is built on it. Reshaping the capture was
+ * the wrong fix then and still would be; the fixture stays verbatim.
+ *
+ * Nothing needs overriding for that fixture's sake any more: the migration
+ * seeds `#truto` at `mentions` and `#crisp-chats` at `all` unconditionally,
+ * for this suite's database exactly as for a fresh production one, and those
+ * are the two channels the fixture was captured from. What is pinned below is
+ * a guard rather than a configuration.
+ *
+ * The import is dynamic, and deliberately the last thing in this file: it
+ * pulls in `db` (through `slackScope`), which reads every `WAKE_*` env var
+ * above at *its own* import time — so this has to run after all of them are
+ * set, never before, or `db`'s idea of `WAKE_TRUTO_BIN` and the rest would be
+ * whatever they defaulted to at the moment something first imported it.
+ */
+{
+  const { scopeFor } = await import('../src/server/slackScope')
+  const truto = scopeFor('C04D9HKDWAV', 'truto')
+  if (truto.mode === 'off') {
+    throw new Error(
+      "test scope: #truto (C04D9HKDWAV) must stay reachable — test/fixtures/slack.ts was captured from it",
+    )
+  }
+}

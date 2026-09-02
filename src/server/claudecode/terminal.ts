@@ -187,12 +187,27 @@ export const terminalSocketPath = (id: string) => `/api/claude/terminals/${id}/s
  * gets "the session did not start" about a message he can see on his own screen.
  *
  * A packed brief is a few kilobytes and cannot reach this; `POST /sessions/new`
- * takes free text and can. The bound is stated in characters rather than bytes
- * on purpose — it is what the composer counts, so the refusal and the thing he
- * is looking at are in the same units — and it is set well under the real limit
- * so that a brief of multi-byte characters cannot cross it either.
+ * takes free text and can. **This used to be stated and measured in
+ * characters** — `input.brief.length`, which is UTF-16 code units — with a
+ * comment claiming that was "well under the real limit ... so that a brief of
+ * multi-byte characters cannot cross it either." That claim was false: a
+ * character outside the Latin-1 range can cost up to 3 UTF-8 bytes per JS
+ * `.length` unit (every CJK ideograph does), so 100,000 *characters* of a
+ * Slack thread quoted in Chinese or Japanese — not an exotic input for a
+ * product that reads support threads — is up to 300,000 *bytes*, more than
+ * double `MAX_ARG_STRLEN`. That brief would sail past this check and then hit
+ * the exact E2BIG failure this function exists to turn into a sentence.
+ *
+ * The bound is measured in bytes now, which is the unit `execve` actually
+ * enforces. Nothing on screen shows a live count against it — the composer
+ * dropped its character counter entirely (see `Review` in `launch.tsx`) once
+ * the brief stopped travelling in a URL — so there is no live display to keep
+ * in the same units as this any more; the only place the number appears is the
+ * refusal message below, which now names what it actually measured.
  */
-export const MAX_BRIEF_CHARS = 100_000
+export const MAX_BRIEF_BYTES = 100_000
+
+const briefByteLength = (brief: string): number => Buffer.byteLength(brief, 'utf8')
 
 export function claudeArgv(o: {
   sessionId: string
@@ -297,13 +312,39 @@ const TOOL_DIRS = [
   `${homedir()}/.local/bin`,
 ]
 
+/**
+ * Not `C` — `LIST_FORMAT` depends on tmux actually printing the tab it was
+ * asked for.
+ *
+ * Measured, not assumed: run under `LC_ALL=C` (a systemd user unit's default
+ * when nothing sets a locale, and this shell's own default on a fresh macOS
+ * login), tmux's `-F '#{a}\t#{b}'` prints `a_b` — the literal tab in the
+ * format string comes back as `_`, silently, with no error on either side.
+ * `infoFrom` then calls `line.split('\t')` on a line that no longer has one,
+ * gets the whole line back as `name`, `sessionIdFromTmuxName` rejects it, and
+ * `scanTerminals` drops the row. Every terminal running under that tmux server
+ * would disappear from `/state` at once — exactly the failure `scanTerminals`'s
+ * own comment calls "the failure mode this product is least allowed to have" —
+ * and it would do it silently, because both tmux and this file are behaving
+ * exactly as documented; only the locale is wrong.
+ *
+ * `C.UTF-8` rather than `en_US.UTF-8`: it needs no `locale-gen` and ships with
+ * glibc itself on every Linux this runs on, so it cannot fail to exist the way
+ * a named locale can. Only substituted when the inherited value is missing or
+ * is the broken one — an operator who has actually set a real locale is left
+ * alone.
+ */
+const BROKEN_LOCALES = new Set(['', 'C', 'POSIX'])
+const SAFE_LOCALE = 'C.UTF-8'
+
 function sessionEnv(): Record<string, string> {
   const env = { ...process.env } as Record<string, string>
   const seen = new Set<string>()
   const path = [...TOOL_DIRS, ...(env.PATH ?? '').split(':')]
     .filter(p => p && !seen.has(p) && (seen.add(p), true))
     .join(':')
-  return { ...env, PATH: path }
+  const locale = (k: string) => (BROKEN_LOCALES.has(env[k] ?? '') ? SAFE_LOCALE : env[k]!)
+  return { ...env, PATH: path, LC_ALL: locale('LC_ALL'), LANG: locale('LANG') }
 }
 
 function tmux(args: string[], stdin?: string): Ran {
@@ -681,14 +722,19 @@ export function openTerminal(input: OpenInput): TerminalInfo | OpenFailure {
   const cols = size(input.cols, TERMINAL_COLS, 500)
   const rows = size(input.rows, TERMINAL_ROWS, 300)
 
-  // Refused here, in characters he can count, rather than at `execve` — which
-  // answers E2BIG, which tmux reports as "no reason given", which arrives as
-  // "the session did not start" about a message on his own screen.
-  if (input.brief && input.brief.length > MAX_BRIEF_CHARS) {
+  // Refused here, before `execve` answers E2BIG — which tmux reports as "no
+  // reason given", which arrives as "the session did not start" about a
+  // message on his own screen. Measured in bytes, because that is what the
+  // kernel counts: a brief's `.length` (UTF-16 code units) undercounts a
+  // multi-byte character by up to 3x, so counting characters here let exactly
+  // this failure through for a brief quoting non-Latin text. See the comment
+  // on `MAX_BRIEF_BYTES`.
+  const briefBytes = input.brief ? briefByteLength(input.brief) : 0
+  if (input.brief && briefBytes > MAX_BRIEF_BYTES) {
     return {
       status: 400,
-      error: `that brief is ${input.brief.length.toLocaleString()} characters and a session's first message ` +
-        `cannot be more than ${MAX_BRIEF_CHARS.toLocaleString()} — the operating system will not carry it. ` +
+      error: `that brief is ${briefBytes.toLocaleString()} bytes and a session's first message ` +
+        `cannot be more than ${MAX_BRIEF_BYTES.toLocaleString()} — the operating system will not carry it. ` +
         'Send the short version and attach the rest as context.',
     }
   }

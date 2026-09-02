@@ -2,6 +2,41 @@ export type SourceName = 'slack' | 'gmail' | 'github' | 'sentry' | 'claude'
 export type Pile = 'now' | 'open' | 'parked'
 
 /**
+ * One Slack channel, as Settings' scope editor reads and writes it.
+ *
+ * `mode` is what the Slack poller does with the channel — `off` reads nothing,
+ * `mentions` reads only the messages that would page or @-mention him,
+ * `all` reads every message — and the words the control shows for it depend on
+ * `family`: a monitor channel's `mentions` is "Paged", because there is no
+ * `@mention` on a bot's own post, only the subset of its alerts that named his
+ * group. `label` is a human's classification of the channel, not the poller's;
+ * `alert` and `crisp` are only legal there when `family` says so, because
+ * calling a customer channel `alert` by hand would tell the alert pipeline to
+ * read it as a monitor's.
+ */
+export type SlackChannelMode = 'off' | 'mentions' | 'all'
+export type SlackChannelLabel = 'team' | 'customer' | 'partner' | 'alert' | 'crisp'
+export type SlackChannelFamily = 'sentry' | 'datadog' | 'grafana' | 'crisp'
+
+export type SlackChannel = {
+  id: string
+  /** No leading `#`. */
+  name: string
+  /** `null` is "unknown" — a seeded row Wake has never listed from Slack. */
+  is_private: boolean | null
+  is_ext_shared: boolean | null
+  is_member: boolean | null
+  mode: SlackChannelMode
+  label: SlackChannelLabel | null
+  /** Which monitor posts here, or `null` for a channel no adapter recognises. */
+  family: SlackChannelFamily | null
+  /** Written by a migration before Wake could list channels itself, rather than by a read. */
+  seeded: boolean
+  updated_at: number
+  last_listed_at: number | null
+}
+
+/**
  * One message on a thread, as the Slack adapter already cleaned it.
  *
  * `tagged` is decided on the raw Slack markup, before the ids became display

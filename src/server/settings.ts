@@ -13,7 +13,7 @@
  */
 
 import { Hono } from 'hono'
-import { db } from './db'
+import { db, audit } from './db'
 import { GMAIL_ACCOUNTS, HANDOFF_MAX_CHARS, ME, PUBLIC_URL, WORKSPACE_ROOT } from './env'
 import { handoffTarget } from './claudecode/handoff'
 import { listSessions } from './sources/claudeSessions'
@@ -23,6 +23,8 @@ import { listSkills } from './skills/catalog'
 import { listRepos } from './registry/scan'
 import { listProfiles, whoami } from './truto/cli'
 import { TEMPLATES } from './claudecode/templates'
+import { discoverTools, listUserChannels } from './sources/slack'
+import { ScopeError, getChannel, listChannels, updateChannel, upsertListed } from './slackScope'
 
 export const settings = new Hono()
 
@@ -100,6 +102,68 @@ settings.get('/audit', c => {
       .all(limit)
       .map(r => ({ ...r, argv: safe(r.argv) })),
   })
+})
+
+/**
+ * The Slack channel scope, as an API — `slack_channels` (`db.ts` migration
+ * 15), read and written through `slackScope.ts`. This replaces a config array
+ * in `env.ts` that had to be hand-edited and redeployed to add or drop a
+ * channel, and was edited twice inside one week, once dropping the team
+ * channel entirely.
+ */
+
+/** The latest `last_listed_at` across every row, or null if nothing ever was. */
+function listedAt(): number | null {
+  const at = listChannels().reduce<number | null>(
+    (max, c) => (c.last_listed_at && (max === null || c.last_listed_at > max) ? c.last_listed_at : max),
+    null,
+  )
+  return at
+}
+
+settings.get('/slack/channels', async c => {
+  let canList = false
+  try {
+    canList = !!(await discoverTools()).listChannels
+  } catch {
+    // Discovery failing is not this route's failure to report — `canList:
+    // false` is still the honest answer, and the seeded rows stay editable.
+  }
+  return c.json({ channels: listChannels(), listedAt: listedAt(), canList })
+})
+
+settings.put('/slack/channels/:id', async c => {
+  const id = c.req.param('id')
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>)
+  const patch: { mode?: string; label?: string | null } = {}
+  if ('mode' in body) patch.mode = body.mode as string
+  if ('label' in body) patch.label = body.label === null ? null : (body.label as string)
+
+  try {
+    const before = getChannel(id)
+    const row = updateChannel(id, patch)
+    audit('slack.channel_scope', {
+      target: id,
+      detail: { name: row.name, before: before && { mode: before.mode, label: before.label }, after: { mode: row.mode, label: row.label } },
+    })
+    return c.json(row)
+  } catch (e) {
+    if (e instanceof ScopeError) return c.json({ error: e.message }, 400)
+    throw e
+  }
+})
+
+settings.post('/slack/channels/refresh', async c => {
+  const t = await discoverTools()
+  if (!t.listChannels) {
+    return c.json({
+      error: 'the connected Slack MCP exposes no channel-listing tool — the seeded channels are still editable, there is just nothing new to discover',
+    }, 501)
+  }
+  const listed = await listUserChannels()
+  const { added } = upsertListed(listed)
+  audit('slack.channel_refresh', { detail: { listed: listed.length, added } })
+  return c.json({ channels: listChannels(), listedAt: listedAt(), added })
 })
 
 function safe(v: string | null): string[] {

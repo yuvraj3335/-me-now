@@ -38,7 +38,8 @@
 import { db, logEvent, now } from './../db'
 import { cardId, extractRefs, groupCards } from './../dedup'
 import { asRaw, ensureGroupState, ingest, liveCards, migrateState } from './../ingest'
-import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID, isAllowedSlackChannel } from './../env'
+import { FETCH_LOOKBACK_DAYS, FETCH_MAX_ROWS, ME, SLACK_TEAM_ID } from './../env'
+import { isChannelReachable } from './../slackScope'
 import { readsLikeAsk } from './../sources/slack'
 import { searchGithub, searchSentry, searchSlack, type SearchHit } from './../sources/search'
 import type { Ref, RawCard, SourceName } from './../sources/types'
@@ -338,7 +339,7 @@ export function slackCard(h: SearchHit): RawCard | null {
    * Both facts are to hand and the id is the durable one: `h.ref` is
    * `<channel>:<ts>`, and `h.title` is the display name a rename can change.
    */
-  if (!isAllowedSlackChannel(channel, h.ref.split(':')[0])) return null
+  if (!isChannelReachable(h.ref.split(':')[0], channel)) return null
   return {
     source: 'slack',
     source_id: h.ref,

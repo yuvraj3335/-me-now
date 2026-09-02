@@ -26,7 +26,7 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  claudeArgv, derivedSessionId, getTerminal, isSessionId, MAX_BRIEF_CHARS, openTerminal,
+  claudeArgv, derivedSessionId, getTerminal, isSessionId, MAX_BRIEF_BYTES, openTerminal,
   resolveSessionCwd, sessionIdFromTmuxName, terminalRoute, terminalSocketPath, tmuxNameFor,
 } from '../src/server/claudecode/terminal'
 import {
@@ -633,7 +633,55 @@ describe('what a running terminal can say about itself', () => {
   })
 
   /**
-   * A brief bigger than one argv element, refused in units he can count.
+   * Every running session vanishes from `/state` under a "C" locale, silently.
+   *
+   * Measured against the tmux on this machine (Homebrew 3.7c): `list-sessions
+   * -F '#{a}\t#{b}'` prints `a_b` — the literal tab comes back as `_` — under
+   * `LC_ALL=C`, which is what a systemd user unit sees when nothing has set a
+   * locale and what this shell has by default on a fresh login. `infoFrom`
+   * calls `line.split('\t')` on a line that no longer has one, gets the whole
+   * line back as `name`, `sessionIdFromTmuxName` rejects it, and the row is
+   * dropped — with no error anywhere, because tmux did print a format string,
+   * just not the one that was asked for.
+   *
+   * The fix is `sessionEnv()` forcing `LC_ALL`/`LANG` to `C.UTF-8` on every
+   * tmux invocation when the inherited value would trigger this. This test
+   * sets the *process's* locale to the broken value — which is what a
+   * systemd unit with no locale configured would hand every child, including
+   * the one that creates the session — and asks whether the real spawn-and-
+   * list path still finds it, rather than asserting anything about
+   * `sessionEnv` directly.
+   */
+  test('a running session is still listed under a broken locale', () => {
+    const prevLcAll = process.env.LC_ALL
+    const prevLang = process.env.LANG
+    process.env.LC_ALL = 'C'
+    process.env.LANG = 'C'
+    try {
+      const repo = join(root, 'truto')
+      const id = derivedSessionId('pack:locale-check')
+      const name = tmuxNameFor(id)!
+      const tmux = (args: string[]) =>
+        Bun.spawnSync(['tmux', '-L', process.env.WAKE_TMUX_SOCKET!, ...args], {
+          stdout: 'pipe', stderr: 'pipe', env: process.env as Record<string, string>,
+        })
+
+      if (tmux(['new-session', '-d', '-s', name, '-c', repo, 'sleep', '30']).exitCode !== 0) return
+      try {
+        const t = getTerminal(id)
+        expect(t, 'a session running right now was reported as not running, because "C" ate the delimiter').toBeTruthy()
+        expect(t?.cwd).toBe(repo)
+      } finally {
+        tmux(['kill-session', '-t', name])
+      }
+    } finally {
+      if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll
+      if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang
+    }
+  })
+
+  /**
+   * A brief bigger than one argv element, refused in the unit `execve` counts.
    *
    * `MAX_ARG_STRLEN` is 128KB on Linux and the brief is one argument, so past
    * that `execve` answers E2BIG, tmux reports "no reason given", and the
@@ -642,12 +690,34 @@ describe('what a running terminal can say about itself', () => {
    * free text and can reach it.
    */
   test('a brief too large to exec is refused by size, not by tmux', () => {
-    const r = openTerminal({ cwd: join(root, 'truto'), brief: 'x'.repeat(MAX_BRIEF_CHARS + 1) })
+    const r = openTerminal({ cwd: join(root, 'truto'), brief: 'x'.repeat(MAX_BRIEF_BYTES + 1) })
     expect('error' in r).toBe(true)
     if (!('error' in r)) return
     expect(r.status).toBe(400)
     expect(r.error).toContain('cannot be more than')
-    // And it names the number in the same units the composer counts in.
-    expect(r.error).toContain(MAX_BRIEF_CHARS.toLocaleString())
+    // And it names the number of bytes execve actually refused.
+    expect(r.error).toContain(MAX_BRIEF_BYTES.toLocaleString())
+    expect(r.error).toContain('bytes')
+  })
+
+  /**
+   * The bound used to be measured in `.length` — UTF-16 code units — with a
+   * comment claiming that was safely under the byte limit for multi-byte text
+   * too. It was not: a CJK ideograph is one `.length` unit and three UTF-8
+   * bytes, so a brief of 40,000 Chinese characters is 40,000 by the old check
+   * and 120,000 bytes on the wire — past `MAX_ARG_STRLEN` (131,072) once tmux's
+   * own flags share the same exec. This is the input that check let through.
+   */
+  test('a brief under the character count can still be over the byte count, and is refused', () => {
+    // 3 bytes of UTF-8 each, comfortably under MAX_BRIEF_BYTES in `.length`
+    // but not in actual bytes.
+    const cjk = '中'.repeat(Math.floor(MAX_BRIEF_BYTES / 2))
+    expect(cjk.length).toBeLessThan(MAX_BRIEF_BYTES)
+
+    const r = openTerminal({ cwd: join(root, 'truto'), brief: cjk })
+    expect('error' in r, 'a brief 3x over the byte limit was accepted by a check counting characters').toBe(true)
+    if (!('error' in r)) return
+    expect(r.status).toBe(400)
+    expect(r.error).toContain('bytes')
   })
 })

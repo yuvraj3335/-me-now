@@ -74,8 +74,8 @@ import {
   Button, Chip, Empty, Menu, Segmented, Sheet, inputClass, rowStateClass, type MenuItem,
 } from './primitives'
 import {
-  PERMISSION_MODES, PHONE_COMPOSER, SESSION_MODELS, claudeAppUrl, closeLaunch, composerIsAPage,
-  launchApi, launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
+  PERMISSION_MODES, PHONE_COMPOSER, SESSION_MODELS, appHandoffTrim, claudeAppUrl, closeLaunch,
+  composerIsAPage, launchApi, launchDraft, openLaunch, rememberLaunch, removeFromLaunch, resetLaunch,
   resolveSkillIds, setLaunchModel, setLaunchPermissionMode, setLaunchSession, skillReaches,
   useLaunchBasket,
   type LaunchState, type PackItem, type PermissionMode, type SessionModel, type Session,
@@ -607,6 +607,41 @@ function LaunchComposer({
     cwd ? (meta.repos.find(r => r.path === cwd)?.name ?? 'no repository') : 'no repository'
   } · ${effectiveSkills.length} skill${effectiveSkills.length === 1 ? '' : 's'}`
 
+  /**
+   * Selecting or dropping a template, from wherever a template can be toggled.
+   *
+   * One function rather than two copies: the front row below and `TemplatePicker`
+   * behind `Shape` both toggle the same list, and a manual skill override has to
+   * be dropped by either — see `templateSkills` above for why a stale override
+   * would otherwise survive a template change and hide the new selection's own
+   * skills.
+   */
+  const toggleTemplate = (id: string) => {
+    setTemplates(t => (t.includes(id) ? t.filter(x => x !== id) : [...t, id]))
+    setSkills(null)
+  }
+
+  /**
+   * What `templatesFor(card)` already worked out, rendered rather than buried.
+   *
+   * `preferred` used to only seed `templates` on the first render — real, but
+   * invisible: the composer opened with the right investigation already chosen
+   * and nothing on screen said so beyond a bare count on the `Shape` chip. A
+   * card seen in Slack opened looking exactly like a card seen nowhere, and the
+   * only way to learn "Slack thread is already on" was to open Shape and read
+   * the checkmarks.
+   *
+   * Named here, first, as their own chips — the suggestion is the thing worth
+   * seeing without a tap, and the eleventh-job problem `TemplatePicker` guards
+   * against doesn't apply: `templatesFor` never suggests a voice template, so
+   * this can never surface `Humanizer` as if it were a twelfth investigation.
+   * Everything else, suggested or not, stays one tap away under `Shape`, which
+   * is where the ability to add or drop one lives.
+   */
+  const suggested = preferred
+    .map(id => meta.templates.find(t => t.id === id))
+    .filter((t): t is LaunchState['templates'][number] => !!t && t.kind !== 'voice')
+
   const body = panel === null ? (
     <>
       {/*
@@ -636,6 +671,12 @@ function LaunchComposer({
           sessions={meta.sessions} repos={meta.repos} repo={cwd}
           value={session} setCwd={setCwd}
         />
+        {suggested.map(t => (
+          <Chip key={t.id} active={templates.includes(t.id)} onClick={() => toggleTemplate(t.id)}
+            title={t.blurb} ariaLabel={t.label}>
+            {t.label}
+          </Chip>
+        ))}
         <Chip onClick={() => setPanel('context')} mark={<Paperclip size={13} aria-hidden />}
           title="What this brief quotes" ariaLabel="Context">
           + Context{items.length ? ` · ${items.length}` : ''}
@@ -707,15 +748,7 @@ function LaunchComposer({
 
       {panel === 'shape' && (
         <>
-          <TemplatePicker
-            all={meta.templates} chosen={templates}
-            onToggle={id => {
-              setTemplates(t => (t.includes(id) ? t.filter(x => x !== id) : [...t, id]))
-              // A template's skills are a starting point, not an answer: dropping
-              // the manual override lets the new selection's union show through.
-              setSkills(null)
-            }}
-          />
+          <TemplatePicker all={meta.templates} chosen={templates} onToggle={toggleTemplate} />
           <SkillPicker all={meta.skills} selected={effectiveSkills} onChange={setSkills} cwd={cwd} />
         </>
       )}
@@ -728,6 +761,25 @@ function LaunchComposer({
       )}
     </>
   )
+
+  /*
+   * What travels to the two controls below is not the same text under the same
+   * rule, and this is the one place that has to know both. `Send to session` /
+   * `Start a session` hands the brief to `openTerminal`, which carries it whole
+   * as a process argument and refuses it outright only past `MAX_BRIEF_BYTES`
+   * (128KB of headroom — see `terminal.ts`). The hatch below hands the same
+   * text to a URL with a much smaller budget, `meta.handoff.maxChars`, and
+   * silently cuts what does not fit. A brief long enough to trigger that used
+   * to say nothing about it until the Claude app was already open and the
+   * trimmed text was already the first message of a new conversation.
+   */
+  const hatchText = draft?.brief ?? instruction
+  const hatchTrim = appHandoffTrim(meta.handoff, hatchText)
+  const hatchTitle = hatchTrim.trimmed
+    ? `${APP_HATCH} This brief is ${hatchTrim.total.toLocaleString()} characters; a URL can only carry ` +
+      `${meta.handoff.maxChars.toLocaleString()}, so Wake will trim it and say so inside the chat. ` +
+      `"Send to session" below carries the whole thing.`
+    : APP_HATCH
 
   const footer = (
     <>
@@ -747,11 +799,11 @@ function LaunchComposer({
           hatch and not the commit.
         */}
         <a
-          href={claudeAppUrl(meta.handoff, draft?.brief ?? instruction)}
+          href={claudeAppUrl(meta.handoff, hatchText)}
           target="_blank"
           rel="noreferrer"
-          title={APP_HATCH}
-          aria-label={APP_HATCH}
+          title={hatchTitle}
+          aria-label={hatchTitle}
           /* No glyph beside it, and that is arithmetic rather than taste. This
              label and `Send to session` are 316px of a 343px row at 375px; an
              external-link mark and its gap is another 22 and the label starts
@@ -774,6 +826,19 @@ function LaunchComposer({
             : (session ? 'Send to session' : 'Start a session')}
         </Button>
       </div>
+
+      {/* Said here, not only in the link's own title, because a title is a hover
+          and a phone has none: the one surface this matters on is the one that
+          cannot read it. Below the row rather than beside the link, since the
+          link's own label is already fighting for 316px of a 343px row and has
+          nothing to spare. */}
+      {hatchTrim.trimmed && (
+        <p className="text-sm text-fg-mute mt-2 leading-snug">
+          This brief is {hatchTrim.total.toLocaleString()} characters — the Claude app link can only carry
+          {' '}{meta.handoff.maxChars.toLocaleString()} and will trim the rest. Sending to the session
+          below carries all of it.
+        </p>
+      )}
 
       {/* Two different sentences, and neither is a status code. `blocked` is what
           this machine is missing and is known before the press; `err` is what the

@@ -31,11 +31,23 @@ describe('every link Wake mints resolves to a route Wake has', () => {
   })
 
   test('no server-built deep link points at a path the shell does not have', () => {
+    /*
+     * `/terminal/<id>` is a destination without a tab: a session's own screen,
+     * routed by `terminalIdOf` in `route.ts` rather than by an entry in TABS,
+     * because it is a page you arrive at from a push or a composer and not one
+     * you switch to from the strip. So it is checked against the router's own
+     * parser rather than against the tab table — the parser is what makes it a
+     * route, and a link that `terminalIdOf` cannot read is a link to nothing.
+     */
+    const router = readFileSync('src/web/lib/route.ts', 'utf8')
+    expect(router, 'route.ts no longer parses /terminal/<id>').toMatch(/export function terminalIdOf/)
+    const known = [...routes, '/terminal']
+
     const push = readFileSync('src/server/push.ts', 'utf8')
     const links = [...push.matchAll(/\$\{PUBLIC_URL\}(\/[a-z-]*)/g)].map(m => m[1]!)
     expect(links.length, 'push.ts stopped minting deep links').toBeGreaterThan(0)
     for (const l of links) {
-      expect(routes, `push.ts links to ${l}, which is not a Wake route`).toContain(l)
+      expect(known, `push.ts links to ${l}, which is not a Wake route`).toContain(l)
     }
   })
 

@@ -892,6 +892,96 @@ CREATE TABLE IF NOT EXISTS claude_session_archive (
       migrateTaskStatuses()
     },
   },
+  {
+    id: 15,
+    name: 'slack-channel-scope',
+    /*
+     * The channel scope, out of a TypeScript array and into a table.
+     *
+     * `DESK_CHANNELS` in `env.ts` was that array, and it broke the way a
+     * hand-edited config array always eventually breaks: the only way to add or
+     * drop a channel was to edit the file and redeploy, and it was edited twice
+     * inside one week — once dropping `#truto`, the team's own channel, from
+     * the list entirely, silently, because nobody reviewing that diff was
+     * thinking about channel scope at the time. A table edited from Settings
+     * has an undo built in: the previous mode is one PUT away.
+     *
+     * Every row below is seeded `seeded = 1` and is exactly what shipped in
+     * `DESK_CHANNELS` / `SLACK_ALERT_CHANNELS`, restated as a mode rather than
+     * membership in an array — plus `#truto` (back in scope, as `mentions`
+     * only: it is a high-traffic team channel and most of its traffic is not
+     * his) and `#crisp-chats` (new: `all` + `family = 'crisp'`, so a customer
+     * waiting on a reply there reaches the desk without anyone forwarding it).
+     * `#framer-clonepartner` is seeded `off` — silent since 2026-03-20 — rather
+     * than dropped, so it is one Settings click from being back on rather than
+     * a channel this deployment has forgotten exists.
+     */
+    sql: `
+CREATE TABLE IF NOT EXISTS slack_channels (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  is_private     INTEGER,
+  is_ext_shared  INTEGER,
+  is_member      INTEGER,
+  mode           TEXT NOT NULL CHECK (mode IN ('off','mentions','all')),
+  label          TEXT CHECK (label IN ('team','customer','partner','alert','crisp')),
+  family         TEXT CHECK (family IN ('sentry','datadog','grafana','crisp')),
+  seeded         INTEGER NOT NULL DEFAULT 0,
+  updated_at     INTEGER NOT NULL,
+  last_listed_at INTEGER
+);
+`,
+    run() {
+      const now = Date.now()
+      const seed = db.query(
+        `INSERT OR IGNORE INTO slack_channels (id, name, mode, label, family, seeded, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      )
+      const row = (id: string, name: string, mode: string, label: string | null, family: string | null) =>
+        seed.run(id, name, mode, label, family, now)
+
+      // The team channel. Mentions only — six top-level posts a day and most of
+      // them are not aimed at him.
+      row('C04D9HKDWAV', 'truto', 'mentions', 'team', null)
+
+      // Customer channels: Slack Connect, shared with the customer's own staff.
+      // Read wholesale, so a customer's question reaches the desk whether or
+      // not it happens to name him.
+      const customers: Array<[string, string]> = [
+        ['C05CJ0CUV35', 'spendflo-truto'],
+        ['C05P80HPYSK', 'thoropass-truto'],
+        ['C09REMSHL14', 'naq-truto'],
+        ['C09TKFVP6AY', 'stax-truto'],
+        ['C0A25L2QEB0', 'evergrowth-truto'],
+        ['C0A437E7UAU', 'komplai-truto'],
+        ['C0AHHQMF08L', '15five-truto'],
+        ['C07PMS3UYKB', 'truto-balkanid'],
+        ['C0AACN2HYM7', 'ex-superhawk-truto'],
+        ['C0A8B267EE9', 'maximor-truto'],
+        ['C08SS821JHG', 'open-truto'],
+        ['C093QFW4U3E', 'docsbot-truto'],
+        ['C07AVEG7ZHN', 'truto-zen'],
+        ['C050LJAMFSN', 'sprinto'],
+      ]
+      for (const [id, name] of customers) row(id, name, 'all', 'customer', null)
+
+      // Partner channels. Active daily; the Framer one has been silent since
+      // 2026-03-20 and is seeded off rather than dropped.
+      row('C09BRBLNXNH', 'clonepartner', 'all', 'partner', null)
+      row('C06UP5J326B', 'framer-clonepartner', 'off', 'partner', null)
+
+      // Alert channels: read as history regardless of mode (until 'off'), and
+      // `mode = 'mentions'` here means "paged alerts only" — see `paged()` and
+      // the comment on `alertCards` in `sources/slack.ts`.
+      row('C0BERTMS9K4', 'sentry-alerts', 'all', 'alert', 'sentry')
+      row('C05UPHVT2CQ', 'truto-api-alerts', 'all', 'alert', 'datadog')
+      row('C0B53TSLGLA', 'truto-grafana-alerts', 'all', 'alert', 'grafana')
+
+      // Crisp: one bot posting a card per conversation, plus the occasional
+      // human reply — see `crispCard` in `sources/slack.ts`.
+      row('C07351C8Z8E', 'crisp-chats', 'all', 'crisp', 'crisp')
+    },
+  },
 ]
 
 /**

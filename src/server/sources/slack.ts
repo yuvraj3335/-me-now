@@ -16,13 +16,16 @@
 import { McpSession, HttpTransport, McpUnauthorized } from '../mcp/client'
 import { tokenGetter, resolveToken } from '../mcp/creds'
 import {
-  MCP_SERVERS, ME, LOOKBACK_DAYS, isAllowedSlackChannel,
-  SLACK_ALERT_CHANNELS, SLACK_CHANNELS, SLACK_TEAM_ID, SLACK_THREAD_READS, SLACK_USERGROUPS,
-  type AlertChannel,
+  MCP_SERVERS, ME, LOOKBACK_DAYS, SLACK_TEAM_ID, SLACK_THREAD_READS, SLACK_USERGROUPS,
+  TEAM_DOMAINS, bareChannel, type AlertChannel,
 } from '../env'
+import {
+  channelScope, historyChannels, isChannelReachable,
+  type ListedChannel, type SlackChannelRow,
+} from '../slackScope'
 import { extractRefs, extractAlertRefs } from '../dedup'
 import { isDmChannel } from '../../shared/slackThread'
-import { NotConnected, settle, type RawCard, type Ref, type SourceAdapter } from './types'
+import { NotConnected, settle, type Pile, type RawCard, type Ref, type SourceAdapter } from './types'
 import {
   namesUser, parentTs, parseThreadRead, slackTsToMs,
   type SlackMessage, type SlackThreadRead,
@@ -51,7 +54,14 @@ export function resetSlackSession() {
 
 /* --------------------------- tool discovery --------------------------- */
 
-type Tools = { search?: string; readThread?: string; readChannel?: string; myUserId?: string }
+type Tools = {
+  search?: string
+  readThread?: string
+  readChannel?: string
+  /** `slack_list_user_channels` or equivalent — optional; Settings' refresh needs it. */
+  listChannels?: string
+  myUserId?: string
+}
 let toolCache: { at: number; tools: Tools } | null = null
 
 /**
@@ -82,17 +92,87 @@ export async function discoverTools(): Promise<Tools> {
       byName(/^slack_read_channel$/) ??
       byName(/read_channel|conversations_history|channel_history/i)
 
+    // Optional. `Settings' "refresh"` uses it to discover new channels; nothing
+    // else here depends on it, and its absence degrades that one button rather
+    // than the poll.
+    const listChannels =
+      byName(/^slack_list_user_channels$/) ??
+      byName(/list.*channels?|conversations_list|channels_list/i)
+
     // The server tells us who we are in prose; that beats hard-coding an id.
     const desc = all.map(t => t.description ?? '').join('\n')
     const myUserId = ME.slackUserId || desc.match(/user_id is (U[A-Z0-9]+)/i)?.[1]
 
-    const tools: Tools = { search, readChannel, readThread: byName(/read_thread|thread_replies/i), myUserId }
+    const tools: Tools = {
+      search, readChannel, listChannels,
+      readThread: byName(/read_thread|thread_replies/i),
+      myUserId,
+    }
     if (have(tools)) toolCache = { at: Date.now(), tools }
     return tools
   } catch (e) {
     resetSlackSession()
     throw e
   }
+}
+
+/**
+ * Parse `slack_list_user_channels`'s Markdown, one `### #name` block per
+ * channel. Written against a real capture:
+ *
+ *   ### #stax-truto
+ *   - **ID:** C09TKFVP6AY
+ *   - **Type:** Private Channel
+ *   - **Archived:** No
+ *
+ * and the trailer a page ends on when there is another:
+ *   Pagination: More results available. Use cursor: "aWQ6NTA0MTc3MDA4Mjc3Mw=="
+ *
+ * No field here says whether a channel is Slack-Connect shared, so
+ * `isExtShared` is always left `undefined` — `upsertListed` stores that as
+ * `null`, "unknown", which is the honest answer rather than a guess.
+ */
+export function parseChannelListing(md: string): { channels: ListedChannel[]; nextCursor: string | null } {
+  const channels: ListedChannel[] = []
+  for (const block of md.split(/^###\s+/m).slice(1)) {
+    const name = bareChannel(block.split('\n')[0] ?? '')
+    const id = block.match(/^-\s*\*\*ID:\*\*\s*([A-Z0-9]+)/m)?.[1]
+    if (!name || !id) continue
+    const type = block.match(/^-\s*\*\*Type:\*\*\s*(.+)$/m)?.[1] ?? ''
+    channels.push({ id, name, isPrivate: /private/i.test(type) })
+  }
+  const nextCursor = md.match(/cursor:\s*"([^"]+)"/)?.[1] ?? null
+  return { channels, nextCursor }
+}
+
+/**
+ * Every channel the connected identity can see, public and private, paged to
+ * the end. Used only by Settings' "refresh" — nothing on the poll path calls
+ * this, so a slow or failing listing tool costs a button press, not a sync.
+ */
+export async function listUserChannels(): Promise<ListedChannel[]> {
+  const t = await discoverTools()
+  if (!t.listChannels) throw new Error('Slack exposes no channel-listing tool')
+
+  const out: ListedChannel[] = []
+  let cursor: string | undefined
+  // A hard ceiling rather than trust in the server to say "no more" cleanly —
+  // twenty pages at up to 200 a page is far past any real workspace, and a
+  // cursor that never terminates must not hang the request forever.
+  for (let page = 0; page < 20; page++) {
+    const r = await getSession().callJson<unknown>(t.listChannels, {
+      types: 'public_channel,private_channel',
+      exclude_archived: true,
+      limit: 200,
+      ...(cursor ? { cursor } : {}),
+    })
+    const md = markdownOf(r) || (typeof r === 'string' ? r : '')
+    const { channels, nextCursor } = parseChannelListing(md)
+    out.push(...channels)
+    if (!nextCursor) break
+    cursor = nextCursor
+  }
+  return out
 }
 
 /* ------------------------------ parsing ------------------------------- */
@@ -110,6 +190,14 @@ export type SlackHit = {
   text: string
   /** The workspace, when the payload happened to name one. See `teamIdIn`. */
   teamId?: string
+  /**
+   * The address inside the `From:` header's `<...>`, when there is one. A
+   * Slack Connect guest often renders with no address at all — captured live
+   * on #spendflo-truto, `Kartikey Dubey <kartikey.dubey@spendflo.com> (U06…,
+   * external: spendflo)` carries one and a bare display name would not — so
+   * this is what `isTeamAuthor` reads to decide "is this person on my team".
+   */
+  fromEmail?: string
 }
 
 /**
@@ -193,6 +281,16 @@ const decodeEntities = (t: string) =>
  * parenthesised author id is a user id **or** a bot id, and Alertmanager has
  * neither an address nor a user id; and there is no `Permalink:` field at all,
  * so the archive URL is synthesised from the channel and the ts.
+ *
+ * The id group used to be closed the moment it saw `[UB][A-Z0-9]+\)` — right
+ * for `(U092446PCTV)` and wrong for a Slack Connect guest, whose parenthetical
+ * carries more: `(U06EQBVLNF8, external: spendflo)`, captured live on
+ * #spendflo-truto. Closed that early the id group failed to match at all, so
+ * `(.+?)` — lazy — swallowed the whole parenthetical into the *name*, and
+ * `Kartikey Dubey <kartikey.dubey@spendflo.com>` came out
+ * `Kartikey Dubey  (U06EQBVLNF8, external: spendflo)`. The group now stops at
+ * the id and lets anything else inside the parens go with it, the same fix
+ * `parseWho` in `slackParse.ts` already makes for thread reads.
  */
 export function parseChannelMessages(payload: unknown, channelId: string): SlackHit[] {
   const raw =
@@ -211,7 +309,7 @@ export function parseChannelMessages(payload: unknown, channelId: string): Slack
   // The capture groups come back interleaved with the bodies, which is exactly
   // the shape wanted: [preamble, name, id, when, body, name, id, when, body, …].
   // The id group is optional and arrives `undefined` for Alertmanager.
-  const parts = raw.split(/^=== Message from (.+?)(?: \(([UB][A-Z0-9]+)\))? at (.+?) ===[ \t]*$/gm)
+  const parts = raw.split(/^=== Message from (.+?)(?: \(([UB][A-Z0-9]+)(?:,[^)]*)?\))? at (.+?) ===[ \t]*$/gm)
 
   const out: SlackHit[] = []
   for (let i = 1; i + 3 < parts.length; i += 4) {
@@ -235,13 +333,22 @@ export function parseChannelMessages(payload: unknown, channelId: string): Slack
       permalink: `https://truto.slack.com/archives/${channelId}/p${ts.replace('.', '')}`,
       text: body,
       teamId: teamIdIn(fromRaw) ?? teamId,
+      fromEmail: emailIn(fromRaw),
     })
   }
   return out
 }
 
+/** The address inside a `From:` header's `<...>`, or nothing at all. */
+const emailIn = (fromRaw: string): string | undefined =>
+  fromRaw.match(/<([^<>@\s]+@[^<>\s]+)>/)?.[1]?.toLowerCase()
+
 /**
- * One alert channel, as history.
+ * One channel, as history — every row `historyChannels()` names, not only the
+ * three alert ones this was written for. Customer and partner channels
+ * (`mode: 'all'`) and Crisp read exactly this way now, for the same reason: a
+ * customer's question is not guaranteed to name him, so the only way to see it
+ * is to read the channel wholesale rather than search it.
  *
  * `oldest` and `latest` are sent together, always. With `oldest` alone the
  * server anchors the window to the *oldest* end of the range and answers with
@@ -854,11 +961,13 @@ export function bucketHits(hits: SlackHit[], me: string): Map<string, ThreadBuck
      * below is worth having and is worth nothing as a guarantee. This line is
      * the guarantee.
      *
-     * `SLACK_ALERT_CHANNELS` passes, by `isAllowedSlackChannel`'s own rule and
-     * not by an exception written here — see the comment on it in `env.ts` for
-     * why a human reply under a Sentry post has to get through.
+     * An alert or Crisp channel passes by the same rule and not by an
+     * exception written here: `isChannelReachable` only asks whether the row's
+     * `mode` is `'off'`, and those channels default to `'all'` — so a human
+     * reply under a Sentry post still gets through, which is what lets
+     * `foldThreadIntoAlert` fold it into the alert row rather than losing it.
      */
-    if (!isAllowedSlackChannel(h.channelName, h.channelId)) continue
+    if (!isChannelReachable(h.channelId, h.channelName)) continue
     if (me && h.fromId === me) continue
 
     const parent = parentTs(h)
@@ -1092,20 +1201,23 @@ const asEntries = (v: unknown): ThreadEntry[] =>
   Array.isArray(v) ? v.filter((e): e is ThreadEntry => !!e && typeof (e as ThreadEntry).ts === 'string') : []
 
 /**
- * A human replied under an alert, and both readers found the same message.
+ * A human replied under a message a channel-history read already turned into
+ * a card, and both readers found the same message.
  *
- * The mention search and the alert-channel read describe one Slack message from
- * two sides, and a thread bucket keyed on that message collides exactly with the
- * alert card built from it. The alert keeps the row — it is the side carrying
- * `alert`, `short_id`, `paged`, `alert_state` and the `sentry:TRUTO-38`
- * reference that merges this row with the Sentry API's own — and the thread
- * gives it everything the alert reader cannot see: the human replies, who is
- * waiting, and whether one of them named him.
+ * The mention search and a wholesale channel read describe one Slack message
+ * from two sides, and a thread bucket keyed on that message collides exactly
+ * with the card built from it — an alert row (`alert`, `short_id`, `paged`,
+ * `alert_state`, the `sentry:TRUTO-38` reference that merges it with the
+ * Sentry API's own) or a plain `all`-mode customer row just the same. The
+ * history-read card keeps the row, because it carries facts the mention
+ * search cannot see, and the thread gives it everything the history reader
+ * cannot: the human replies, who is waiting, and whether one of them named
+ * him.
  *
- * Mutating in place rather than returning a new card, because the alert is
- * already in the map that decides what this poll emits and there must be exactly
- * one of it. Exported so the collision can be driven from the captured wire
- * payloads on both sides rather than through a mocked transport.
+ * Mutating in place rather than returning a new card, because the history
+ * card is already in the map that decides what this poll emits and there must
+ * be exactly one of it. Exported so the collision can be driven from the
+ * captured wire payloads on both sides rather than through a mocked transport.
  */
 export function foldThreadIntoAlert(alert: RawCard, thread: RawCard): void {
   const am = (alert.meta ?? {}) as Record<string, unknown>
@@ -1160,6 +1272,215 @@ export function readOrder(buckets: Iterable<ThreadBucket>): ThreadBucket[] {
   )
 }
 
+/* ------------------ channels read wholesale as history ------------------ */
+
+/**
+ * Slack's own "so-and-so has joined/left" notice, rendered as an ordinary
+ * message whose body is a self-mention. Captured live on #spendflo-truto:
+ * `<@U0A2Y4VC874|Ankit Bhadoria> has joined the channel`. Never a card — an
+ * arrival is not a piece of work.
+ *
+ * Only the shape actually captured is matched here. If a customer channel
+ * ever renders a topic change or a rename the same way, it belongs beside it.
+ */
+const SYSTEM_NOTICE = /^<@[A-Z0-9]+(?:\|[^>]*)?>\s+(has joined|has left)\b/i
+
+/**
+ * The `Thread: N replies (latest: …)` line `slack_read_channel` adds to a
+ * message that has replies — captured on #crisp-chats and #spendflo-truto
+ * alike, on both bot and human posts, and absent entirely on a message with
+ * none. This is the only reply information a wholesale channel read carries;
+ * getting the reply *text* would cost a `slack_read_thread` per message, which
+ * is the budget `SLACK_THREAD_READS` exists to ration for mention threads.
+ */
+const THREAD_LINE = /^Thread:\s*(\d+)\s+repl/im
+const replyCountOf = (text: string): number => Number(THREAD_LINE.exec(text)?.[1] ?? 0) || 0
+
+/** Lines that describe the message rather than say anything in it. */
+const NOT_CONTENT = /^(Thread|Attachment|Reactions|Files|Notified):/i
+const contentOnly = (text: string): string =>
+  text.split('\n').filter(l => !NOT_CONTENT.test(l.trim())).join('\n').trim()
+
+/**
+ * Is this author on the team, by the address the channel read carries?
+ *
+ * A Slack Connect guest often renders with no address at all — captured live
+ * on #spendflo-truto, `Kartikey Dubey <kartikey.dubey@spendflo.com> (…,
+ * external: spendflo)` carries one and a bare display name does not — and "no
+ * address" reads as *external*, not team: the expensive mistake is skipping a
+ * customer's unanswered question, not double-checking one from a colleague
+ * whose channel read happened to omit their address.
+ */
+const isTeamAuthor = (hit: SlackHit): boolean => {
+  const domain = hit.fromEmail?.split('@')[1]
+  return !!domain && TEAM_DOMAINS.includes(domain)
+}
+
+const topLevelEntry = (hit: SlackHit, body: string): ThreadEntry => ({
+  ts: hit.ts, who: hit.fromName, who_id: hit.fromId, text: cut(plain(body), ENTRY_CHARS),
+  tagged: false, mine: false,
+})
+
+/**
+ * One top-level message of a channel read wholesale (`mode: 'all'`, no
+ * family) as a card — the desk's only view into a channel a search cannot be
+ * trusted to surface, because a customer's question is not guaranteed to name
+ * him.
+ *
+ * The rules, in order: a join/leave notice is never a card, and neither is a
+ * message he wrote himself. A team-authored message with no replies is a
+ * broadcast — the weekly changelog every customer channel gets, verbatim,
+ * from `nidhi@truto.one` — and is skipped rather than shown as unanswered.
+ * Everything past that becomes a card: an external author with no reply is
+ * `now`, because nobody has answered them yet; anyone at all with at least one
+ * reply is `open`, because a conversation is already under way and this is
+ * where to find it.
+ */
+export function allChannelCard(row: SlackChannelRow, hit: SlackHit, me: string): RawCard | null {
+  if (SYSTEM_NOTICE.test(hit.text.trim())) return null
+  if (me && hit.fromId === me) return null
+
+  const replies = replyCountOf(hit.text)
+  const team = isTeamAuthor(hit)
+  if (team && replies === 0) return null
+
+  const pile: Pile = !team && replies === 0 ? 'now' : 'open'
+  const body = contentOnly(hit.text)
+  const title = (firstLine(body) || `Message from ${hit.fromName}`).slice(0, 120)
+  const peopleWord = row.label === 'partner' ? 'a partner' : 'a customer'
+  const why = pile === 'now'
+    ? `${peopleWord} posted in #${row.name} and nobody has answered`
+    : `posted in #${row.name}`
+
+  const sourceId = `${row.id}:${hit.ts}`
+  const entry = topLevelEntry(hit, body)
+
+  return {
+    source: 'slack',
+    source_id: sourceId,
+    kind: 'mention',
+    title,
+    why,
+    actor: hit.fromName,
+    actor_id: hit.fromId,
+    // A person waiting on him, same rule Slack always used it for — only when
+    // nobody has said anything back yet.
+    who: pile === 'now' ? hit.fromName : undefined,
+    excerpt: plain(body).slice(0, 400),
+    url: hit.permalink,
+    ts: hit.epochMs,
+    pile,
+    refs: [
+      { t: 'slackthread', v: sourceId },
+      ...extractRefs(body).filter(r => r.t !== 'slackthread'),
+    ],
+    meta: {
+      channel: `#${row.name}`,
+      channel_id: row.id,
+      channel_label: row.label,
+      thread_ts: hit.ts,
+      team_id: hit.teamId ?? SLACK_TEAM_ID,
+      replies,
+      last_reply_at: null,
+      tagged_at: null,
+      parent: entry,
+      // One entry, not the whole conversation: the count is authoritative, the
+      // text is not — see the comment on `THREAD_LINE`.
+      thread: [entry],
+      thread_partial: true,
+      ask: null,
+    },
+  }
+}
+
+/* --------------------------------- Crisp --------------------------------- */
+
+/** `:speech_balloon: Crisp conversation from {visitor}.` — the bot's own post. */
+const CRISP_FROM = /Crisp conversation from ([^\n]+?)\.\s*(?:\n|$)/i
+/** The one `Attachment:` line the bot posts, whatever it currently says. */
+const CRISP_ATTACHMENT = /^Attachment:\s*(.+)$/im
+
+/**
+ * Resolved or not, read off the attachment text rather than an emoji code —
+ * captured live, resolved reads `:white_check_mark: Conversation is
+ * resolved.`; unresolved is documented as `:bangbang: Conversation is
+ * unresolved. Please reply.` An attachment this does not recognise reads as
+ * unresolved: a visitor genuinely waiting is the expensive miss, and a
+ * conversation that really is resolved costs nothing by sitting in `open`
+ * once more.
+ */
+function crispState(text: string): 'resolved' | 'unresolved' {
+  const line = CRISP_ATTACHMENT.exec(text)?.[1] ?? ''
+  return /resolved/i.test(line) && !/unresolved/i.test(line) ? 'resolved' : 'unresolved'
+}
+
+/**
+ * One Crisp conversation, from the bot's own post in #crisp-chats.
+ *
+ * The contract the web side builds against: `kind: 'crisp'`, `title` and
+ * (while unresolved) `who` are the visitor's name, `pile: 'now'` while
+ * unresolved and `'open'` once resolved, `refs` carries the thread identity so
+ * dedup and the composer both still work.
+ */
+export function crispCard(row: SlackChannelRow, hit: SlackHit): RawCard | null {
+  const visitor = CRISP_FROM.exec(hit.text)?.[1]?.trim()
+  // Not actually a Crisp-shaped post from the bot — nothing here to build a
+  // Crisp card from.
+  if (!visitor) return null
+  const state = crispState(hit.text)
+  const sourceId = `${row.id}:${hit.ts}`
+
+  return {
+    source: 'slack',
+    source_id: sourceId,
+    kind: 'crisp',
+    title: visitor,
+    why: state === 'unresolved' ? 'a visitor is waiting for a reply on Crisp' : 'a Crisp conversation, resolved',
+    actor: hit.fromName,
+    actor_id: hit.fromId,
+    who: state === 'unresolved' ? visitor : undefined,
+    excerpt: plain(contentOnly(hit.text)).slice(0, 400),
+    url: hit.permalink,
+    ts: hit.epochMs,
+    pile: state === 'unresolved' ? 'now' : 'open',
+    refs: [{ t: 'slackthread', v: sourceId }],
+    meta: {
+      channel: 'crisp-chats',
+      channel_id: row.id,
+      thread_ts: hit.ts,
+      team_id: hit.teamId ?? SLACK_TEAM_ID,
+      family: 'crisp',
+      crisp_state: state,
+      visitor,
+      reply_total: replyCountOf(hit.text),
+    },
+  }
+}
+
+/**
+ * One row of `historyChannels()`, turned into cards.
+ *
+ * The row's `family` selects the parser exactly the way `alertCards` always
+ * did; a row with none is a plain customer or partner channel and gets the
+ * generic rule. `mode: 'mentions'` on a family row narrows the result to
+ * `pile: 'now'` — a page, for the alert families, or a visitor still waiting,
+ * for Crisp — because "mentions only" is a request for what actually needs
+ * him, not a claim that the rest of the channel went quiet.
+ */
+export function historyCardsForRow(row: SlackChannelRow, hits: SlackHit[], me: string): RawCard[] {
+  let cards: RawCard[]
+  if (row.family === 'sentry' || row.family === 'datadog' || row.family === 'grafana') {
+    cards = alertCards({ id: row.id, name: row.name, family: row.family }, hits)
+  } else if (row.family === 'crisp') {
+    cards = hits
+      .map(h => (h.fromId.startsWith('B') ? crispCard(row, h) : allChannelCard(row, h, me)))
+      .filter((c): c is RawCard => !!c)
+  } else {
+    cards = hits.map(h => allChannelCard(row, h, me)).filter((c): c is RawCard => !!c)
+  }
+  return row.mode === 'mentions' && row.family ? cards.filter(c => c.pile === 'now') : cards
+}
+
 /* ------------------------------ adapter ------------------------------- */
 
 /**
@@ -1198,14 +1519,14 @@ export function readOrder(buckets: Iterable<ThreadBucket>): ThreadBucket[] {
  *
  * It buys nothing else. This is somebody else's query language evaluated on
  * somebody else's machine; the refusal that decides what becomes a card is
- * `isAllowedSlackChannel` in `bucketHits`, and it runs whatever this string
- * does or stops doing.
+ * `isChannelReachable` in `bucketHits`, and it runs whatever this string does
+ * or stops doing.
  *
- * Exported for the same reason `searchArgs` below is: a query built inside an
- * await is a query nothing can hold, and every claim in the list above is one a
- * test should be able to fail on.
+ * The string itself now lives in `channelScope()`, in `slackScope.ts`, because
+ * it is built from the table rather than a literal array and every other
+ * reader of that table lives there too. What is still true and still worth
+ * measuring against is written above rather than duplicated there.
  */
-export const CHANNEL_SCOPE = SLACK_CHANNELS.map(c => `in:#${c.name}`).join(' ')
 
 /**
  * Every argument the mention search is asked with, as a value.
@@ -1304,22 +1625,30 @@ export const slack: SourceAdapter = {
     // a DM is a conversation, not a piece of work, and twenty of them on the
     // desk is twenty rows nothing can be done about from here.
     //
-    // It is one question about eighteen channels rather than about the
-    // workspace — see `CHANNEL_SCOPE` for the syntax and for why that is an
-    // economy and not the refusal.
-    const mention = me ? `<@${me}> after:${since} ${CHANNEL_SCOPE}`.trimEnd() : null
+    // It is one question about the channels whose mode says a mention there
+    // matters, rather than about the workspace — see `channelScope` in
+    // `slackScope.ts` for the syntax and for why that is an economy and not
+    // the refusal.
+    const scope = channelScope()
+    const mention = me ? `<@${me}> after:${since} ${scope}`.trimEnd() : null
+
+    // Every channel read wholesale this poll — customer and partner channels
+    // at `mode: 'all'`, plus alert and Crisp channels at any mode but 'off'.
+    // Fixed for the life of this call so the settled array below and the loop
+    // that reads it agree on which index is which channel.
+    const history = historyChannels()
 
     /*
-     * One settled array, deliberately. A failed alert-channel read has to make
-     * the whole Slack run not-ok: `settle` raises a `PartialPoll`, ingest turns
+     * One settled array, deliberately. A failed channel read has to make the
+     * whole Slack run not-ok: `settle` raises a `PartialPoll`, ingest turns
      * that into `ok:false, authoritative:false`, and the sweep is then skipped —
-     * so the alert cards already on the desk survive a poll that could not read
-     * their channel. Splitting these into two settled sets is how a green
+     * so the cards already on the desk from that channel survive a poll that
+     * could not read it. Splitting these into two settled sets is how a green
      * "synced 2m ago" ends up sitting over a channel nobody managed to read.
      */
     const settled = await Promise.allSettled([
       ...(mention ? [runSearch(t.search!, mention, 20)] : []),
-      ...SLACK_ALERT_CHANNELS.map(ch => readAlertChannel(t.readChannel!, ch.id, sinceMs)),
+      ...history.map(row => readAlertChannel(t.readChannel!, row.id, sinceMs)),
     ])
 
     const cards: RawCard[] = []
@@ -1367,41 +1696,45 @@ export const slack: SourceAdapter = {
     }
 
     /*
-     * The alert channels are built FIRST, and the reason is a collision.
+     * The wholesale-read channels are built FIRST, and the reason is a
+     * collision — not only the alert one this used to be about.
      *
-     * A thread bucket's key and an alert card's `source_id` are the same string:
-     * `<channel>:<ts>`. They are equal exactly when the message a thread hangs
-     * off *is* an alert — which is the standard triage move, someone replying
-     * under the Sentry post with `<@yuvraj> can you take this`. One shared
-     * `seen` set ran the thread loop first and then skipped the alert, so the
-     * row lost `alert`, `short_id`, `paged`, `alert_state` and the
-     * `sentry:TRUTO-38` reference that merges it with the Sentry API's own row —
-     * and the poll being authoritative, the sweep then marked the stored alert
-     * gone. The alert disappeared from the desk the moment a human touched it.
+     * A thread bucket's key and a history card's `source_id` are the same
+     * string: `<channel>:<ts>`. They are equal exactly when the message a
+     * thread hangs off *is* a message the history read already turned into a
+     * card — the standard alert-triage move, someone replying under the
+     * Sentry post with `<@yuvraj> can you take this`, and now also a customer
+     * channel where a reply happens to name him under a top-level message the
+     * `all`-mode read already has. Building the thread loop first and
+     * skipping anything already claimed lost `alert`, `short_id`, `paged`,
+     * `alert_state` and the `sentry:TRUTO-38` reference an alert row needs to
+     * merge with the Sentry API's own — and the poll being authoritative, the
+     * sweep then marked the stored alert gone. It disappeared the moment a
+     * human touched it.
      *
-     * So the alert row wins the identity, and the thread it collided with is
-     * folded into it rather than thrown away.
+     * So the history row wins the identity, and the thread it collided with is
+     * folded into it rather than thrown away or left to duplicate it.
      */
-    const alerts = new Map<string, RawCard>()
+    const historyCards = new Map<string, RawCard>()
     const offset = mention ? 1 : 0
-    SLACK_ALERT_CHANNELS.forEach((ch, i) => {
+    history.forEach((row, i) => {
       const res = settled[offset + i]
       if (res?.status !== 'fulfilled') return
-      for (const c of alertCards(ch, res.value as SlackHit[])) {
-        if (alerts.has(c.source_id)) continue
-        alerts.set(c.source_id, c)
+      for (const c of historyCardsForRow(row, res.value as SlackHit[], me ?? '')) {
+        if (historyCards.has(c.source_id)) continue
+        historyCards.set(c.source_id, c)
       }
     })
 
     for (const [key, b] of buckets) {
       const card = buildThreadCard(b, reads.get(key) ?? null, me ?? '')
       if (!card) continue
-      const alert = alerts.get(key)
-      if (alert) foldThreadIntoAlert(alert, card)
+      const existing = historyCards.get(key)
+      if (existing) foldThreadIntoAlert(existing, card)
       else cards.push(card)
     }
 
-    cards.push(...alerts.values())
+    cards.push(...historyCards.values())
 
     // A search that exploded is not a search that found nothing. Tool discovery
     // is cached for thirty minutes, so without this a Slack whose queries start

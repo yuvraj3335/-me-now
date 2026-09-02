@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import type { Analytics, CardPriority, CardStatus, SourceStatus, State, SourceName } from './types'
+import type {
+  Analytics, CardPriority, CardStatus, SlackChannel, SourceStatus, State, SourceName,
+} from './types'
 import { pipesFor } from './bucket'
 
 /** What `POST /connections/:source/start` answers with, success or not. */
@@ -280,6 +282,18 @@ export const actions = {
   // `sent` is whether a device was actually woken — not whether a row was
   // written. `reason` is present whenever it was not, and is a sentence rather
   // than a code, because it goes straight onto the screen.
+  /**
+   * The Slack channel scope — `slack_channels` on the server, edited from
+   * Settings. `family` is never sent: it is discovered, not chosen.
+   */
+  slackChannels: () =>
+    req<{ channels: SlackChannel[]; listedAt: number | null; canList: boolean }>('/settings/slack/channels'),
+  setSlackChannel: (id: string, patch: { mode?: SlackChannel['mode']; label?: SlackChannel['label'] }) =>
+    req<SlackChannel>(`/settings/slack/channels/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    }),
+  refreshSlackChannels: () =>
+    post<{ channels: SlackChannel[]; listedAt: number | null; added: number }>('/settings/slack/channels/refresh'),
   pushTest: () =>
     post<{ sent: boolean; devices: number; delivered: number; reason: string | null }>('/push/test'),
   pushStatus: () =>

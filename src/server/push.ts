@@ -9,6 +9,9 @@
 import webpush from 'web-push'
 import { db, kvGet, kvSet, logEvent, now, uid } from './db'
 import { PUBLIC_URL, VAPID_SUBJECT } from './env'
+import { slackTsMs } from '../shared/slackThread'
+import { sessionsNeedingAttention } from './sources/claudeSessions'
+import { listTerminals } from './claudecode/terminal'
 
 let ready = false
 
@@ -149,6 +152,235 @@ export async function notify(dedupKey: string, p: PushPayload): Promise<boolean>
   return true
 }
 
+/* ------------------------------ new work ---------------------------------- */
+
+/**
+ * Where a push about a card lands: the desk, filtered to its source, with the
+ * card's own detail open.
+ *
+ * Built from the same two things `src/web/lib/route.ts` reads back out — `?src=`
+ * (`Home.tsx`'s `FILTERS` tab) and `#card/<group_key>` (`detailKeyOf`) — because
+ * that file, not this one, owns what a Wake address means. `test/push-events
+ * .test.ts` parses this URL with `detailKeyOf` and asserts the group key comes
+ * back exactly, which is what keeps the two ends from drifting apart.
+ */
+function cardUrl(source: string, groupKey: string): string {
+  return `${PUBLIC_URL}/?src=${encodeURIComponent(source)}#card/${encodeURIComponent(groupKey)}`
+}
+
+const CRISP = '💬 '
+const MENTION = '👋 '
+const PAGED = '🚨 '
+const NOW_WAITING = '🔔 '
+
+/** How far back "new" reaches. Older than this is backlog, not news. */
+const NEW_WORK_MAX_AGE_MS = 2 * 3600_000
+
+/** Logged once per process — see the note on `deliver()`'s own empty-devices line. */
+let warnedNoSubsForNewWork = false
+
+function pushSubCount(): number {
+  return (db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM push_subs`).get() ?? { n: 0 }).n
+}
+
+/** `card_state` says this group is settled — done, abandoned, disowned, or parked. */
+function groupSuppressed(state: any): boolean {
+  if (!state) return false
+  if (state.status === 'done' || state.status === 'wont_do') return true
+  if (state.not_mine) return true
+  if (state.snoozed_until && state.snoozed_until > now()) return true
+  return false
+}
+
+/**
+ * A visitor waiting on an unresolved Crisp conversation.
+ *
+ * `who` is the visitor — Crisp cards, like every other card, only fill it in
+ * with a *person* waiting on him, and here that person is the customer, not a
+ * teammate. Dedup is keyed on the state rather than the poll: the same
+ * conversation flipping to unresolved a second time is the same key, so it
+ * buzzes once for as long as it stays that one conversation's one unresolved
+ * spell — which is deliberate, not an oversight; see the brief.
+ */
+async function notifyCrisp(row: any): Promise<void> {
+  const visitor = row.who || row.actor || 'A visitor'
+  await notify(`crisp:${row.source_id}:unresolved`, {
+    title: `${CRISP}${visitor} is waiting on Crisp`,
+    body: row.title,
+    url: cardUrl(row.source, row.group_key),
+    kind: 'crisp',
+  })
+}
+
+/**
+ * Somebody named him, in a thread entry that is not his own.
+ *
+ * Reads `meta.thread` and `meta.parent` exactly as `buildThreadCard` in
+ * `sources/slack.ts` writes them — `ThreadEntry[]` with `tagged`/`mine` already
+ * decided at ingest time, so this never re-derives "was he named" from display
+ * text. One push per entry, each keyed on the entry's own Slack `ts`, so a
+ * five-year-old thread that merges into this group today cannot replay its
+ * entire history as five pushes: each entry's own age is checked against
+ * `NEW_WORK_MAX_AGE_MS`, separately from the card-level check the caller already
+ * did, because a thread's `ts` is its *newest* activity and a stale mention can
+ * hide behind a fresh reply from somebody else.
+ */
+async function notifyMentions(row: any, meta: any, at: number): Promise<number> {
+  let sent = 0
+  const entries: any[] = [
+    ...(meta?.parent ? [meta.parent] : []),
+    ...(Array.isArray(meta?.thread) ? meta.thread : []),
+  ]
+  const channel = String(meta?.channel || '').replace(/^#/, '')
+
+  for (const e of entries) {
+    if (!e || !e.tagged || e.mine || typeof e.ts !== 'string') continue
+    const entryMs = slackTsMs(e.ts)
+    if (entryMs === null || at - entryMs > NEW_WORK_MAX_AGE_MS) continue
+    if (await notify(`mention:${row.group_key}:${e.ts}`, {
+      title: `${MENTION}${e.who} mentioned you in #${channel}`,
+      body: e.text,
+      url: cardUrl(row.source, row.group_key),
+      kind: 'mention',
+    })) sent++
+  }
+  return sent
+}
+
+/**
+ * A page, not a post. `meta.paged` is decided in `sources/slack.ts`'s `paged()`
+ * against `SLACK_USERGROUPS` — his on-call groups being named in the message —
+ * which is exactly the line between "someone is on the hook for this" and the
+ * routine Datadog/Grafana volume Half A took off the visible desk. Unpaged alert
+ * volume never reaches this function's caller with anything to do, and
+ * `alert_state === 'recovered'` is checked defensively even though nothing in
+ * `slack.ts` emits it today — a recovered transition is filtered out before it
+ * becomes a card at all, so this is a second door on a lock that should already
+ * be shut.
+ *
+ * Dedup is the source id alone, forever: the monitor or issue this alert is
+ * *about* buzzes once, ever, the first time it pages — a flapping monitor is
+ * still one thing, and re-arming that would be the paging fatigue this whole
+ * exercise exists to avoid. Its later transitions still land on the desk.
+ */
+async function notifyPaged(row: any, meta: any): Promise<void> {
+  if (!meta?.paged || meta?.alert_state === 'recovered') return
+  await notify(`paged:${row.source_id}`, {
+    title: `${PAGED}Paged: ${row.title}`,
+    url: cardUrl(row.source, row.group_key),
+    kind: 'paged',
+  })
+}
+
+/**
+ * Fired from `ingest.ts` after its transaction commits, over exactly the card
+ * ids that transaction wrote — new rows and re-polled ones alike, since a
+ * dedup key is what stops a repoll from buzzing twice, not staying off this list.
+ *
+ * Four kinds fire, each stated as one rule: an unresolved Crisp conversation, a
+ * thread entry that names him, an alert that paged his on-call group, and — the
+ * catch-all — a `pile: 'now'` card with a `who` that is none of the above and is
+ * brand new this poll. Everything else on the desk, however urgent-looking,
+ * stays a card and does not buzz: that restraint is the entire point of this
+ * function, not a gap in it.
+ *
+ * Two guards apply before any of the four: a card older than
+ * `NEW_WORK_MAX_AGE_MS` is backlog, not news — the first poll after a deploy or
+ * a newly-scoped channel can hand this function two weeks of "new" rows in one
+ * batch, and none of that is allowed to become forty buzzes. And a group already
+ * `done`, `wont_do`, `not_mine` or snoozed stays quiet: he settled it, and a
+ * background poll re-touching the row is not news either.
+ */
+export async function notifyOnNewWork(report: { at: number; cardIds: string[] }): Promise<void> {
+  if (!report.cardIds.length) return
+
+  if (pushSubCount() === 0) {
+    if (!warnedNoSubsForNewWork) {
+      console.warn('wake: skipping new-work pushes — push_subs is empty, nothing is subscribed')
+      warnedNoSubsForNewWork = true
+    }
+    return
+  }
+
+  const ph = report.cardIds.map(() => '?').join(',')
+  const rows = db.query<any, any[]>(`SELECT * FROM cards WHERE id IN (${ph})`).all(...report.cardIds)
+
+  for (const row of rows) {
+    if (report.at - row.ts > NEW_WORK_MAX_AGE_MS) continue
+    const state = db.query<any, [string]>(`SELECT * FROM card_state WHERE group_key = ?`).get(row.group_key)
+    if (groupSuppressed(state)) continue
+
+    let meta: any = {}
+    try { meta = JSON.parse(row.meta || '{}') } catch { /* treated as no meta */ }
+
+    if (row.source === 'slack' && row.kind === 'crisp' && meta.crisp_state === 'unresolved') {
+      await notifyCrisp(row)
+      continue
+    }
+    if (row.source === 'slack' && row.kind === 'mention') {
+      // A customer's post in a channel read wholesale is also `kind: 'mention'`
+      // (see `allChannelCard`) and names nobody — so a thread with no tagged
+      // entry falls through to the desk's own rule below rather than being
+      // swallowed here. One that did name him has already buzzed once and must
+      // not buzz a second time under a second heading.
+      if (await notifyMentions(row, meta, report.at) > 0) continue
+    }
+    if (row.source === 'slack' && row.kind === 'alert') {
+      await notifyPaged(row, meta)
+      continue
+    }
+    // The desk's own urgency, for everything that is none of the three kinds
+    // above: a card he has not seen before this poll, sitting in `now`, with a
+    // real person waiting on it.
+    if (row.pile === 'now' && row.who && row.first_seen_at === report.at) {
+      await notify(`now:${row.group_key}`, {
+        title: `${NOW_WAITING}${row.who} is waiting: ${row.title}`,
+        url: cardUrl(row.source, row.group_key),
+        kind: 'now',
+      })
+    }
+  }
+}
+
+/**
+ * A live Claude Code session sitting idle on a turn or a tool call, with nobody
+ * looking at it.
+ *
+ * `sessionsNeedingAttention()` (in `sources/claudeSessions.ts`) answers *what*
+ * is idle; this answers *who else is looking*. Two separate refusals, both
+ * load-bearing:
+ *
+ *  - Not in `listTerminals()` at all — Claude Code running in a laptop terminal
+ *    he opened himself, outside Wake. He is looking at it; a push saying so
+ *    would be Wake telling him about his own screen.
+ *  - In `listTerminals()` with `clients > 0` — a browser tab (laptop or phone)
+ *    is attached to it right now, which is Wake's own way of saying the same
+ *    thing: somebody is already looking.
+ *
+ * Only a Wake-started session nobody currently has open gets a buzz.
+ */
+export async function notifySessions(): Promise<void> {
+  const attention = sessionsNeedingAttention()
+  if (!attention.length) return
+
+  const terminals = new Map(listTerminals().map(t => [t.id, t]))
+
+  for (const s of attention) {
+    const term = terminals.get(s.id)
+    if (!term || term.clients > 0) continue
+
+    const title = s.reason === 'permission_prompt'
+      ? `⌨️ Session is asking permission · ${s.title}`
+      : `⌨️ Session finished a turn · ${s.title}`
+
+    await notify(`session:${s.id}:${s.since}`, {
+      title,
+      url: `${PUBLIC_URL}/terminal/${encodeURIComponent(s.id)}`,
+      kind: 'session',
+    })
+  }
+}
+
 const REPEAT_MS: Record<string, number> = { daily: 864e5, weekly: 7 * 864e5 }
 
 function nextFire(fireAt: number, rule: string | null): number | null {
@@ -167,7 +399,15 @@ function nextFire(fireAt: number, rule: string | null): number | null {
   return step ? fireAt + step : null
 }
 
-/** Fire everything due. Called on a timer; safe to call concurrently. */
+/**
+ * Fire everything due. Called on a timer; safe to call concurrently.
+ *
+ * `notifySessions()` rides this same 30s tick rather than getting a timer of
+ * its own — a Claude Code session sitting on a finished turn or a permission
+ * prompt is exactly the kind of thing a reminder tick already exists to catch,
+ * and a second `setInterval` for one more idempotent, dedup-keyed check would
+ * only be another place for the two to drift out of step.
+ */
 export async function runReminders() {
   const due = db.query<any, [number]>(
     `SELECT * FROM reminders WHERE fired_at IS NULL AND dismissed_at IS NULL AND fire_at <= ?`,
@@ -189,6 +429,7 @@ export async function runReminders() {
   }
 
   await warnDeadlines()
+  await notifySessions()
 }
 
 /**

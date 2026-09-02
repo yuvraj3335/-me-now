@@ -16,10 +16,13 @@ import {
   parseSlackResults,
 } from '../src/server/sources/slack'
 import { extractAlertRefs } from '../src/server/dedup'
-import { SLACK_ALERT_CHANNELS } from '../src/server/env'
+import { alertChannels } from '../src/server/slackScope'
 import type { RawCard } from '../src/server/sources/types'
 
-const [SENTRY_CH, DATADOG_CH, GRAFANA_CH] = SLACK_ALERT_CHANNELS
+// Derived from the seeded `slack_channels` table (migration 15) rather than a
+// literal array — `alertChannels()` reads it in insertion order, which is
+// sentry, datadog, grafana, the same order this file has always destructured.
+const [SENTRY_CH, DATADOG_CH, GRAFANA_CH] = alertChannels()
 
 /** Verbatim: #sentry-alerts, three messages, the TRUTO-38 pair and one lone triage. */
 const SENTRY_WIRE = `Channel: #sentry-alerts (C0BERTMS9K4)

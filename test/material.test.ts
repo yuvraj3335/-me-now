@@ -226,6 +226,83 @@ describe('the material is rationed, which is what makes it fast', () => {
         .toMatch(new RegExp(`\\.${n} \\{[^}]*backdrop-filter: none`))
     }
   })
+
+  test('the pointer-tracked sheen stays a highlight, not a second contrast budget', () => {
+    // `--glass-shine` is the radial highlight `.glass::before` paints at
+    // wherever `useGlassSheen` last saw the pointer. It composites on TOP of
+    // every token measured elsewhere in this file, so it does not get to have
+    // its own opinion about what a floor is — it is held to a flat ceiling
+    // low enough that it can never be the difference between a token clearing
+    // its floor and missing it, in either theme.
+    for (const [name, scope] of [['dark', DARK], ['light', LIGHT]] as const) {
+      const a = alphaOf(scope, '--glass-shine')
+      expect(a, `${name}'s --glass-shine is ${a}, above the 0.06 ceiling this feature is allowed`)
+        .toBeLessThanOrEqual(0.06)
+    }
+  })
+})
+
+/*
+ * Text over glass, composited rather than assumed.
+ *
+ * Every other contrast test in this file measures a token against a RESTING
+ * or ATTENDED ground — a row, a card, a hover. A `Sheet` and a `Menu` are a
+ * different case: they are `.glass`/`.glass-bar` panels that can open over
+ * ANYTHING already on the page, including the brightest things on it, and
+ * nothing above measured that composite at all.
+ *
+ * So this reads `--glass-tint` and `--glass-bar-tint` at their own alpha over
+ * five bases: the page, both ambient washes at full strength, the accent
+ * surface itself (`#e9a23b` — a card, a chip, a status glyph could sit under
+ * a sheet opened from it), and the two attended row grounds. `accentSurface`
+ * is deliberately the brightest, most saturated thing the product paints, so
+ * passing there is the actual worst case rather than a comfortable one.
+ *
+ * Every text and mark token gets AA's 4.5:1 floor on every composite — looser
+ * than this file's own 7/6 resting floor, because a sheet opening over the one
+ * brightest surface in the product is already the edge case an absolute floor
+ * exists for. `fg` and `fg-dim` additionally hold this file's own resting
+ * floor on the PAGE composite specifically, because that is what a sheet or a
+ * menu opens over most of the time and the commonest case should not settle
+ * for the floor built for the rarest one.
+ */
+describe.each([
+  ['dark', DARK, 7],
+  ['light', LIGHT, 6],
+] as const)('%s: a panel of glass stays legible over whatever it opens on', (name, scope, textFloor) => {
+  const g = grounds(scope)
+  const bases: Record<string, RGB> = {
+    page: g.resting.page,
+    ambient: g.resting.ambient,
+    accentSurface: colour(scope, '--color-accent'),
+    rowSel: colour(scope, '--color-row-sel'),
+    rowNew: colour(scope, '--color-row-new'),
+  }
+  const GLASS_MARKS = ['--color-accent-ink', '--color-ok', '--color-warn', '--color-bad'] as const
+
+  test.each(['--glass-tint', '--glass-bar-tint'] as const)('%s clears AA on every base it can open over', (glassToken) => {
+    const tint = rgbOf(scope, glassToken)
+    const alpha = alphaOf(scope, glassToken)
+    for (const [bn, base] of Object.entries(bases)) {
+      const ground = over(tint, alpha, base)
+      for (const t of [...TEXT, ...GLASS_MARKS]) {
+        const r = contrast(colour(scope, t), ground)
+        expect(r, `${t} over ${glassToken} on ${bn} is ${r.toFixed(2)}:1, under WCAG AA's 4.5:1`)
+          .toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  test.each(['--glass-tint', '--glass-bar-tint'] as const)('%s over the page still clears this file\'s own floor', (glassToken) => {
+    const tint = rgbOf(scope, glassToken)
+    const alpha = alphaOf(scope, glassToken)
+    const pageGround = over(tint, alpha, bases.page!)
+    for (const t of ['--color-fg', '--color-fg-dim'] as const) {
+      const r = contrast(colour(scope, t), pageGround)
+      expect(r, `${t} over ${glassToken} on the page is ${r.toFixed(2)}:1, under ${textFloor}:1`)
+        .toBeGreaterThanOrEqual(textFloor)
+    }
+  })
 })
 
 describe('a row is a pane, and the pane holds its own drawer', () => {

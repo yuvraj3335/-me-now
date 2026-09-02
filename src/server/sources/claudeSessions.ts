@@ -680,7 +680,7 @@ export function parseSessionTurns(
     turns: read.turns,
     window: {
       bytes: budget, ofBytes: read.size, records: read.records,
-      tools: read.tools, pending: read.pending,
+      tools: read.tools, pending: read.pending, lastActivityTs: read.lastActivityTs,
     },
   }
 }
@@ -710,20 +710,30 @@ export type TurnWindow = {
    * than appended to a list. See `readWindow`.
    */
   pending: string[]
+  /**
+   * The timestamp of the newest user/assistant record in the window,
+   * regardless of whether it carried prose — a bare `tool_use` or `tool_result`
+   * moves this the same as a turn does. `0` when the window held no such record.
+   *
+   * `sessionsNeedingAttention` reads this rather than `turns[-1].ts`, because a
+   * pending tool call has no turn of its own to be timed from — this is the one
+   * number that is still moving while `pending` is non-empty.
+   */
+  lastActivityTs: number
 }
 
 function readWindow(
   hit: SessionFile, budget: number, after: number, limit: number,
 ): {
   ok: boolean; size: number; cwd?: string; turns: SessionTurn[]
-  records: number; tools: number; pending: string[]
+  records: number; tools: number; pending: string[]; lastActivityTs: number
 } {
   let size = 0
   try { size = statSync(hit.path).size } catch { /* the read below reports it */ }
 
   let text: string
   try { text = readTail(hit.path, budget) } catch {
-    return { ok: false, size, turns: [], records: 0, tools: 0, pending: [] }
+    return { ok: false, size, turns: [], records: 0, tools: 0, pending: [], lastActivityTs: 0 }
   }
 
   const turns: SessionTurn[] = []
@@ -793,7 +803,78 @@ function readWindow(
    * accumulate. So it is reported beside the turns and the page draws it once,
    * at the bottom.
    */
-  return { ok: true, size, cwd, turns: turns.slice(-limit), records, tools, pending }
+  return { ok: true, size, cwd, turns: turns.slice(-limit), records, tools, pending, lastActivityTs: lastTs }
+}
+
+/* --------------------------- needs attention ------------------------------ */
+
+/** How long a session may sit idle on its newest event before it is "waiting on him". */
+const ATTENTION_IDLE_MS = 60_000
+
+export type AttentionReason = 'finished_turn' | 'permission_prompt'
+
+export type SessionAttention = {
+  id: string
+  cwd: string
+  project: string
+  title: string
+  /** When the state this is reporting actually started — a turn's ts, or the tail's. */
+  since: number
+  reason: AttentionReason
+}
+
+/**
+ * Live sessions whose newest event looks like it is sitting there waiting on a
+ * human, not on Claude.
+ *
+ * Built entirely on `listActiveSessions()` (which is process id) and
+ * `parseSessionTurns()` (which is the one tail reader this file has) — no second
+ * JSONL parser. Two shapes count:
+ *
+ *  - `finished_turn` — the newest thing in the window is a turn and it is
+ *    Claude's (`role: 'assistant'`), nothing has happened since, and it has sat
+ *    that way for `ATTENTION_IDLE_MS`. `parseSessionTurns` already drops
+ *    sidechains before either of us sees a record, so "not a sidechain" from the
+ *    brief is free.
+ *  - `permission_prompt` — `window.pending` is non-empty: a tool call is the
+ *    newest thing that happened and no turn has followed it.
+ *
+ * That second one is a known, deliberate imprecision. Claude Code's transcript
+ * writes exactly the same shape — a `tool_use` record with nothing after it —
+ * whether the tool is sitting on a permission prompt or is a `bash` command
+ * still genuinely running; there is no third event that tells the two apart,
+ * and finding out would mean shelling out to ask the process rather than
+ * reading its file. `ATTENTION_IDLE_MS` is what keeps a two-second `ls` from
+ * counting: a tool call unresolved for a full minute is a session worth a
+ * glance either way.
+ *
+ * `window.lastActivityTs` (not `turns.at(-1).ts`) is the clock for both, because
+ * a pending tool call has no turn of its own — it is the one timestamp that
+ * still moves while `pending` is non-empty.
+ */
+export function sessionsNeedingAttention(): SessionAttention[] {
+  const t = Date.now()
+  const out: SessionAttention[] = []
+
+  for (const row of listActiveSessions()) {
+    // A session live for only seconds, with no transcript on disk yet, has
+    // nothing for the tail reader to find — and nothing to be stuck on either.
+    const read = parseSessionTurns(row.id)
+    if (!read.found || !read.window) continue
+    const { pending, lastActivityTs } = read.window
+    if (!lastActivityTs || t - lastActivityTs < ATTENTION_IDLE_MS) continue
+
+    if (pending.length > 0) {
+      out.push({ id: row.id, cwd: row.cwd, project: row.project, title: row.title, since: lastActivityTs, reason: 'permission_prompt' })
+      continue
+    }
+
+    const last = read.turns[read.turns.length - 1]
+    if (last?.role === 'assistant') {
+      out.push({ id: row.id, cwd: row.cwd, project: row.project, title: row.title, since: last.ts, reason: 'finished_turn' })
+    }
+  }
+  return out
 }
 
 /**

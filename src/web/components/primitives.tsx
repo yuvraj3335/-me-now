@@ -1,10 +1,10 @@
 import { AnimatePresence, motion, useDragControls } from 'motion/react'
 import {
-  useEffect, useRef, useState,
+  useEffect, useId, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { useStill } from '../lib/motion'
+import { useGlassSheen, useMediaQuery, useStill } from '../lib/motion'
 import { navStrip, useOverlay } from '../lib/overlay'
 import { toLocalInput, fromLocalInput } from '../lib/time'
 import { PAGE_TITLE } from '../lib/typography'
@@ -12,7 +12,7 @@ import { WakeMark } from './WakeMark'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
 
 /**
- * The two springs every panel in this product settles on.
+ * The springs every panel in this product settles on.
  *
  * They were declared here and used nowhere for a long time, while every surface
  * animated on a duration and a cubic bézier instead. A timing curve is the right
@@ -21,11 +21,19 @@ import { Check, ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
  * draggable, a fixed 180ms ease-out from wherever the thumb let go is where the
  * surface stops feeling attached to the hand.
  *
- * `spring` is for something small and near: a menu, a popover, a picker. `soft`
- * is for something with a panel's worth of travel — a sheet coming up from the
- * bottom edge. Both are damped past overshoot on purpose: this is furniture
- * settling, not a toy bouncing, and a dialog that wobbles under a heading is the
- * kind of motion that reads as cheap on the second viewing.
+ * `spring` is for something small and near: a menu, a popover, a picker, the
+ * sliding thumb behind a `Segmented` option. It is damped past overshoot on
+ * purpose — a menu that wobbles open reads as a toy, not as furniture.
+ *
+ * `softSpring` is for a bottom sheet on a phone, and it is the one place this
+ * file asks for a little overshoot rather than damping it out. A sheet on iOS
+ * has real momentum behind it — it arrives under a thumb that just threw it
+ * upward — and a pane that stops dead the instant it reaches its resting
+ * position reads as teleported rather than thrown. Tuned to a damping ratio of
+ * ~0.7: about 4% of overshoot, settled within two cycles, which is a sheet
+ * that visibly has weight without becoming the bouncing toy the dialog on the
+ * laptop is still right to avoid — see `Sheet`, which reaches for plain
+ * `spring` on that surface instead, for exactly that reason.
  *
  * `restDelta` is the pixel they may stop short by. A spring without one keeps
  * animating for a few hundred milliseconds while it converges on a difference no
@@ -35,7 +43,7 @@ export const spring = {
   type: 'spring', stiffness: 520, damping: 40, mass: 0.7, restDelta: 0.5,
 } as const
 export const softSpring = {
-  type: 'spring', stiffness: 300, damping: 34, mass: 0.9, restDelta: 0.5,
+  type: 'spring', stiffness: 340, damping: 26, mass: 1, restDelta: 0.5,
 } as const
 
 /* --------------------------------- buttons -------------------------------- */
@@ -157,6 +165,32 @@ export function Segmented<T extends string>({
   ariaLabel?: string
   className?: string
 }) {
+  // One id per instance of this component, so two `Segmented`s open at once
+  // do not share a `layoutId` and animate their thumbs into each other.
+  const groupId = useId()
+  const still = useStill()
+  const groupRef = useRef<HTMLDivElement>(null)
+
+  /*
+    Left and right move the choice itself, the way a native segmented control
+    does — this is a radio group standing in for a single value, not a tab
+    list, so there is nothing focus could land on that would not also want to
+    become the value. It wraps at the ends rather than stopping there: three
+    or four options is short enough that wrapping is the faster way to
+    whichever end the last arrow press did not already reach.
+  */
+  const onGroupKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    const enabled = options.filter(o => !o.disabled)
+    if (!enabled.length) return
+    e.preventDefault()
+    const at = enabled.findIndex(o => o.id === value)
+    const dir = e.key === 'ArrowRight' ? 1 : -1
+    const next = enabled[(at + dir + enabled.length) % enabled.length]!
+    onChange(next.id)
+    groupRef.current?.querySelector<HTMLButtonElement>(`[data-seg-id="${CSS.escape(next.id)}"]`)?.focus()
+  }
+
   return (
     /* The group used to clip itself, so the active segment's fill would stay
        inside the rounded corner. That also clipped each segment's touch target
@@ -177,23 +211,52 @@ export function Segmented<T extends string>({
        than the two beside it, so the selection read as the recess. `card` is the
        surface the well is cut into, so the chosen segment sits back up at the
        page's own level in both themes: a lift in dark, white in light. */
-    <div role="group" aria-label={ariaLabel}
+    <div role="group" aria-label={ariaLabel} ref={groupRef} onKeyDown={onGroupKey}
       className={`glass-well inline-flex h-8 rounded-control border border-edge ${className}`}>
-      {options.map((o, i) => (
-        <button
-          key={o.id}
-          disabled={o.disabled}
-          onClick={() => onChange(o.id)}
-          aria-pressed={value === o.id}
-          className={`hit relative px-3 text-sm font-medium transition-colors duration-100
-            first:rounded-l-[5px] last:rounded-r-[5px]
-            disabled:opacity-40 disabled:pointer-events-none
-            ${i > 0 ? 'border-l border-rule' : ''}
-            ${value === o.id ? 'glass-card glass-edge text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o, i) => {
+        const selected = value === o.id
+        return (
+          <button
+            key={o.id}
+            data-seg-id={o.id}
+            disabled={o.disabled}
+            onClick={() => onChange(o.id)}
+            aria-pressed={selected}
+            className={`hit relative px-3 text-sm font-medium transition-colors duration-100
+              first:rounded-l-[5px] last:rounded-r-[5px]
+              disabled:opacity-40 disabled:pointer-events-none
+              ${i > 0 ? 'border-l border-rule' : ''}
+              ${selected ? 'text-fg' : 'text-fg-mute hover:text-fg-dim hover:bg-raise'}`}
+          >
+            {/*
+              One thumb, shared by `layoutId` across whichever button currently
+              renders it. Motion sees the same id appear at a new position on
+              the next render and animates the move itself — there is no
+              measuring here, which is also why this needed no change when the
+              option count or the group's own width did. It is the fill this
+              control used to paint straight onto the selected button
+              (`glass-card glass-edge`); moving it into its own layer is what
+              lets that layer travel between buttons instead of cross-fading.
+
+              `transition: { duration: 0 }` under `useStill()` rather than
+              omitting the thumb: the value is still correct with no frames
+              running, only the slide between two values is skipped, which is
+              exactly what a hidden tab or reduced motion asks for — see
+              `lib/motion.ts`.
+            */}
+            {selected && (
+              <motion.span
+                aria-hidden
+                layoutId={`${groupId}-seg-thumb`}
+                className={`glass-card glass-edge absolute inset-0
+                  ${i === 0 ? 'rounded-l-[5px]' : ''} ${i === options.length - 1 ? 'rounded-r-[5px]' : ''}`}
+                transition={still ? { duration: 0 } : spring}
+              />
+            )}
+            <span className="relative z-10">{o.label}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -335,6 +398,10 @@ export function Menu<T extends string>({
   const anchorRef = useRef<HTMLSpanElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const still = useStill()
+  // The pointer highlight tracks across this panel exactly as it does on a
+  // `Sheet` — see `useGlassSheen` in `lib/motion.ts` for why it needs `still`
+  // and nothing else.
+  useGlassSheen(panelRef, still)
 
   const current = items.find(i => i.id === value) ?? null
 
@@ -468,12 +535,19 @@ export function Menu<T extends string>({
           ref={panelRef}
           role="menu"
           aria-label={ariaLabel ?? label ?? 'Menu'}
-          style={{ left: at.left, top: at.top, bottom: at.bottom, width: at.width, maxHeight: at.maxHeight }}
+          style={{
+            left: at.left, top: at.top, bottom: at.bottom, width: at.width, maxHeight: at.maxHeight,
+            // The scale below has to grow from the edge nearest the trigger —
+            // the bottom edge when the panel flipped upward, the top edge
+            // otherwise — or a menu that opens above its trigger would appear
+            // to grow downward, away from the thing that opened it.
+            transformOrigin: at.bottom !== undefined ? 'bottom' : 'top',
+          }}
           // Entrance only. An exit that never runs — a hidden tab produces no
           // frames — leaves the panel on screen for good, and a menu that has
           // been picked from has no business lingering anyway.
-          initial={still ? false : { opacity: 0, y: at.bottom !== undefined ? 4 : -4 }}
-          animate={{ opacity: 1, y: 0 }}
+          initial={still ? false : { opacity: 0, scale: 0.96, y: at.bottom !== undefined ? 4 : -4 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
           transition={spring}
           className="scroller fixed z-[55] overflow-y-auto py-1
                      rounded-panel border border-edge glass"
@@ -633,6 +707,24 @@ export function Sheet({
   const keyboard = useKeyboardInset(open)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const dragControls = useDragControls()
+  // The pointer highlight tracks across the panel on a laptop; `useGlassSheen`
+  // already refuses to attach on a coarse pointer, so this needs no `sm:`
+  // check of its own.
+  useGlassSheen(panelRef, still)
+  /*
+    Which entrance this is, kept live rather than read once at mount.
+
+    A phone sheet arrives with a panel's worth of travel under a thumb that
+    just threw it upward, so it slides up and overshoots slightly on arrival —
+    `softSpring`, tuned for exactly that. A laptop dialog has nowhere to slide
+    up FROM — it is already centred — so sliding it "up" reads as it entering
+    from off-screen for no reason a mouse ever caused. What a centred panel
+    does instead is scale up from its own resting size, the way every macOS
+    sheet and popover does, and on `spring` rather than `softSpring`: there is
+    no thrown momentum behind a centred dialog, so this is the one surface in
+    the file that stays fully damped.
+  */
+  const desktop = useMediaQuery('(min-width: 640px)')
 
   // Escape closes every overlay in the product.
   useEffect(() => {
@@ -748,12 +840,16 @@ export function Sheet({
             // is a real transform the moment it is applied, so a slide-up that
             // never runs leaves the panel a full panel-height below the fold —
             // its buttons unreachable, with nothing to scroll to reach them.
-            initial={still ? false : { y: '100%', opacity: 0.6 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={still ? undefined : { y: '100%', opacity: 0.6 }}
-            // A sheet has a panel's worth of travel and comes up under a thumb,
-            // so it settles on a spring rather than running out a fixed 180ms.
-            transition={softSpring}
+            // Same reasoning for `scale: 0.96` on the laptop: skipping the
+            // animation must never mean skipping straight to a shrunk dialog.
+            initial={still ? false : desktop ? { opacity: 0, scale: 0.96 } : { y: '100%', opacity: 0.6 }}
+            animate={desktop ? { opacity: 1, scale: 1 } : { y: 0, opacity: 1 }}
+            exit={still ? undefined : desktop ? { opacity: 0, scale: 0.96 } : { y: '100%', opacity: 0.6 }}
+            // The phone slide gets `softSpring`'s slight overshoot — a sheet
+            // arriving under a thumb's own momentum. The laptop scale gets
+            // plain `spring`: nothing threw a centred dialog, so nothing here
+            // should look thrown either.
+            transition={desktop ? spring : softSpring}
           >
             {/*
               The grabber, on the phone only.
@@ -768,14 +864,17 @@ export function Sheet({
               without it the browser claims the drag as a scroll and the
               pointermove events stop arriving after a few pixels, which is the
               same failure the pane's resize grip documents. The 44px box is the
-              target; the 4px bar is the ink.
+              target; the 36×5 bar is the ink — `bg-ink-600`, which is the token
+              this file's own comment reserves for "scrollbars and grabbers
+              only", not `edge`, which is structure everywhere else in the
+              product and would make this read as a border rather than a part.
             */}
             <div
               onPointerDown={e => dragControls.start(e)}
               className="grabber sm:hidden shrink-0 flex items-center justify-center h-6 -mb-2"
               aria-hidden
             >
-              <span className="w-9 h-1 rounded-full bg-edge" />
+              <span className="w-9 h-[5px] rounded-full bg-ink-600" />
             </div>
             {title && (
               <div

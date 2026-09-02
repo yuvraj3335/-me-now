@@ -68,7 +68,7 @@ describe('a task, shaped like a desk row', () => {
     expect(row.sources, 'a task grew a member, and a source tab will now show it')
       .toEqual([])
     expect(bucketsOf(row), 'a task appears on a source tab').toEqual([])
-    for (const src of ['slack', 'gmail', 'github', 'sentry', 'claude'] as const) {
+    for (const src of ['slack', 'gmail', 'github', 'alerts', 'claude'] as const) {
       expect(inBucket(row, src), `the ${src} tab claimed a task`).toBe(false)
     }
   })
@@ -118,7 +118,15 @@ describe('the tab reads the right table', () => {
     // `?src=all` is in every bookmark made before the tab was renamed. Cast, it
     // matches no source and renders an empty desk with nothing to say why.
     expect(src, 'the tab is read by cast again')
-      .toContain("const tab: DeskTab = FILTERS.find(s => s === p.src) ?? 'tasks'")
+      .toContain("const tab: DeskTab = FILTERS.find(s => s === src) ?? 'tasks'")
+  })
+
+  test('?src=sentry still lands on the tab it used to name', () => {
+    // A bookmark or a push notification minted before the Sentry tab became
+    // the Alerts tab still carries the old value, and it has to keep landing
+    // on the same rows rather than falling through to "no source filter".
+    expect(src, 'the sentry alias is gone')
+      .toContain("const src = p.src === 'sentry' ? 'alerts' : p.src")
   })
 })
 

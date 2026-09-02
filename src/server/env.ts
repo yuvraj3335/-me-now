@@ -83,190 +83,34 @@ export type AlertChannel = {
   family: 'sentry' | 'datadog' | 'grafana'
 }
 
-/**
- * The channels read directly rather than searched.
- *
- * Search cannot see this content: bot search results come back with empty text,
- * and a `<!subteam^…>` token inside an attachment is not indexed at all — a
- * search for `truto-eng in:#truto-api-alerts` returns zero rows on a day when
- * Datadog paged the group twice. So these three are read as history.
- *
- * `#intent-alerts` (C07UWPPLSGN) is deliberately absent. Its newest message is
- * over a year old, it is website-visitor marketing, and every read of it would
- * sit in `settle`'s denominator where a failure marks the whole Slack run
- * not-ok for nothing.
- *
- * `SLACK_CHANNELS` below does NOT apply to these three, and that is a decision
- * rather than an oversight — so please do not "fix" it by folding them into one
- * list. These are not searched, they are read as history, so there is no
- * workspace-wide query here for an allowlist to narrow. They are also the whole
- * route by which Sentry, Datadog and Grafana paging reaches the desk, and the
- * standing instruction on this deployment is not to disconnect a source that
- * works. Deleting them from the poll would silence every page; adding them to
- * the searched list would ask a question that has already been measured
- * answering nothing.
- */
-export const SLACK_ALERT_CHANNELS: AlertChannel[] = [
-  { id: 'C0BERTMS9K4', name: 'sentry-alerts',        family: 'sentry'  },
-  { id: 'C05UPHVT2CQ', name: 'truto-api-alerts',     family: 'datadog' },
-  { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
-]
-
-/**
- * A channel the desk is allowed to carry work from.
- *
- * `name` carries no leading `#`, because Slack's own name for a channel does
- * not either — the hash is rendering. `id` is optional, and the difference is
- * where the fact came from: the list this deployment ships with was read off
- * the workspace, and anything typed into the env var is a name and nothing more.
- */
-export type SlackChannel = { name: string; id?: string }
-
 /** `#Truto `, `truto` and `TRUTO` are one channel. Slack stores names lower-case. */
 export const bareChannel = (s: string | null | undefined): string =>
   (s ?? '').trim().replace(/^#+/, '').toLowerCase()
 
 /**
- * The channels a mention is allowed to come from.
+ * The channel scope used to live here as a hand-edited array —
+ * `DESK_CHANNELS` / `SLACK_CHANNELS` / `WAKE_SLACK_CHANNELS` — and it broke the
+ * way a config array always eventually breaks: editing it was the only way to
+ * add or drop a channel, and it was edited twice inside one week, once dropping
+ * `#truto` — the team's own channel — entirely, silently, because nobody
+ * reading the diff was thinking about scope at the time.
  *
- * The mention search is workspace-wide, and a workspace is much bigger than the
- * work. Measured on this deployment on 2026-08-31: a fortnight of `<@me>`
- * spends four of its twenty slots on `#github-updates`, `#pr-reviews` and a
- * Slack list rendering as `#FC:F096Q3LBF7C:Sprint Tasks` — places the operator
- * does not work, taking slots from the customer channels he does. Narrowing the
- * same query to this list reached a further day back inside the same cap.
- *
- * Names first, because a name is what he gave and what he will edit. Ids
- * beside them, because the name is also the half that moves: a renamed channel
- * keeps its id, and `parseSlackResults` substitutes the id for the name when a
- * payload carries no readable one — so a hit can arrive with a good id and a
- * useless name, and never the other way round. `isAllowedSlackChannel` reads
- * the id first for exactly that reason and falls back to the name.
- *
- * The ids were read off this workspace with `slack_search_channels` and checked
- * again on 2026-09-01 when the list was narrowed — all sixteen resolved to the
- * same ids they already carried. Twelve of the seventeen are private, and both
- * kinds answer to `in:#name` in a search. `WAKE_SLACK_CHANNELS` replaces
- * the whole list with plain comma-separated names — a person can type names and
- * cannot be expected to type ids, and a name match on its own is the behaviour
- * this list had before it carried any.
+ * It now lives in `slack_channels`, a real table (`db.ts` migration 15,
+ * `slackScope.ts` for the reads and writes), edited from Settings rather than
+ * from a pull request. `bareChannel` above stays here because it is a pure
+ * string rule with no storage behind it and `slackScope.ts` needs it too.
  */
-/*
- * NARROWED to the seventeen he named, and two came off.
- *
- * `#truto` (`C04D9HKDWAV`) and `#crisp-chats` (`C07351C8Z8E`) were on this list
- * and are not on his. `#truto` is not a small removal — it was the third-busiest
- * source of Slack rows on the box, ten of them at the time of the change — so it
- * is worth being explicit that it went because he listed the channels he wants
- * to hear from and that was not among them, not because anything about it was
- * wrong.
- *
- * **This is the fetch scope, not a push filter, and that is a decision.** The
- * ask was "Slack should only ping me from these channels", and the obvious place
- * for that is `push.ts` — except no Slack message has ever produced a push.
- * `push.ts` has exactly two internal triggers, a reminder he set and a due date
- * he set; `ingest.ts` never calls `notify()` at all. So a filter there would be
- * narrowing an empty set and would read as done while changing nothing. The
- * layer where his sentence has an effect today is what Slack surfaces to Wake in
- * the first place, which is this list.
- *
- * `Customer (private)` is on his list and is NOT here, because it could not be
- * resolved. Searched against the connected token as both `public_channel` and
- * `private_channel`, for `customer`, `customers` and `cust`: the only matches
- * anywhere in the workspace are `#truto-customer-events` and
- * `#elaichi-customer-events`, both public and neither plausibly the one he
- * means. A private channel the token cannot see cannot be given an id, and
- * guessing at one would silently point this list at the wrong conversation. It
- * is left out and said out loud rather than quietly dropped — add it with
- * `WAKE_SLACK_CHANNELS`, or name it here once its real name is known.
- */
-export const DESK_CHANNELS: SlackChannel[] = [
-  { name: 'clonepartner',        id: 'C09BRBLNXNH' },
-  { name: 'sprinto',             id: 'C050LJAMFSN' },
-  { name: 'maximor-truto',       id: 'C0A8B267EE9' },
-  { name: 'spendflo-truto',      id: 'C05CJ0CUV35' },
-  { name: '15five-truto',        id: 'C0AHHQMF08L' },
-  { name: 'komplai-truto',       id: 'C0A437E7UAU' },
-  { name: 'evergrowth-truto',    id: 'C0A25L2QEB0' },
-  { name: 'thoropass-truto',     id: 'C05P80HPYSK' },
-  { name: 'open-truto',          id: 'C08SS821JHG' },
-  { name: 'stax-truto',          id: 'C09TKFVP6AY' },
-  { name: 'naq-truto',           id: 'C09REMSHL14' },
-  { name: 'docsbot-truto',       id: 'C093QFW4U3E' },
-  { name: 'truto-balkanid',      id: 'C07PMS3UYKB' },
-  { name: 'ex-superhawk-truto',  id: 'C0AACN2HYM7' },
-  { name: 'truto-zen',           id: 'C07AVEG7ZHN' },
-  { name: 'framer-clonepartner', id: 'C06UP5J326B' },
-]
 
 /**
- * `WAKE_SLACK_CHANNELS`, which now takes an id beside a name if you have one.
+ * Which email domains count as "his team" rather than "somebody outside it".
  *
- * `truto, spendflo-truto` still works and is still the form a person types. But
- * a name-only override silently gave up the half of the match that matters most:
- * `isAllowedSlackChannel` reads the id first precisely because a renamed channel
- * keeps its id and `parseSlackResults` substitutes an id for a name when the
- * payload has no readable one — so a hit can arrive with a good id and a useless
- * name, and an operator who narrowed the list by env had no way to catch it.
- *
- * So `spendflo-truto:C05CJ0CUV35` is accepted too, and the two forms mix freely
- * in one variable. Anything after a second colon is ignored rather than treated
- * as an id, because that is a typo and a wrong id is worse than none.
- *
- * **A name is required; an id alone is not enough.** `:C0123` is dropped, and
- * that is not an oversight: the searched query is built as `in:#<name>`, so a
- * nameless entry would emit a malformed term and narrow the whole poll to
- * nothing. Worth stating because the note above `DESK_CHANNELS` points at this
- * variable as the way to add `Customer (private)` — and an id may be all that is
- * ever recovered for it. It needs the channel's real name too.
+ * Decides, for a channel read wholesale as history, whether a message with no
+ * reply under it is a broadcast nobody needs to answer (`truto.one`, internal)
+ * or a customer's question sitting unanswered (anything else). Configurable
+ * because it is a fact about the org, not about Slack.
  */
-const TYPED_CHANNELS: SlackChannel[] = str('WAKE_SLACK_CHANNELS')
-  .split(',')
-  .map(entry => {
-    const [rawName, rawId] = entry.split(':')
-    const name = bareChannel(rawName)
-    const id = (rawId ?? '').trim().toUpperCase()
-    return id ? { name, id } : { name }
-  })
-  .filter(c => !!c.name)
-
-export const SLACK_CHANNELS: SlackChannel[] =
-  TYPED_CHANNELS.length ? TYPED_CHANNELS : DESK_CHANNELS
-
-/**
- * Everything the desk carries: the list above, plus the three alert channels.
- *
- * The alert channels belong in the *answer* even though they are not in the
- * searched list, and the reason is a real collision the poll already handles.
- * Somebody replying `<@yuvraj> can you take this` under a Sentry post is the
- * standard triage move; the mention search returns that reply, and
- * `foldThreadIntoAlert` folds it into the alert row so the row can say who is
- * waiting. Refusing `#sentry-alerts` here would leave every alert nobody's,
- * which is the opposite of what the allowlist is for.
- */
-const CARRIED: SlackChannel[] = [...SLACK_CHANNELS, ...SLACK_ALERT_CHANNELS]
-const CARRIED_NAMES = new Set(CARRIED.map(c => bareChannel(c.name)))
-const CARRIED_IDS = new Set(CARRIED.map(c => c.id).filter((v): v is string => !!v))
-
-/**
- * May a message from this channel become a card?
- *
- * The id is asked first because it is the durable half — a channel that gets
- * renamed keeps it, and a search hit whose `Channel:` line had no readable name
- * arrives here with the id standing in for one. The name is the fallback, and
- * it has to stay: an operator's `WAKE_SLACK_CHANNELS` carries names and no ids
- * at all, so an id-only rule would refuse everything he configured.
- *
- * Both halves are `#`-insensitive and case-insensitive, because `meta.channel`
- * on a stored card is a display name and has been spelled both ways.
- */
-export function isAllowedSlackChannel(
-  name: string | null | undefined,
-  id?: string | null,
-): boolean {
-  if (id && CARRIED_IDS.has(id)) return true
-  return CARRIED_NAMES.has(bareChannel(name))
-}
+export const TEAM_DOMAINS = str('WAKE_TEAM_DOMAINS', 'truto.one,truto.dev')
+  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 
 /**
  * How many threads one poll is allowed to read in full.

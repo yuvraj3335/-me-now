@@ -14,7 +14,8 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { cleanChannel, headTruncate, kindOf, whereOf } from '../src/web/components/kinds'
+import { cardKind, cleanChannel, crispMeta, headTruncate, kindOf, whereOf } from '../src/web/components/kinds'
+import { bucketOf } from '../src/web/lib/bucket'
 import type { Card, CardSource } from '../src/web/lib/types'
 
 describe('the glyph is the kind', () => {
@@ -47,6 +48,47 @@ describe('the glyph is the kind', () => {
     // …and the same colour, because they are the same source. Colour is the
     // source; the glyph is the kind.
     expect(pr.source).toBe(issue.source)
+  })
+})
+
+describe('Crisp — a visitor, not a monitor', () => {
+  const crispSource = (metaOver: Record<string, any> = {}): CardSource => ({
+    source: 'slack', kind: 'crisp', url: '', ts: 0, title: 'Priya', why: '',
+    meta: { channel: 'crisp-chats', family: 'crisp', crisp_state: 'unresolved', reply_total: 3, ...metaOver },
+  } as CardSource)
+
+  test('its own word and its own mark, distinct from a thread and an alert', () => {
+    const chat = kindOf('slack', 'crisp', {})
+    expect(chat.word).toBe('Chat')
+    expect(chat.Icon).not.toBe(kindOf('slack', 'thread', {}).Icon)
+    expect(chat.Icon).not.toBe(kindOf('slack', 'alert', {}).Icon)
+  })
+
+  test('it buckets to Slack — a visitor is not a monitor', () => {
+    // `kind: 'crisp'` is not `kind: 'alert'`, so the gate in `bucketOf` that
+    // sends every Slack alert to the Alerts tab leaves a Crisp conversation
+    // exactly where a human thread stays.
+    expect(bucketOf(crispSource())).toBe('slack')
+  })
+
+  test('an unresolved one reads as waiting, in the bad token rather than the accent', () => {
+    const card = { kind: 'crisp', sources: [crispSource()], meta: {} } as unknown as Card
+    const kind = cardKind(card)
+    expect(kind.word).toBe('waiting')
+    expect(kind.tint).toBe('var(--color-bad)')
+    expect(crispMeta(card)).toEqual({ unresolved: true, replies: 3 })
+  })
+
+  test('a resolved one is a quiet Chat, with nothing spent on it', () => {
+    const card = {
+      kind: 'crisp',
+      sources: [crispSource({ crisp_state: 'resolved', reply_total: 5 })],
+      meta: {},
+    } as unknown as Card
+    const kind = cardKind(card)
+    expect(kind.word).toBe('Chat')
+    expect(kind.tint).toBeUndefined()
+    expect(crispMeta(card)).toEqual({ unresolved: false, replies: 5 })
   })
 })
 

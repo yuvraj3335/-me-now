@@ -43,7 +43,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import {
-  ArrowUpRight, Check, ChevronDown, ListPlus, Pin, PinOff, SquareTerminal, X,
+  ArrowUpRight, Check, ChevronDown, ListPlus, MessageCircle, Pin, PinOff, SquareTerminal, X,
 } from 'lucide-react'
 import type { Card, CardPriority, CardStatus } from '../lib/types'
 import { PRIORITY_LABEL, PRIORITY_ORDER, STATUS_LABEL } from '../lib/types'
@@ -53,7 +53,7 @@ import { baselineOf, isFreshLine, replyTotal, threadLines, type ThreadLine } fro
 import { SOURCE_LABEL, SourceDot } from './sources'
 import { Button, DateTimePicker, Select } from './primitives'
 import { useStill } from '../lib/motion'
-import { cardKind, KindGlyph } from './kinds'
+import { cardKind, crispMeta, KindGlyph } from './kinds'
 import { plainMarkdown, StatusPicker, titleOf } from './CardTable'
 import { PriorityGlyph, isSettled } from './status'
 import { openTarget, openWord } from '../lib/appLinks'
@@ -199,6 +199,7 @@ export function CardDetail({
   const sessionLive = claude?.meta?.live === true
   const { href, app } = openTarget(card)
   const external = href.startsWith('http')
+  const crisp = crispMeta(card)
 
   /**
    * The undo names the field it is putting back.
@@ -266,6 +267,34 @@ export function CardDetail({
             {[card.why, card.who, ago(card.ts)].filter(Boolean).join(' · ')}
           </span>
         </p>
+        {/*
+          The one banner on this pane, and it spends `--color-bad` rather than
+          the amber accent — see `cardKind`'s note on why the row itself
+          already does the same thing. A visitor on the other end of a Crisp
+          conversation is not a fact this pane may leave to the Kind glyph
+          alone: the glyph is 14px above the fold and the reply count is
+          nowhere else on the card, so this is the one place that says both in
+          words, plus the way there.
+        */}
+        {crisp?.unresolved && (
+          <div className="mt-3 flex items-center gap-2 rounded-control px-3 py-2 text-sm"
+            style={{
+              background: 'color-mix(in oklab, var(--color-bad) 17%, var(--status-well))',
+              color: 'var(--color-bad)',
+            }}>
+            <MessageCircle size={14} className="shrink-0" aria-hidden />
+            <span className="grow min-w-0 truncate">
+              A visitor is waiting for a reply on Crisp · {crisp.replies} {crisp.replies === 1 ? 'reply' : 'replies'}
+            </span>
+            {/* `app ?? href`, the same preference the action bar's own `Open`
+                makes: the Slack app when Wake can build the link, the
+                permalink when it cannot — never nothing. */}
+            <a href={app ?? href} target="_blank" rel="noreferrer"
+              className="shrink-0 underline underline-offset-2 hover:no-underline">
+              Open in Slack
+            </a>
+          </div>
+        )}
       </div>
 
       <div className="grow min-h-0 overflow-y-auto pad-x pb-4">

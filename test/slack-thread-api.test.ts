@@ -193,10 +193,15 @@ describe('a direct message cannot get here', () => {
     // Where it lives: `bucketHits` in `sources/slack.ts`. Two of the four
     // captured hits are a DM and a group DM, and neither becomes a bucket — so
     // neither can become a card, so this route reads from a store that has
-    // never contained one. The one survivor is the channel on the desk's list;
-    // `#dm-tools` leaves on the channel rule rather than the DM one.
+    // never contained one. The two channel hits both survive: a channel with
+    // no row in `slack_channels` defaults to reachable (`scopeFor`'s
+    // `mentions` default), so `#dm-tools` is not refused a second time the way
+    // the old hardcoded allowlist refused it — only `isDmChannel` still stands
+    // between a hit and a bucket.
     const buckets = bucketHits(parseSlackResults(SEARCH_WITH_DM), ME_ID)
-    expect([...buckets.keys()]).toEqual(['C07351C8Z8E:1787811801.333333'])
+    expect([...buckets.keys()].sort()).toEqual(
+      ['C07351C8Z8E:1787811801.333333', 'C0DMTOOLS1:1787811201.222222'].sort(),
+    )
   })
 
   test('and a stored card that somehow named one is still not served', async () => {

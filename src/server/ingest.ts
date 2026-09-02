@@ -11,6 +11,7 @@
  */
 import { db, logEvent, now, sweepOauthPending } from './db'
 import { cardId, groupCards } from './dedup'
+import { notifyOnNewWork } from './push'
 import { NotConnected, PartialPoll, type RawCard, type SourceAdapter, type SourceName } from './sources/types'
 import { github } from './sources/github'
 import { claudeSessions } from './sources/claudeSessions'
@@ -128,9 +129,13 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
 
   const groups = groupCards(survivors)
 
-  const tx = db.transaction(() => {
-    const fresh = new Set<string>()
+  // Every card id this poll wrote — new rows and re-polled ones alike. Hoisted
+  // above the transaction (rather than declared inside it, where it used to
+  // live) so `notifyOnNewWork` can be handed exactly the rows this run touched,
+  // once the transaction has actually committed. See the call below.
+  const fresh = new Set<string>()
 
+  const tx = db.transaction(() => {
     for (const [, cards] of fetched) {
       for (const c of cards) {
         const id = cardId(c)
@@ -220,6 +225,19 @@ async function doIngest(only?: SourceName): Promise<IngestReport> {
   })
 
   tx()
+
+  // Push comes after the transaction, not inside it: `notify()` does real I/O
+  // (a webpush send), and a `db.transaction()` callback has to stay synchronous
+  // — bun:sqlite runs it inside `BEGIN … COMMIT` with no `await` in between. A
+  // failure in here is caught rather than left to reject `ingest()` itself: a
+  // notification going wrong must not cost the desk its "N groups (+M new)" log
+  // line, or a poll that otherwise worked.
+  if (fresh.size) {
+    await notifyOnNewWork({ at, cardIds: [...fresh] }).catch(e => {
+      console.warn(`wake: notifyOnNewWork failed: ${(e as Error).message}`)
+    })
+  }
+
   return report
 }
 

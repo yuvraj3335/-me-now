@@ -1,64 +1,141 @@
 /**
- * Slack brings work in from a named list of channels, and from nowhere else.
+ * The Slack channel scope is a table, and this file is its specification.
  *
- * Measured on the deployed desk before a line was changed: the mention search
- * was workspace-wide, and a workspace is much bigger than the work. Four of the
- * twenty slots a poll gets went to `#github-updates`, `#pr-reviews` and a Slack
- * list rendering as `#FC:F096Q3LBF7C:Sprint Tasks` — places the operator does
- * not work — while the customer channels he does work in competed for what was
- * left.
+ * It used to be a hand-edited array in `env.ts`, and it broke the way a config
+ * array always eventually breaks: editing it was the only way to add or drop a
+ * channel, and it was edited twice inside one week — once dropping `#truto`,
+ * the team's own channel, silently. What replaced it is `slack_channels`
+ * (`db.ts` migration 15, read and written through `slackScope.ts`): one row per
+ * channel, three facts per row — `mode`, `label`, `family` — and every one of
+ * them changeable from Settings without a deploy.
  *
- * Two changes, and only one of them is a guarantee. The query now names the
- * eighteen channels, which is an economy: it stops the cap being spent on rows
- * nobody will act on. The refusal is in `bucketHits`, beside the direct-message
- * rule, which is what makes the list true regardless of what Slack does with a
- * query string. This file is mostly about the second one, because the first is
- * allowed to stop working and the second is not.
+ * Three things are pinned here, in order of how much they cost when wrong:
+ *
+ *   1. **The seed.** What ships, and which mode each channel starts in. `#truto`
+ *      is back on the desk at `mentions`; the fourteen customer channels and
+ *      `#clonepartner` are read wholesale; the three alert channels and Crisp are
+ *      read as history under their families; `#framer-clonepartner` is present
+ *      and off, because a channel that went quiet in March should be one click
+ *      from coming back rather than forgotten.
+ *   2. **The refusal.** `mode: 'off'` is enforced in `bucketHits`, beside the DM
+ *      rule, so the list is true regardless of what Slack does with a query
+ *      string — the `in:#` clause on the search is an economy, not the guarantee.
+ *   3. **The wholesale rule.** A channel read as history turns a top-level
+ *      message into a row only when somebody outside the team posted it, or when
+ *      a conversation is already under way. A teammate's changelog broadcast
+ *      with nobody answering is a broadcast, not work.
  *
  * The hits below are built rather than captured, because what is under test is
  * a decision and not a dialect — `test/slack-threads.test.ts` and
- * `test/slack-parse.test.ts` own the parsers, and `SEARCH_WITH_DM` in
- * `test/fixtures/slack.ts` carries the real search spelling of both refusals.
+ * `test/slack-parse.test.ts` own the parsers.
  */
 
-import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { afterEach, describe, expect, test } from 'bun:test'
 import {
-  bareChannel, DESK_CHANNELS, isAllowedSlackChannel, SLACK_ALERT_CHANNELS, SLACK_CHANNELS,
-} from '../src/server/env'
+  alertChannels, channelScope, getChannel, historyChannels, isChannelReachable, listChannels,
+  scopeFor, ScopeError, updateChannel, upsertListed,
+} from '../src/server/slackScope'
 import {
-  bucketHits, CHANNEL_SCOPE, parseSlackResults, searchArgs, type SlackHit,
+  allChannelCard, bucketHits, historyCardsForRow, parseChannelListing, type SlackHit,
 } from '../src/server/sources/slack'
 import { ME_ID } from './fixtures/slack'
 import { slackCard } from '../src/server/fetch/index'
 import type { SearchHit } from '../src/server/sources/search'
 
-/**
- * The sixteen, exactly as the operator wrote them. This is the specification.
- *
- * NARROWED from eighteen. `#truto` and `#crisp-chats` came off because he gave
- * a list and neither was on it — `#truto` was the third-busiest source of Slack
- * rows on the box at the time, so its removal is a real change and not tidying.
- *
- * He named seventeen. `Customer (private)` is the seventeenth and is absent on
- * purpose: it could not be resolved to an id against the connected token, and a
- * private channel nobody can see cannot be guessed at without pointing the whole
- * scope at the wrong conversation. See the note above `DESK_CHANNELS`.
- */
-const THE_LIST = [
-  '#clonepartner', '#sprinto', '#maximor-truto', '#spendflo-truto',
-  '#15five-truto', '#komplai-truto', '#evergrowth-truto', '#thoropass-truto',
-  '#open-truto', '#stax-truto', '#naq-truto', '#docsbot-truto', '#truto-balkanid',
-  '#ex-superhawk-truto', '#truto-zen', '#framer-clonepartner',
+/* ------------------------------ the seed ---------------------------------- */
+
+const TRUTO = 'C04D9HKDWAV'
+const CRISP = 'C07351C8Z8E'
+const FRAMER = 'C06UP5J326B'
+const CLONEPARTNER = 'C09BRBLNXNH'
+const STAX = 'C09TKFVP6AY'
+
+const CUSTOMERS: Array<[string, string]> = [
+  ['spendflo-truto', 'C05CJ0CUV35'], ['thoropass-truto', 'C05P80HPYSK'], ['naq-truto', 'C09REMSHL14'],
+  ['stax-truto', STAX], ['evergrowth-truto', 'C0A25L2QEB0'], ['komplai-truto', 'C0A437E7UAU'],
+  ['15five-truto', 'C0AHHQMF08L'], ['truto-balkanid', 'C07PMS3UYKB'], ['ex-superhawk-truto', 'C0AACN2HYM7'],
+  ['maximor-truto', 'C0A8B267EE9'], ['open-truto', 'C08SS821JHG'], ['docsbot-truto', 'C093QFW4U3E'],
+  ['truto-zen', 'C07AVEG7ZHN'], ['sprinto', 'C050LJAMFSN'],
 ]
 
-/** The four that were really on the desk on 2026-08-31 and should not have been. */
-const THE_INTRUDERS: Array<[string, string]> = [
-  ['#github-updates', 'C0GHUPD8TE5'],
-  ['#pr-reviews', 'C0PRREVW111'],
-  ['#FC:F096Q3LBF7C:Sprint Tasks', 'F096Q3LBF7C'],
-  ['#intent-alerts', 'C07UWPPLSGN'],
-]
+/** Every mode change a test makes is undone, so the seed is what every test sees. */
+const touched = new Map<string, { mode: string; label: string | null }>()
+const setMode = (id: string, mode: 'off' | 'mentions' | 'all') => {
+  const before = getChannel(id)!
+  if (!touched.has(id)) touched.set(id, { mode: before.mode, label: before.label })
+  updateChannel(id, { mode })
+}
+afterEach(() => {
+  for (const [id, was] of touched) updateChannel(id, was)
+  touched.clear()
+})
+
+describe('what ships in the table', () => {
+  test('#truto is back, at mentions — a team channel is not read wholesale', () => {
+    const c = getChannel(TRUTO)!
+    expect(c, '#truto is not seeded — the channel a prior release dropped is still missing').toBeTruthy()
+    expect(c.name).toBe('truto')
+    expect(c.mode).toBe('mentions')
+    expect(c.label).toBe('team')
+    expect(c.family).toBeNull()
+  })
+
+  test('the fourteen customer channels are read wholesale', () => {
+    for (const [name, id] of CUSTOMERS) {
+      const c = getChannel(id)
+      expect(c, `${name} is not seeded`).toBeTruthy()
+      expect(c!.name, `${id} is named ${c!.name}, not ${name}`).toBe(name)
+      expect(c!.mode, `${name} is ${c!.mode}, not all`).toBe('all')
+      expect(c!.label, `${name} is labelled ${c!.label}`).toBe('customer')
+    }
+  })
+
+  test('the active clone-partner channel is on and the dormant one is off, not gone', () => {
+    // Two channels match "clone partner"; the choice was made from a live read
+    // on 2026-09-02 — `#clonepartner` had posts every day that week and
+    // `#framer-clonepartner` had been silent since 2026-03-20.
+    expect(getChannel(CLONEPARTNER)).toMatchObject({ name: 'clonepartner', mode: 'all', label: 'partner' })
+    expect(getChannel(FRAMER)).toMatchObject({ name: 'framer-clonepartner', mode: 'off', label: 'partner' })
+  })
+
+  test('the three alert channels keep their families, in the order the parsers destructure', () => {
+    expect(alertChannels()).toEqual([
+      { id: 'C0BERTMS9K4', name: 'sentry-alerts', family: 'sentry' },
+      { id: 'C05UPHVT2CQ', name: 'truto-api-alerts', family: 'datadog' },
+      { id: 'C0B53TSLGLA', name: 'truto-grafana-alerts', family: 'grafana' },
+    ])
+    for (const a of alertChannels()) expect(getChannel(a.id)!.label).toBe('alert')
+  })
+
+  test('Crisp is seeded as its own family, read wholesale', () => {
+    expect(getChannel(CRISP)).toMatchObject({ name: 'crisp-chats', mode: 'all', label: 'crisp', family: 'crisp' })
+  })
+
+  test('every seeded row says it was seeded', () => {
+    const seeded = listChannels().filter(c => c.seeded)
+    // 1 team + 14 customers + 2 partners + 3 alerts + 1 crisp.
+    expect(seeded.length).toBe(21)
+  })
+})
+
+/* ------------------------------ the default ------------------------------- */
+
+describe('a channel the table has never heard of', () => {
+  test('is reachable for mentions — today\'s behaviour, minus the hardcoded refusal', () => {
+    expect(scopeFor('C0NEVERSEEN', 'brand-new')).toEqual({ mode: 'mentions', label: null, family: null })
+    expect(isChannelReachable('C0NEVERSEEN', 'brand-new')).toBe(true)
+  })
+
+  test('the id answers first, the name second, and a renamed channel keeps its scope', () => {
+    // A search hit can arrive with a good id and a useless name; a rename keeps
+    // the id. Both halves have to answer.
+    expect(scopeFor(FRAMER, 'framer-clonepartner-renamed').mode).toBe('off')
+    expect(scopeFor(null, '#Framer-ClonePartner').mode).toBe('off')
+    expect(scopeFor(undefined, 'crisp-chats').family).toBe('crisp')
+  })
+})
+
+/* ------------------------------ the refusal ------------------------------- */
 
 let seq = 0
 /** One search hit, with only the fields a refusal is allowed to read. */
@@ -78,333 +155,229 @@ const hit = (channelName: string, channelId: string, over: Partial<SlackHit> = {
   }
 }
 
-/* --------------------------- 1. what gets through ------------------------- */
-
-describe('a hit becomes a bucket only from a channel on the list', () => {
-  test('every one of the eighteen opens a bucket', () => {
-    // Named one at a time rather than in a single call, so a failure says which
-    // channel stopped working instead of "one of eighteen".
-    for (const name of THE_LIST) {
-      const c = SLACK_CHANNELS.find(x => x.name === bareChannel(name))!
-      expect(c, `${name} is not in SLACK_CHANNELS`).toBeTruthy()
-      const buckets = bucketHits([hit(name, c.id ?? 'C0UNKNOWN01')], ME_ID)
-      expect(buckets.size, `${name} stopped reaching the desk`).toBe(1)
-    }
+describe('mode off is refused in code, not only in the query', () => {
+  test('a hit from an off channel never opens a bucket', () => {
+    expect(bucketHits([hit('#framer-clonepartner', FRAMER)], ME_ID).size).toBe(0)
   })
 
-  test('and the channels that were taking the slots do not', () => {
-    for (const [name, id] of THE_INTRUDERS) {
-      expect(bucketHits([hit(name, id)], ME_ID).size, `${name} is still on the desk`).toBe(0)
-    }
+  test('and one from a mentions or all channel does', () => {
+    expect(bucketHits([hit('#truto', TRUTO)], ME_ID).size).toBe(1)
+    expect(bucketHits([hit('#stax-truto', STAX)], ME_ID).size).toBe(1)
   })
 
-  test('one poll of both is only the half that is his', () => {
-    // The real shape of a poll: the list and the workspace arrive interleaved in
-    // one answer, and the filter has to hold per row rather than per call.
+  test('turning a channel off from Settings takes effect on the next poll, with no deploy', () => {
+    expect(bucketHits([hit('#truto', TRUTO)], ME_ID).size).toBe(1)
+    setMode(TRUTO, 'off')
+    expect(bucketHits([hit('#truto', TRUTO)], ME_ID).size).toBe(0)
+    // Split, not a substring test: `in:#truto` is inside `in:#truto-balkanid`.
+    expect(channelScope().split(' ')).not.toContain('in:#truto')
+  })
+
+  test('one poll of both is only the half that is on', () => {
     const hits = [
-      hit('#truto', 'C04D9HKDWAV'),
-      hit('#github-updates', 'C0GHUPD8TE5'),
+      hit('#truto', TRUTO),
+      hit('#framer-clonepartner', FRAMER),
       hit('#spendflo-truto', 'C05CJ0CUV35'),
-      hit('#pr-reviews', 'C0PRREVW111'),
     ]
     expect([...bucketHits(hits, ME_ID).keys()].map(k => k.split(':')[0]))
-      .toEqual(['C04D9HKDWAV', 'C05CJ0CUV35'])
+      .toEqual([TRUTO, 'C05CJ0CUV35'])
   })
 
   test('a direct message is still refused, and by its own rule', () => {
-    // Two rules that would each refuse this on their own. The DM one is asked
-    // first and it is the one that must not be lost: a `D…` conversation would
-    // be refused by the channel list only because nobody can put a DM on it, and
-    // "unreachable by accident" is not a refusal.
+    // A `D…` conversation has no row and would default to reachable — so the
+    // DM rule is the one refusing it, and it must not be lost behind this one.
     for (const id of ['D0BT1ED811Q', 'D0BQQQQ1111']) {
+      expect(scopeFor(id, 'DM').mode, 'a DM has a scope row, which it must never have').toBe('mentions')
       expect(bucketHits([hit('DM', id)], ME_ID).size).toBe(0)
-      expect(isAllowedSlackChannel('DM', id), 'a DM must not be on the list either').toBe(false)
     }
   })
 
   test('a message he wrote himself is still refused', () => {
-    // Unchanged by any of this, and asserted here because the new refusal sits
-    // between the DM rule and this one — a `continue` in the wrong place would
-    // take it out silently.
-    const mine = hit('#truto', 'C04D9HKDWAV', { fromId: ME_ID })
-    expect(bucketHits([mine], ME_ID).size).toBe(0)
+    expect(bucketHits([hit('#truto', TRUTO, { fromId: ME_ID })], ME_ID).size).toBe(0)
+  })
+
+  test('the other door — a manual Fetch — obeys the same table', () => {
+    const search = (channel: string, id: string): SearchHit => ({
+      source: 'slack', ref: `${id}:1787811801.333333`, title: channel,
+      url: `https://truto.slack.com/archives/${id}/p1787811801333333`,
+      excerpt: 'can you look', who: 'Nidhi', at: 1787811801333,
+    } as unknown as SearchHit)
+    expect(slackCard(search('#truto', TRUTO))).toBeTruthy()
+    expect(slackCard(search('#framer-clonepartner', FRAMER))).toBeNull()
   })
 })
 
-/* ------------------------- 2. how a name is matched ----------------------- */
+/* ---------------------------- the search clause --------------------------- */
 
-describe('the name is matched the way a person writes it', () => {
-  test('the hash is rendering, and case is not a fact', () => {
-    for (const spelling of ['#truto', 'truto', 'TRUTO', '#TRUTO', '  #Truto  ']) {
-      expect(isAllowedSlackChannel(spelling), `${spelling} did not read as #truto`).toBe(true)
-    }
+describe('the mention search names the channels whose mentions matter', () => {
+  test('mentions and all rows are in it; off rows and family rows are not', () => {
+    const scope = channelScope()
+    const terms = scope.split(' ')
+    expect(terms).toContain('in:#truto')
+    expect(scope).toContain('in:#stax-truto')
+    expect(scope).toContain('in:#clonepartner')
+    expect(scope).not.toContain('in:#framer-clonepartner')
+    // Alert and Crisp channels are read as history — search cannot see a bot's
+    // post, so a term naming one is a slot spent on a known empty answer.
+    expect(scope).not.toContain('in:#sentry-alerts')
+    expect(scope).not.toContain('in:#crisp-chats')
   })
 
-  test('a stored card reads the same as a fresh hit', () => {
-    // `meta.channel` on a stored card is a display name and has been written
-    // both ways by the two card builders — `buildThreadCard` stores whatever
-    // the search said, `alertMeta` stores `#${ch.name}`.
-    expect(isAllowedSlackChannel('#spendflo-truto', 'C05CJ0CUV35')).toBe(true)
-    expect(isAllowedSlackChannel('spendflo-truto', 'C05CJ0CUV35')).toBe(true)
-  })
-
-  test('the id answers when the name cannot', () => {
-    /*
-     * `parseSlackResults` substitutes the channel id for the name when the
-     * `Channel:` line carried no readable one, so a hit can arrive with a good
-     * id and a name that is really an id. A name-only rule refuses that row —
-     * and it is a row from a channel he works in.
-     */
-    const noName = hit('C04D9HKDWAV', 'C04D9HKDWAV')
-    expect(isAllowedSlackChannel(noName.channelName, noName.channelId)).toBe(true)
-    expect(bucketHits([noName], ME_ID).size).toBe(1)
-  })
-
-  test('and the name answers when the id is unknown', () => {
-    // The `WAKE_SLACK_CHANNELS` case: an operator types names, so every id is
-    // unknown. An id-first rule that did not fall back would refuse the whole
-    // list the moment he edited it.
-    expect(isAllowedSlackChannel('#truto', 'C0RENAMED99')).toBe(true)
-    expect(isAllowedSlackChannel('', 'C0RENAMED99')).toBe(false)
-  })
-
-  test('a renamed channel is still his, because the id did not move', () => {
-    // The other direction, and the reason the id is asked first: Slack lets a
-    // channel be renamed and the desk should not lose a fortnight of work to it.
-    expect(isAllowedSlackChannel('#truto-core', 'C04D9HKDWAV')).toBe(true)
-  })
-
-  test('a near miss is a miss', () => {
-    for (const name of ['#truto-eng', '#trutox', '#not-truto', '#crisp', '']) {
-      expect(isAllowedSlackChannel(name), `${name} was let through`).toBe(false)
-    }
+  test('repeated `in:` and no boolean operator, which is the syntax Slack has', () => {
+    const scope = channelScope()
+    expect(scope).not.toMatch(/\bOR\b/)
+    expect(scope.split(' ').every(t => t.startsWith('in:#'))).toBe(true)
   })
 })
 
-/* ---------------------- 3. the list is configuration ---------------------- */
+/* ------------------------------ what is read ------------------------------ */
 
-/** A file with its comments removed — the prose here names channels on purpose. */
-const codeOf = (f: string) =>
-  readFileSync(f, 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter(l => !l.trim().startsWith('//'))
-    .join('\n')
-
-describe('the list is written once, in env.ts, and read everywhere', () => {
-  test('env.ts holds exactly the eighteen the operator gave', () => {
-    // `DESK_CHANNELS`, not `SLACK_CHANNELS`: this assertion is the
-    // specification of the list Wake *ships*, and the suite deliberately
-    // configures a wider scope of its own (see `test/setup.ts`). Reading the
-    // configured value here would make this test agree with itself no matter
-    // what shipped, which is the one thing it exists to prevent.
-    expect(DESK_CHANNELS.map(c => `#${c.name}`)).toEqual(THE_LIST)
-
-    /*
-     * And the ids, against a literal, for a reason the names alone do not cover.
-     *
-     * `test/setup.ts` configures the suite's own scope and hardcodes its own
-     * copy of these ids, so every other assertion in this file reads that copy
-     * rather than what ships. A typo in one `DESK_CHANNELS` id would leave the
-     * whole suite green while the deployment silently searched a channel that
-     * does not exist — and an id is the half that cannot be eyeballed.
-     *
-     * Re-resolved through `slack_search_channels` on 2026-09-01; all sixteen
-     * matched the ids already in the file.
-     */
-    expect(Object.fromEntries(DESK_CHANNELS.map(c => [c.name, c.id]))).toEqual({
-      'clonepartner': 'C09BRBLNXNH',
-      'sprinto': 'C050LJAMFSN',
-      'maximor-truto': 'C0A8B267EE9',
-      'spendflo-truto': 'C05CJ0CUV35',
-      '15five-truto': 'C0AHHQMF08L',
-      'komplai-truto': 'C0A437E7UAU',
-      'evergrowth-truto': 'C0A25L2QEB0',
-      'thoropass-truto': 'C05P80HPYSK',
-      'open-truto': 'C08SS821JHG',
-      'stax-truto': 'C09TKFVP6AY',
-      'naq-truto': 'C09REMSHL14',
-      'docsbot-truto': 'C093QFW4U3E',
-      'truto-balkanid': 'C07PMS3UYKB',
-      'ex-superhawk-truto': 'C0AACN2HYM7',
-      'truto-zen': 'C07AVEG7ZHN',
-      'framer-clonepartner': 'C06UP5J326B',
-    })
+describe('which channels a poll reads as history', () => {
+  test('every all-mode row, plus every family row that is not off', () => {
+    const ids = new Set(historyChannels().map(c => c.id))
+    for (const [, id] of CUSTOMERS) expect(ids.has(id), `${id} is not read`).toBe(true)
+    expect(ids.has(CLONEPARTNER)).toBe(true)
+    expect(ids.has(CRISP)).toBe(true)
+    for (const a of alertChannels()) expect(ids.has(a.id)).toBe(true)
+    // Mentions-only without a family is searched, not read.
+    expect(ids.has(TRUTO)).toBe(false)
+    expect(ids.has(FRAMER)).toBe(false)
   })
 
-  test('no channel is named at the call site', () => {
-    // The failure this guards is not a wrong list — it is a *second* list. A
-    // literal here would keep working and would stop agreeing with env.ts the
-    // first time somebody edited one of them.
-    const code = codeOf('src/server/sources/slack.ts')
-    for (const c of SLACK_CHANNELS) {
-      expect(code, `${c.name} is inlined in slack.ts`).not.toContain(`in:#${c.name}`)
-      expect(code, `${c.name} is inlined in slack.ts`).not.toContain(`'${c.name}'`)
-      if (c.id) expect(code, `${c.id} is inlined in slack.ts`).not.toContain(c.id)
-    }
-    expect(code, 'slack.ts stopped reading the list from config')
-      .toMatch(/import \{[\s\S]*?isAllowedSlackChannel[\s\S]*?SLACK_CHANNELS[\s\S]*?\} from '\.\.\/env'/)
+  test('an alert channel at mentions is still read — the mode narrows to pages', () => {
+    setMode('C05UPHVT2CQ', 'mentions')
+    expect(historyChannels().some(c => c.id === 'C05UPHVT2CQ')).toBe(true)
   })
 
-  test('and the refusal is not a duplicate of the query', () => {
-    // One predicate, asked in one place. A second `startsWith`-shaped test
-    // somewhere downstream is how the two come to disagree.
-    const code = codeOf('src/server/sources/slack.ts')
-    expect((code.match(/isAllowedSlackChannel\(/g) ?? []).length).toBe(1)
+  test('an alert channel turned off is not read at all', () => {
+    setMode('C0B53TSLGLA', 'off')
+    expect(historyChannels().some(c => c.id === 'C0B53TSLGLA')).toBe(false)
+    expect(alertChannels().map(a => a.id)).toContain('C0B53TSLGLA')
   })
 })
 
-/* ------------------------- 4. the narrowed query -------------------------- */
+/* --------------------------- the wholesale rule --------------------------- */
 
-describe('the query names the channels, in the syntax Slack actually has', () => {
-  test('every configured channel is in it', () => {
-    for (const c of SLACK_CHANNELS) expect(CHANNEL_SCOPE).toContain(`in:#${c.name}`)
-    expect((CHANNEL_SCOPE.match(/in:#/g) ?? []).length).toBe(SLACK_CHANNELS.length)
+const external = (text: string, over: Partial<SlackHit> = {}) => hit('#stax-truto', STAX, {
+  fromName: 'Kyle Johnson', fromId: 'U086NAYULRZ', fromEmail: 'kyle@stax.ai', text, ...over,
+})
+const teammate = (text: string, over: Partial<SlackHit> = {}) => hit('#stax-truto', STAX, {
+  fromName: 'Nidhi', fromId: 'U0BBZV4HQHH', fromEmail: 'nidhi@truto.one', text, ...over,
+})
+
+describe('a channel read wholesale', () => {
+  const row = () => getChannel(STAX)!
+
+  test('a customer posting with no reply is on him, now', () => {
+    const c = allChannelCard(row(), external('Our NetSuite sync failed overnight, can someone look?'), ME_ID)!
+    expect(c).toBeTruthy()
+    expect(c.kind).toBe('mention')
+    expect(c.pile).toBe('now')
+    expect(c.who).toBe('Kyle Johnson')
+    expect(c.why).toContain('nobody has answered')
+    expect(c.why).toContain('#stax-truto')
+    expect(c.meta?.channel_label).toBe('customer')
+    expect(c.refs).toContainEqual({ t: 'slackthread', v: c.source_id })
   })
 
-  test('repeated `in:` and no boolean operator', () => {
-    /*
-     * Both halves were checked against mcp.slack.com on 2026-08-31.
-     *
-     * Repeating `in:` is the OR: `<@me> after:2026-08-13 before:2026-08-15
-     * in:#truto in:#sprinto` answered with two #sprinto rows and one #truto row.
-     * `OR` is not an operator — the search tool's own description says
-     * "space-separated = AND, no boolean operators (AND/OR/NOT)", and writing it
-     * into that query changed nothing about the three rows that came back. A
-     * spell that works for no reason is one this file will not let in.
-     */
-    expect(CHANNEL_SCOPE).not.toMatch(/\bOR\b/)
-    expect(CHANNEL_SCOPE.split(' ').every(t => t.startsWith('in:#'))).toBe(true)
+  test('a customer post somebody already answered is open, not now', () => {
+    const c = allChannelCard(row(), external('Sync failed overnight\nThread: 3 replies (latest: 2026-09-01 10:00:00 IST)'), ME_ID)!
+    expect(c.pile).toBe('open')
+    expect(c.who).toBeUndefined()
+    expect(c.meta?.replies).toBe(3)
   })
 
-  test('the alert channels are not in it', () => {
-    // They are read as history, never searched — a search for a bot message in
-    // one of them has been measured returning nothing. Putting them in the query
-    // would be asking a question with a known empty answer.
-    for (const ch of SLACK_ALERT_CHANNELS) expect(CHANNEL_SCOPE).not.toContain(`in:#${ch.name}`)
+  test('a teammate broadcast nobody replied to is not a row — the weekly changelog', () => {
+    expect(allChannelCard(row(), teammate('Hi everyone :wave:\nHere is the Truto changelog for Year 4, Week 35'), ME_ID)).toBeNull()
   })
 
-  test('and it is still a bot-inclusive search', () => {
-    // Pinned in `test/slack-thread-api.test.ts` too. Repeated here because this
-    // pass rewrote the line the query is built on, and a search that excludes
-    // bots is a desk where every integration that speaks in a channel stops
-    // existing behind a green sync line.
-    expect(searchArgs(`<@${ME_ID}> after:2026-08-16 ${CHANNEL_SCOPE}`, 20).include_bots).toBe(true)
+  test('a teammate post with replies is a conversation, and is open', () => {
+    const c = allChannelCard(row(), teammate('Shipping the fix today\nThread: 2 replies (latest: x)'), ME_ID)!
+    expect(c.pile).toBe('open')
+  })
+
+  test('an author with no address is treated as external — the expensive miss is a customer', () => {
+    const c = allChannelCard(row(), external('Hello?', { fromEmail: undefined }), ME_ID)!
+    expect(c.pile).toBe('now')
+  })
+
+  test('his own post and a join notice are never rows', () => {
+    expect(allChannelCard(row(), external('anything', { fromId: ME_ID }), ME_ID)).toBeNull()
+    expect(allChannelCard(row(), external('<@U0A2Y4VC874|Ankit Bhadoria> has joined the channel'), ME_ID)).toBeNull()
+  })
+
+  test('a partner channel says partner', () => {
+    const c = allChannelCard(getChannel(CLONEPARTNER)!, hit('#clonepartner', CLONEPARTNER, {
+      fromName: 'Abdul Aleem', fromEmail: 'abdul@clonepartner.com', text: 'please join the meeting link',
+    }), ME_ID)!
+    expect(c.why).toBe('a partner posted in #clonepartner and nobody has answered')
+    expect(c.meta?.channel_label).toBe('partner')
+  })
+
+  test('historyCardsForRow applies the rule across a read', () => {
+    const cards = historyCardsForRow(row(), [
+      external('question one'),
+      teammate('changelog'),
+      teammate('a thread\nThread: 4 replies (latest: x)'),
+    ], ME_ID)
+    expect(cards.map(c => c.pile)).toEqual(['now', 'open'])
   })
 })
 
-/* --------------------- 5. the alert channels are untouched ---------------- */
+/* ------------------------------- the edits -------------------------------- */
 
-describe('the three alert channels are not what this pass is about', () => {
-  test('they are still the three, and still read as history', () => {
-    expect(SLACK_ALERT_CHANNELS.map(c => c.name))
-      .toEqual(['sentry-alerts', 'truto-api-alerts', 'truto-grafana-alerts'])
-    // Sentry, Datadog and Grafana paging reaches the desk through these. The
-    // allowlist does not apply to them and they are not on it.
-    for (const ch of SLACK_ALERT_CHANNELS) {
-      expect(SLACK_CHANNELS.some(c => c.name === ch.name), `${ch.name} joined the searched list`)
-        .toBe(false)
-    }
+describe('editing a row from Settings', () => {
+  test('mode and label are validated, and family is never a client\'s to set', () => {
+    expect(() => updateChannel(TRUTO, { mode: 'loud' })).toThrow(ScopeError)
+    expect(() => updateChannel(TRUTO, { label: 'vip' })).toThrow(ScopeError)
+    expect(() => updateChannel('C0NOSUCH', { mode: 'off' })).toThrow(ScopeError)
   })
 
-  test('a human reply under an alert still opens a bucket', () => {
-    /*
-     * The collision `foldThreadIntoAlert` exists for: somebody replies
-     * `<@yuvraj> can you take this` under a Sentry post, the mention search
-     * returns that reply, and the thread it opens is folded into the alert row
-     * so the row can say who is waiting. Refusing `#sentry-alerts` here would
-     * leave every alert nobody's — which is the opposite of the point.
-     *
-     * `test/alerts.test.ts` owns the fold itself, end to end, on the captured
-     * wire payloads. This is only the door it comes through.
-     */
-    const [sentry] = SLACK_ALERT_CHANNELS
-    expect(isAllowedSlackChannel(`#${sentry!.name}`, sentry!.id)).toBe(true)
-    expect(bucketHits([hit(`#${sentry!.name}`, sentry!.id)], ME_ID).size).toBe(1)
+  test('alert and crisp labels need a family — a customer channel cannot be declared a monitor', () => {
+    expect(() => updateChannel(STAX, { label: 'alert' })).toThrow(ScopeError)
+    expect(() => updateChannel(STAX, { label: 'crisp' })).toThrow(ScopeError)
+  })
+
+  test('a label can be cleared, and a mode changed, independently', () => {
+    const before = getChannel(STAX)!
+    touched.set(STAX, { mode: before.mode, label: before.label })
+    expect(updateChannel(STAX, { label: null }).label).toBeNull()
+    expect(getChannel(STAX)!.mode).toBe('all')
+    expect(updateChannel(STAX, { mode: 'mentions' })).toMatchObject({ mode: 'mentions', label: null })
   })
 })
 
-/* --------------------------- 6. no second door ---------------------------- */
+/* ------------------------------- the listing ------------------------------ */
 
-describe('the poll has one door and the refusal is on it', () => {
-  const slack = readFileSync('src/server/sources/slack.ts', 'utf8')
-  const fetchFn = slack.slice(slack.indexOf('async fetch()'))
-
-  test('every thread card comes from a bucket', () => {
-    // What makes "not in the mention search, not through a thread read, not
-    // through a merge" one rule rather than three: the reads are ordered from
-    // the buckets, the cards are built from the buckets, and the merge can only
-    // be handed a card a bucket produced.
-    expect((fetchFn.match(/buildThreadCard\(/g) ?? []).length, 'a second card builder appeared')
-      .toBe(1)
-    expect(fetchFn).toMatch(/for \(const \[key, b\] of buckets\)[\s\S]{0,200}buildThreadCard\(b,/)
-    expect(fetchFn).toMatch(/readOrder\(buckets\.values\(\)\)/)
-    expect(fetchFn).toMatch(/foldThreadIntoAlert\(alert, card\)/)
+describe('a refresh from Slack', () => {
+  test('parses the listing the connected tool actually returns', () => {
+    const md = [
+      '## My Channels (showing 2 of 2 total)', '',
+      '### #stax-truto', '- **ID:** C09TKFVP6AY', '- **Type:** Private Channel', '- **Archived:** No', '',
+      '### #brand-new', '- **ID:** C0NEWNEW001', '- **Type:** Public Channel', '- **Archived:** No', '',
+      'Pagination: More results available. Use cursor: "aWQ6NTA0"',
+    ].join('\n')
+    const { channels, nextCursor } = parseChannelListing(md)
+    expect(channels).toEqual([
+      { id: 'C09TKFVP6AY', name: 'stax-truto', isPrivate: true },
+      { id: 'C0NEWNEW001', name: 'brand-new', isPrivate: false },
+    ])
+    expect(nextCursor).toBe('aWQ6NTA0')
   })
 
-  test('the refusal runs before the hits are grouped, not after', () => {
-    // In `bucketHits`, so nothing that reads a bucket has to remember to ask.
-    const bucket = slack.slice(slack.indexOf('export function bucketHits'))
-    expect(bucket.slice(0, bucket.indexOf('const parent = parentTs(h)')))
-      .toContain('isAllowedSlackChannel(h.channelName, h.channelId)')
-  })
-
-  test('and a hit the parser produced is refused the same way a built one is', () => {
-    // Through the real search parser rather than the helper above, so the field
-    // the refusal reads is the field the parser fills.
-    const md = `# Search Results for: <@${ME_ID}> after:2026-08-16
-
-## Messages (1 results)
-### Result 1 of 1
-Channel: #github-updates (ID: C0GHUPD8TE5)
-From: Nidhi <nidhi@truto.one> (ID: U0BBZV4HQHH)
-Time: 2026-08-31 14:57:43 IST
-Message_ts: 1788160063.100000
-Permalink: [link](https://truto.slack.com/archives/C0GHUPD8TE5/p1788160063100000)
-Text:
-<@${ME_ID}> Approveeeee
-
----
-
-`
-    const hits = parseSlackResults(md)
-    expect(hits, 'the fixture stopped parsing').toHaveLength(1)
-    expect(hits[0]!.channelName).toBe('#github-updates')
-    expect(bucketHits(hits, ME_ID).size).toBe(0)
-  })
-})
-
-describe('the other door: a manual Fetch obeys the same list', () => {
-  /*
-   * `bucketHits` is the only door the *poll* has. Fetch is a second one — the
-   * operator presses a button, `searchSlack` runs, and `slackCard` builds rows
-   * straight from the hits — so the allowlist has to be stated there too or a
-   * single press reintroduces exactly the channels the poll was taught to leave
-   * out. Worse than reintroducing them: they arrive `found_by = 'fetch'`, and
-   * the poll's sweep only ever clears `found_by = 'poll'`, so nothing takes them
-   * off the desk again.
-   */
-  const hit = (channel: string, id: string): SearchHit => ({
-    source: 'slack',
-    ref: `${id}:1788160063.100000`,
-    title: channel,
-    excerpt: 'somebody said a thing',
-    actor: 'Nidhi',
-    url: `https://truto.slack.com/archives/${id}/p1788160063100000`,
-    ts: 1788160063100,
-  })
-
-  test('a hit from an allowed channel still becomes a card', () => {
-    expect(slackCard(hit('#truto', 'C04D9HKDWAV'))).not.toBeNull()
-  })
-
-  test('a hit from a channel off the list does not', () => {
-    for (const [name, id] of [['#github-updates', 'C0GHUPD8TE5'], ['#pr-reviews', 'C0PRREV1EWS']] as const) {
-      expect(slackCard(hit(name, id)), `${name} reached the desk through Fetch`).toBeNull()
-    }
-  })
-
-  test('a direct message is still refused by its own rule', () => {
-    expect(slackCard(hit('#whatever', 'D06ABCDEF12'))).toBeNull()
+  test('never overwrites a decision, and lands a new channel at mentions', () => {
+    const before = getChannel(STAX)!
+    const { added } = upsertListed([
+      { id: STAX, name: 'stax-truto', isPrivate: true },
+      { id: 'C0NEWNEW001', name: 'brand-new', isPrivate: false },
+    ])
+    expect(added).toBe(1)
+    const after = getChannel(STAX)!
+    expect(after.mode).toBe(before.mode)
+    expect(after.label).toBe(before.label)
+    expect(after.family).toBe(before.family)
+    expect(after.is_private).toBe(true)
+    expect(after.last_listed_at).toBeGreaterThan(0)
+    expect(getChannel('C0NEWNEW001')).toMatchObject({ mode: 'mentions', label: null, family: null, seeded: false })
   })
 })

@@ -1,5 +1,6 @@
 /**
- * A row belongs to the source it is *about*.
+ * A row belongs to what it is *about*, and every production alert is one kind
+ * of thing.
  *
  * Live on the deployed desk: the Slack tab read 47 and about forty of those rows
  * were `TRUTO-39 · Error`, `TRUTO-2Y · SyntaxError`, `TRUTO-APP-1BY ·
@@ -7,18 +8,19 @@
  * are therefore minted `source: 'slack'`. The Sentry tab read 13. The nine real
  * human threads on the Slack tab were buried under the forty.
  *
- * The interesting half of this is not "move alerts to Sentry" — it is the three
- * things that must NOT move, each of which a plausible one-line implementation
- * gets wrong:
+ * The first pass here fixed that by parsing a Sentry identity out of a Slack
+ * alert and left `#truto-api-alerts` (Datadog) and `#truto-grafana-alerts`
+ * (Grafana) exactly where they were — alerts with no Sentry identity, still on
+ * the Slack tab, still noise. This pass is the second half: there is no Sentry
+ * tab any more, there is an Alerts tab, and every monitor's own page lands on
+ * it regardless of which one wrote it or which channel carried it.
  *
- *   * A **Datadog** or **Grafana** alert is an alert with no Sentry identity, so
- *     bucketing on `kind === 'alert'` alone empties the Slack tab of the two
- *     channels it exists to read.
- *   * A **human thread that names an issue in prose** — "duplicate of TRUTO-37"
- *     — is a conversation with somebody waiting in it, so bucketing on a bare
- *     reference match moves real threads off the tab where that person is.
- *   * `TRUTO-APP-1BY` is one issue, not `TRUTO-A`. Sentry short ids are base36
- *     and the `-APP` branch has to win the alternation.
+ * The one thing that must NOT move, which a plausible one-line implementation
+ * gets wrong: a **human thread that names an issue in prose** — "duplicate of
+ * TRUTO-37" — is a conversation with somebody waiting in it, so bucketing on a
+ * bare reference match moves real threads off the tab where that person is.
+ * `kind === 'alert'` is the whole gate, and Slack's own poller only ever writes
+ * that for a monitor's own post.
  *
  * The second half of this file covers the phone row's heading, which is derived
  * from the same two facts a bucket is (which system, whose row) and has nowhere
@@ -28,9 +30,9 @@
 
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'bun:test'
-import { bucketOf, bucketsOf, inBucket, pipesFor } from '../src/web/lib/bucket'
+import { bucketOf, bucketsOf, inBucket, pipesFor, primaryPipe, type Bucket } from '../src/web/lib/bucket'
 import { cardKind, contextLine, senderOrg, waitingOn } from '../src/web/components/kinds'
-import type { Card, CardSource, SourceName } from '../src/web/lib/types'
+import type { Card, CardSource } from '../src/web/lib/types'
 
 /** A member of a group, with only the fields the bucket is allowed to read. */
 const member = (over: Partial<CardSource> & { source: CardSource['source'] }): CardSource => ({
@@ -67,102 +69,66 @@ const card = (over: Partial<Card> & { sources: CardSource[] }): Card => ({
 
 /* ------------------------------ what moves -------------------------------- */
 
-describe('a Sentry issue is on the Sentry tab, whatever carried it', () => {
-  test('a #sentry-alerts card with a short id', () => {
+describe('an alert is on the Alerts tab, whatever monitor wrote it', () => {
+  test('a #sentry-alerts card', () => {
     const s = member({
       source: 'slack',
       kind: 'alert',
       title: 'TRUTO-39 · Error',
       meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
     })
-    expect(bucketOf(s)).toBe('sentry')
-    expect(inBucket(card({ sources: [s] }), 'sentry')).toBe(true)
+    expect(bucketOf(s)).toBe('alerts')
+    expect(inBucket(card({ sources: [s] }), 'alerts')).toBe(true)
     expect(inBucket(card({ sources: [s] }), 'slack'), 'it is still claimed by Slack')
       .toBe(false)
   })
 
-  test('and one whose id is the -APP project', () => {
-    // The whole reason the regex is copied rather than re-derived: under a
-    // pattern that tries the bare branch first, `TRUTO-APP-1BY` matches as
-    // `TRUTO-APP` — a reference to an issue that does not exist — and under
-    // `TRUTO-\d+` it does not match at all, because short ids are base36.
-    for (const short of ['TRUTO-APP-1BY', 'TRUTO-2Y', 'TRUTO-W', 'TRUTO-2D']) {
-      const s = member({
-        source: 'slack', kind: 'alert', title: `${short} · FetchError`,
-        meta: { alert: true, channel: '#sentry-alerts', short_id: short },
-      })
-      expect(bucketOf(s), `${short} did not read as a Sentry issue`).toBe('sentry')
-    }
-  })
-
-  test('a card that carries a link to the issue rather than an id', () => {
+  // Identity is no longer read at all — no short id, no issue link, nothing
+  // parsed out of the title. `kind === 'alert'` is the whole gate, so a
+  // Datadog or a Grafana page lands here exactly like Sentry's own does.
+  test('a Datadog monitor', () => {
     const s = member({
-      source: 'slack',
-      kind: 'alert',
-      title: 'TypeError: undefined is not a function',
-      url: 'https://truto.sentry.io/organizations/truto/issues/6114328841/',
-      meta: { alert: true, channel: '#sentry-alerts', short_id: null },
+      source: 'slack', kind: 'alert',
+      title: '[Triggered] api.truto.one 5xx rate',
+      meta: {
+        alert: true, channel: '#truto-api-alerts',
+        monitor: '4821991', alert_state: 'firing', family: 'datadog',
+      },
     })
-    expect(bucketOf(s)).toBe('sentry')
+    expect(bucketOf(s)).toBe('alerts')
   })
 
-  test('the id in a title is enough when the adapter recorded none', () => {
-    // A row minted before `short_id` existed, or by a channel this parser has
-    // not been taught. The title is the row naming itself, which is a different
-    // thing from the row quoting somebody.
+  test('a Grafana alert', () => {
     const s = member({
-      source: 'slack', kind: 'alert', title: 'TRUTO-38 · SyntaxError',
-      meta: { alert: true, channel: '#sentry-alerts', short_id: null },
+      source: 'slack', kind: 'alert',
+      title: 'Hyperdrive connection saturation',
+      meta: {
+        alert: true, channel: '#truto-grafana-alerts',
+        monitor: 'Hyperdrive connection saturation', alert_state: 'firing', family: 'grafana',
+      },
     })
-    expect(bucketOf(s)).toBe('sentry')
+    expect(bucketOf(s)).toBe('alerts')
   })
 
-  test('a real Sentry API card is Sentry, with nothing to decide', () => {
+  test('a real Sentry API card is on it too, with nothing to decide', () => {
     const s = member({
       source: 'sentry', kind: 'error', title: 'FetchError',
       url: 'https://truto.sentry.io/issues/6114328841/',
       meta: { project: 'truto-app', short_id: 'TRUTO-APP-1BY' },
     })
-    expect(bucketOf(s)).toBe('sentry')
+    expect(bucketOf(s)).toBe('alerts')
   })
 })
 
 /* ----------------------------- what stays put ----------------------------- */
 
 describe('and everything else stays where it came from', () => {
-  test('a Datadog monitor is on Slack', () => {
-    // `short_id: null` by construction — `datadogAlertCards` writes it. There is
-    // no Sentry issue behind this row, so there is no Sentry tab for it to be
-    // on, and #truto-api-alerts is a channel he reads.
-    const s = member({
-      source: 'slack', kind: 'alert',
-      title: '[Triggered] api.truto.one 5xx rate',
-      meta: {
-        alert: true, channel: '#truto-api-alerts', short_id: null,
-        monitor: '4821991', alert_state: 'firing',
-      },
-    })
-    expect(bucketOf(s)).toBe('slack')
-  })
-
-  test('a Grafana alert is on Slack', () => {
-    const s = member({
-      source: 'slack', kind: 'alert',
-      title: 'Hyperdrive connection saturation',
-      meta: {
-        alert: true, channel: '#truto-grafana-alerts', short_id: null,
-        monitor: 'Hyperdrive connection saturation', alert_state: 'firing',
-      },
-    })
-    expect(bucketOf(s)).toBe('slack')
-  })
-
   test('a human thread that merely names TRUTO-38 is a conversation', () => {
     // This is the one the whole ruling turns on. Roopi writing "is TRUTO-38 the
-    // same thing?" is a person waiting on him, and moving it to the Sentry tab
-    // is how it stops being answered. The kind gate is what holds — but the
-    // title is also read for ids, so the id being in the title as well must not
-    // be enough on its own.
+    // same thing?" is a person waiting on him, and moving it to the Alerts tab
+    // is how it stops being answered. `kind` is what holds it on Slack — a
+    // reference in the title, even one the adapter would recognise on an
+    // alert, is prose rather than an alert's own post.
     const s = member({
       source: 'slack',
       kind: 'mention',
@@ -170,7 +136,17 @@ describe('and everything else stays where it came from', () => {
       meta: { channel: '#15five-truto', thread_ts: '1787814333.427979' },
     })
     expect(bucketOf(s)).toBe('slack')
-    expect(inBucket(card({ sources: [s], kind: 'mention' }), 'sentry')).toBe(false)
+    expect(inBucket(card({ sources: [s], kind: 'mention' }), 'alerts')).toBe(false)
+  })
+
+  test('a Crisp conversation is a conversation, not an alert', () => {
+    // A visitor is not a monitor, and Crisp's `kind` says so. See `kinds.tsx`
+    // for the rest of what makes a Crisp row its own thing.
+    const s = member({
+      source: 'slack', kind: 'crisp', title: 'Priya',
+      meta: { channel: 'crisp-chats', family: 'crisp', crisp_state: 'unresolved' },
+    })
+    expect(bucketOf(s)).toBe('slack')
   })
 
   test('every other source buckets to itself', () => {
@@ -186,7 +162,7 @@ describe('and everything else stays where it came from', () => {
 /* ------------------------------ whole cards ------------------------------- */
 
 describe('a card is on every tab one of its members claims', () => {
-  test('a merged Slack alert and Sentry issue is on Sentry alone', () => {
+  test('a merged Slack alert and Sentry issue is on Alerts alone', () => {
     const c = card({
       kind: 'alert',
       sources: [
@@ -200,7 +176,7 @@ describe('a card is on every tab one of its members claims', () => {
         }),
       ],
     })
-    expect(bucketsOf(c)).toEqual(['sentry'])
+    expect(bucketsOf(c)).toEqual(['alerts'])
     expect(inBucket(c, 'slack')).toBe(false)
   })
 
@@ -226,15 +202,16 @@ describe('a card is on every tab one of its members claims', () => {
   })
 
   test('asking twice gives the same answer', () => {
-    // A `/g` regex carries `lastIndex` between calls, so the same expression
-    // tested twice against the same string answers true and then false. That
-    // failure looks exactly like a data problem: every second matching row
-    // silently leaves the tab.
+    // `bucketOf` used to end in a regex whose `/g` flag carried `lastIndex`
+    // between calls, so the same expression tested twice against the same
+    // string answered true and then false — a filter that drops every second
+    // matching row and looks like a data problem. Nothing here parses
+    // anything any more, but the property is cheap to keep pinned.
     const s = member({
       source: 'slack', kind: 'alert', title: 'TRUTO-39 · Error',
       meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
     })
-    expect([bucketOf(s), bucketOf(s), bucketOf(s)]).toEqual(['sentry', 'sentry', 'sentry'])
+    expect([bucketOf(s), bucketOf(s), bucketOf(s)]).toEqual(['alerts', 'alerts', 'alerts'])
   })
 })
 
@@ -249,11 +226,11 @@ const SPECIMENS: CardSource[] = [
   member({ source: 'slack', kind: 'thread', meta: { channel: '#15five-truto' } }),
   member({
     source: 'slack', kind: 'alert', title: 'TRUTO-39 · Error',
-    meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39' },
+    meta: { alert: true, channel: '#sentry-alerts', short_id: 'TRUTO-39', family: 'sentry' },
   }),
   member({
     source: 'slack', kind: 'alert', title: 'p99 latency is high',
-    meta: { alert: true, channel: '#truto-api-alerts', short_id: null },
+    meta: { alert: true, channel: '#truto-api-alerts', family: 'datadog' },
   }),
   member({ source: 'sentry', kind: 'error', title: 'Error', meta: { project: 'truto' } }),
   member({ source: 'github', kind: 'review', meta: { repo: 'trutohq/truto', is_pr: true } }),
@@ -266,13 +243,21 @@ describe('the mark on the row is the mark of the tab it is on', () => {
     // `cardKind` took its hue and glyph from `sources[0].source`, so the forty
     // rows the strip had just moved to the Sentry tab went on drawing a
     // Slack-coloured bell there. Two claims about one row, computed twice.
+    //
+    // `alerts` is not itself a `SourceName` — `Kind.source` still has to be
+    // one, because it feeds `SOURCE_COLOR` and `SOURCE_LABEL`, both keyed by
+    // the five real pipes — so every alert draws as `sentry` regardless of
+    // which bucket member actually carried it. That is the unification the
+    // whole pass is for: one glyph, one hue, whichever monitor it was.
     for (const s of SPECIMENS) {
+      const bucket = bucketOf(s)
+      const expected = bucket === 'alerts' ? 'sentry' : bucket
       expect(cardKind(card({ sources: [s] })).source, `a ${s.source} ${s.kind} row`)
-        .toBe(bucketOf(s))
+        .toBe(expected)
     }
   })
 
-  test('a Sentry issue announced in Slack draws Sentry\'s own mark', () => {
+  test('a Sentry issue, a Datadog page and a Slack thread — two marks, not three', () => {
     const viaSlack = card({
       sources: [member({
         source: 'slack', kind: 'alert', title: 'TRUTO-39 · Error',
@@ -282,31 +267,40 @@ describe('the mark on the row is the mark of the tab it is on', () => {
     const viaSentry = card({
       sources: [member({ source: 'sentry', kind: 'error', title: 'Error', meta: { project: 'truto' } })],
     })
+    const viaDatadog = card({
+      sources: [member({
+        source: 'slack', kind: 'alert', title: '[Triggered] api.truto.one 5xx rate',
+        meta: { alert: true, channel: '#truto-api-alerts', family: 'datadog' },
+      })],
+    })
     const conversation = card({
       sources: [member({ source: 'slack', kind: 'thread', meta: { channel: '#truto-eng' } })],
     })
 
     expect(cardKind(viaSlack).Icon, 'the same issue told twice draws two marks')
       .toBe(cardKind(viaSentry).Icon)
+    expect(cardKind(viaDatadog).Icon, 'a different monitor is still one kind of thing')
+      .toBe(cardKind(viaSentry).Icon)
     expect(cardKind(viaSlack).Icon, 'an issue and a conversation share a mark')
       .not.toBe(cardKind(conversation).Icon)
-    // The word does not move, and that is not an oversight: Slack's alert and
-    // Sentry's are both `Alert`, which is why the Kind column and the search
-    // haystack that reads it are unchanged by any of this.
+    // The word does not move, and that is not an oversight: every alert is
+    // `Alert`, which is why the Kind column and the search haystack that
+    // reads it are unchanged by any of this.
     expect(cardKind(viaSlack).word).toBe('Alert')
+    expect(cardKind(viaDatadog).word).toBe('Alert')
   })
 })
 
 /* --------------------------- what the button asks ------------------------- */
 
-/** The five the strip offers, in its order. */
-const TABS: SourceName[] = ['slack', 'gmail', 'github', 'sentry', 'claude']
+/** The five the strip offers, in its order — `alerts` where it used to be `sentry`. */
+const TABS: Bucket[] = ['slack', 'gmail', 'github', 'alerts', 'claude']
 
 describe('a scoped press asks the pipes that feed the tab it was pressed on', () => {
   test('whatever tab a row lands on, that tab asks the pipe it came through', () => {
-    // The property the whole of `pipesFor` exists for. `Fetch Sentry` asked the
-    // Sentry collector while every visible row on the Sentry tab came through
-    // the Slack poller, so the control refreshed nothing you could see.
+    // The property the whole of `pipesFor` exists for. `Fetch Alerts` asked
+    // only the Sentry collector while most of the rows on the Alerts tab came
+    // through the Slack poller, so the control refreshed nothing you could see.
     for (const s of SPECIMENS) {
       expect(pipesFor(bucketOf(s)), `a ${s.source} ${s.kind} row is on the ${bucketOf(s)} tab`)
         .toContain(s.source)
@@ -316,14 +310,24 @@ describe('a scoped press asks the pipes that feed the tab it was pressed on', ()
   test('and asks nothing else', () => {
     // Widening is not the safe direction to be wrong in either: a scope that
     // asked every pipe would be an unscoped press wearing a source name.
+    //
+    // `pipesFor` also still answers the bare pipe name `sentry` — not only the
+    // tab name `alerts` — because `Sync`'s own source menu keeps speaking in
+    // real pipes regardless of which tab is on screen; see `primaryPipe`.
+    expect(pipesFor('alerts')).toEqual(['sentry', 'slack'])
     expect(pipesFor('sentry')).toEqual(['sentry', 'slack'])
-    for (const t of TABS.filter(t => t !== 'sentry')) expect(pipesFor(t)).toEqual([t])
+    for (const t of TABS.filter(t => t !== 'alerts')) expect(pipesFor(t)).toEqual([t])
   })
 
   test('the server widens the same scopes the browser does', () => {
     // Fetch runs pipe 1 inside the server, so the table is written twice — once
     // here for Sync, once there for Fetch — and neither can import the other.
     // This is the thing that fails when only one of them is taught a new pipe.
+    //
+    // The server has never heard the word `alerts` — its `FetchScope` is the
+    // five real connectors, and `ALSO_POLLED` is keyed by `sentry`, the
+    // connector `alerts` is fed by. `primaryPipe` is the one place that maps a
+    // tab back to the pipe name the server table actually uses.
     const src = readFileSync('src/server/fetch/index.ts', 'utf8')
     const table = /const ALSO_POLLED[^{]*\{([\s\S]*?)\n\}/.exec(src)?.[1]
     expect(table, 'ALSO_POLLED is gone or no longer a literal table').toBeTruthy()
@@ -334,8 +338,9 @@ describe('a scoped press asks the pipes that feed the tab it was pressed on', ()
     }
 
     for (const t of TABS) {
-      expect(server.get(t) ?? [], `the two halves disagree about the ${t} tab`)
-        .toEqual(pipesFor(t).filter(p => p !== t))
+      const pipe = primaryPipe(t)
+      expect(server.get(pipe) ?? [], `the two halves disagree about the ${t} tab`)
+        .toEqual(pipesFor(t).filter(p => p !== pipe))
     }
   })
 })

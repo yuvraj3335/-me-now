@@ -352,8 +352,12 @@ describe('the commit is a sibling of the scroll, and it names what it does', () 
      * — so the id must never appear in it, and the label has to say so.
      */
     const src = code(launch)
+    // `hatchText` is `draft?.brief ?? instruction` under a name, computed once
+    // and shared with the trim warning beside the link — see the next test.
+    expect(src, 'the hatch stopped computing the text it sends')
+      .toMatch(/const hatchText = draft\?\.brief \?\? instruction/)
     expect(src, 'the hatch stopped being an anchor')
-      .toMatch(/<a\s+href=\{claudeAppUrl\(meta\.handoff, draft\?\.brief \?\? instruction\)\}/)
+      .toMatch(/<a\s+href=\{claudeAppUrl\(meta\.handoff, hatchText\)\}/)
     expect(src, 'the hatch lost target="_blank"').toMatch(/href=\{claudeAppUrl[\s\S]{0,120}target="_blank"/)
     /*
      * AMENDED: the label leads with `New chat`, not with `Open`.

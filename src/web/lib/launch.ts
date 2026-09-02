@@ -96,6 +96,20 @@ export type HandoffTarget = HandoffConfig
 export const claudeAppUrl = (cfg: HandoffTarget, text: string): string =>
   handoffFor(text, cfg).url
 
+/**
+ * Whether that same text would be cut before it reaches the hatch link, and by
+ * how much.
+ *
+ * `claudeAppUrl` above already appends a note inside the link's own text when
+ * this is true — `handoffFor`'s `trimNote` — but that note is legible only
+ * after he has opened the Claude app and started reading. The one number that
+ * matters (`cfg.maxChars`, a URL's budget) applies to *this* link alone: the
+ * primary control sends the brief whole, as a process argument, and the two
+ * paths must not be allowed to look like they share one limit.
+ */
+export const appHandoffTrim = (cfg: HandoffTarget, text: string): { trimmed: boolean; sent: number; total: number } =>
+  handoffFor(text, cfg)
+
 /** What the server recorded when a brief was handed over. */
 export type Handoff = {
   packId: string

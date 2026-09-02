@@ -158,15 +158,18 @@ describe('a direct message can never reach the desk', () => {
     expect(hits).toHaveLength(4)
 
     const buckets = bucketHits(hits, ME_ID)
-    // Only the channel on the desk's list survives. The two `D…` conversations
-    // are refused as direct messages and `#dm-tools` is refused as a channel
-    // nobody works in — two rules, and the fourth row is here so that "nothing
-    // came through" cannot pass for "the DM rule held".
-    expect([...buckets.keys()]).toEqual(['C07351C8Z8E:1787811801.333333'])
+    // The two `D…` conversations are refused as direct messages; the two real
+    // channels both survive — a channel with no row in `slack_channels`
+    // defaults to reachable, so `#dm-tools` is not refused a second time the
+    // way a hardcoded allowlist once refused it.
+    expect([...buckets.keys()].sort()).toEqual(
+      ['C07351C8Z8E:1787811801.333333', 'C0DMTOOLS1:1787811201.222222'].sort(),
+    )
 
-    // And `#dm-tools` is still the reason the DM rule is two tells rather than a
+    // `#dm-tools` is still the reason the DM rule is two tells rather than a
     // name test: a public channel whose name merely starts with `dm` is a
-    // channel, and it left on the other rule entirely.
+    // channel, and `isDmChannel` — the only thing standing between a hit and a
+    // bucket now that reachability defaults open — says so correctly.
     expect(isDmChannel('C0DMTOOLS1')).toBe(false)
   })
 })

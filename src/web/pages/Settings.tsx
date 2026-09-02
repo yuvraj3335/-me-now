@@ -35,14 +35,15 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Check, ChevronRight, ExternalLink, Link2, Loader2 } from 'lucide-react'
+import { Check, ChevronRight, ExternalLink, Link2, Loader2, Lock, RefreshCw } from 'lucide-react'
 import { actions } from '../lib/api'
-import type { SourceStatus } from '../lib/types'
+import type { SlackChannel, SlackChannelLabel, SlackChannelMode, SourceStatus } from '../lib/types'
+import { toast } from '../lib/toast'
 import {
   currentSubscription, disablePush, enablePush, needsHomeScreenInstall, pushSupported,
 } from '../lib/push'
 import {
-  Button, Field, PageTitle, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice,
+  Button, Field, Menu, PageTitle, Pager, Segmented, Sheet, inputClass, pageCount, pageSlice,
 } from '../components/primitives'
 import { SOURCE_LABEL, SourceDot } from '../components/sources'
 import { fmtBytes, recordingSupported } from '../lib/voice'
@@ -87,9 +88,25 @@ export function Settings() {
    */
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [audit, setAudit] = useState(false)
+  /**
+   * The Slack channel scope, as the server holds it. `null` until the first
+   * read lands, so the section can say "could not read" rather than render an
+   * empty list that looks like "no channels".
+   */
+  const [channels, setChannels] = useState<SlackChannel[] | null>(null)
+  const [canListChannels, setCanListChannels] = useState(false)
+  const [channelsListedAt, setChannelsListedAt] = useState<number | null>(null)
+  const [channelsError, setChannelsError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const loadChannels = () =>
+    actions.slackChannels()
+      .then(d => { setChannels(d.channels); setCanListChannels(d.canList); setChannelsListedAt(d.listedAt); setChannelsError(null) })
+      .catch(e => setChannelsError((e as Error).message || 'could not read the channel scope'))
 
   const load = async () => {
     await Promise.all([
+      loadChannels(),
       actions.connections()
         .then(d => { setSources(d.sources); setRedirectUri(d.redirectUri); setSourcesError(null) })
         .catch(e => setSourcesError((e as Error).message || 'could not read the connection status')),
@@ -192,6 +209,74 @@ export function Settings() {
             onDisconnect={() => void actions.disconnect(s.name).then(load)}
           />
         ))}
+      </Section>
+
+      {/*
+        The one place the product explains scope, and the reason `#truto`
+        cannot silently fall off the desk again: what Slack reaches Wake was a
+        hand-edited array in `env.ts`, and it took a deploy to change and a
+        diff nobody was reading to break. It is a table now, and this is its
+        editor.
+      */}
+      <Section title="Slack channels" note="which conversations reach the desk">
+        <p className="text-sm text-fg-mute py-3 border-b border-rule leading-snug">
+          <b className="text-fg-dim font-medium">Off</b> reads nothing.{' '}
+          <b className="text-fg-dim font-medium">Mentions</b> reads only threads where you are named
+          {' '}— for an alert channel, only pages that name your team.{' '}
+          <b className="text-fg-dim font-medium">All</b> reads the whole channel, so a customer's question
+          reaches you whether or not it names you.
+        </p>
+        {channelsError && channels === null && (
+          <Row label="Channels" value={channelsError} tone="warn" />
+        )}
+        {channels && sortChannels(channels).map(c => (
+          <ChannelRow
+            key={c.id} c={c}
+            onChange={async patch => {
+              // Optimistic, with the previous row kept to put back: a scope
+              // edit is one tap, and a tap that waits on a round trip before
+              // the control moves reads as a tap that did nothing.
+              const before = c
+              setChannels(cs => cs?.map(x => (x.id === c.id ? { ...x, ...patch } : x)) ?? cs)
+              try {
+                const saved = await actions.setSlackChannel(c.id, patch)
+                setChannels(cs => cs?.map(x => (x.id === c.id ? saved : x)) ?? cs)
+              } catch (e) {
+                setChannels(cs => cs?.map(x => (x.id === c.id ? before : x)) ?? cs)
+                toast((e as Error).message || `could not change #${c.name}`)
+              }
+            }}
+          />
+        ))}
+        {channels && (
+          <div className="flex items-center h-11 border-b border-rule min-w-0 gap-2">
+            <span className="text-sm text-fg-mute truncate min-w-0 grow">
+              {canListChannels
+                ? channelsListedAt
+                  ? `${channels.length} channels · listed from Slack ${ago(channelsListedAt)}`
+                  : `${channels.length} channels · seeded, not yet listed from Slack`
+                : `${channels.length} channels · the connected Slack cannot list channels, so this is what was seeded`}
+            </span>
+            {canListChannels && (
+              <Button size="sm" variant="ghost" disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true)
+                  try {
+                    const r = await actions.refreshSlackChannels()
+                    setChannels(r.channels); setChannelsListedAt(r.listedAt)
+                    toast(r.added ? `added ${r.added} new channel${r.added === 1 ? '' : 's'}` : 'no new channels')
+                  } catch (e) {
+                    toast((e as Error).message || 'could not list channels')
+                  } finally {
+                    setRefreshing(false)
+                  }
+                }}>
+                {refreshing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                Refresh from Slack
+              </Button>
+            )}
+          </div>
+        )}
       </Section>
 
       <Section title="Notifications">
@@ -743,6 +828,92 @@ function ThemeChoice() {
         )}
       </span>
       <Segmented options={options} value={theme} onChange={set} ariaLabel="Theme" />
+    </div>
+  )
+}
+
+/* ------------------------------ Slack scope ------------------------------- */
+
+const MODE_RANK: Record<SlackChannelMode, number> = { all: 0, mentions: 1, off: 2 }
+
+/**
+ * Read wholesale first, then mentions, then off; alphabetical inside each.
+ * The channels doing the most work sit at the top, and the ones turned off sit
+ * where "is this still here?" is answered by scrolling to the end.
+ */
+export function sortChannels(cs: SlackChannel[]): SlackChannel[] {
+  return [...cs].sort((a, b) => MODE_RANK[a.mode] - MODE_RANK[b.mode] || a.name.localeCompare(b.name))
+}
+
+const LABEL_WORD: Record<SlackChannelLabel, string> = {
+  team: 'team', customer: 'customer', partner: 'partner', alert: 'alert', crisp: 'crisp',
+}
+const NO_LABEL = ':none'
+
+/**
+ * The three words a channel's mode wears, by what kind of channel it is.
+ *
+ * A monitor's channel has no `@mention` on a bot's own post, only the subset
+ * of its alerts that named his on-call group — so `mentions` reads `Paged`
+ * there, which is what it actually does. Crisp has no pages either; its
+ * `mentions` is the visitor still waiting, and `Waiting` says so.
+ */
+function modeWords(c: SlackChannel): Array<{ id: SlackChannelMode; label: string }> {
+  const middle = c.family === 'crisp' ? 'Waiting' : c.family ? 'Paged' : 'Mentions'
+  return [{ id: 'off', label: 'Off' }, { id: 'mentions', label: middle }, { id: 'all', label: 'All' }]
+}
+
+/**
+ * One channel: its name and marks on the first line, its label and mode on the
+ * second at a phone width and on the same line from `sm` up. Two lines rather
+ * than a truncated one, because the mode control is the whole point of the row
+ * and a control pushed off the right edge is a control nobody can reach.
+ */
+function ChannelRow({ c, onChange }: {
+  c: SlackChannel
+  onChange: (patch: { mode?: SlackChannelMode; label?: SlackChannelLabel | null }) => void
+}) {
+  const fixedLabel = c.family ? (c.label ?? (c.family === 'crisp' ? 'crisp' : 'alert')) : null
+  const labelItems = [
+    { id: NO_LABEL, label: '—' },
+    { id: 'team', label: LABEL_WORD.team },
+    { id: 'customer', label: LABEL_WORD.customer },
+    { id: 'partner', label: LABEL_WORD.partner },
+  ] as const
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2 sm:h-11 sm:py-0 sm:flex-nowrap border-b border-rule min-w-0">
+      <span className="flex items-center gap-2 min-w-0 grow basis-full sm:basis-auto">
+        <span className="text-sm font-mono truncate min-w-0">#{c.name}</span>
+        {c.is_private && (
+          <Lock size={12} className="shrink-0 text-fg-mute" aria-label="private" />
+        )}
+        {c.is_ext_shared && (
+          <span className="text-eyebrow uppercase text-fg-mute shrink-0">shared</span>
+        )}
+      </span>
+      <span className="shrink-0">
+        {fixedLabel ? (
+          <span className="text-sm text-fg-mute px-2" title="A monitor's channel; the label follows the bot that posts here">
+            {LABEL_WORD[fixedLabel]}
+          </span>
+        ) : (
+          <Menu
+            items={labelItems}
+            value={c.label ?? NO_LABEL}
+            onPick={id => onChange({ label: id === NO_LABEL ? null : (id as SlackChannelLabel) })}
+            ariaLabel={`Label for #${c.name}`}
+            align="end"
+          />
+        )}
+      </span>
+      <Segmented
+        options={modeWords(c)}
+        value={c.mode}
+        onChange={mode => onChange({ mode })}
+        ariaLabel={`Mode for #${c.name}`}
+        className="shrink-0"
+      />
     </div>
   )
 }

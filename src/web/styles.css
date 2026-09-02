@@ -403,6 +403,18 @@
     --glass-sheen: rgb(198 212 255 / 0.055);
     /* The specular line along the top edge. One pixel, inset, never a border. */
     --glass-edge: rgb(198 212 255 / 0.24);
+    /*
+      The second highlight: not the static diagonal `sheen` above, but the one
+      `.glass::before` paints at `--glass-x`/`--glass-y`, which `useGlassSheen`
+      in `lib/motion.ts` moves to wherever a mouse or a stylus is hovering a
+      `Sheet` or a `Menu`. It is its own token rather than a stronger `sheen`
+      because it answers a different question — sheen says "this pane has a
+      diagonal to it", this says "the light is here right now" — and because
+      it has to hold its own ceiling: `material.test.ts` keeps it at or under
+      0.06 so a highlight that only exists under a pointer can never be the
+      difference between a token clearing its floor and missing it.
+    */
+    --glass-shine: rgb(198 212 255 / 0.06);
 
     /*
       Five weights of the same material, and the middle three are the ones that
@@ -437,7 +449,17 @@
       thickness rather than as an outline — a real pane catches light on the edge
       nearest the source and shades on the one away from it.
     */
-    --glass-bar-tint:  rgb(20 21 34 / 0.66);
+    /*
+      0.82, not the 0.66 this shipped at, and the reason is a composite nobody
+      had measured: `material.test.ts`'s "text over glass" section reads a bar
+      against the brightest thing it can plausibly open over — the accent
+      surface itself, `#e9a23b`, the way a filter bar can sit above an amber
+      card. At 0.66 that composite is #6f5637, and `warn` on it is 3.59:1,
+      `bad` 3.98:1, `accent-ink` 4.14:1, `fg-mute` 4.18:1 — all under this
+      file's 4.5:1 mark floor. At 0.82 the same four composite-and-measure to
+      5.01, 5.55, 5.77 and 5.83. The tint moved; no text token did.
+    */
+    --glass-bar-tint:  rgb(20 21 34 / 0.82);
     --glass-bar-blur:  24px;
     /*
       11%, cool, and both halves of that are the point.
@@ -614,6 +636,9 @@
     --glass-sat:   180%;
     --glass-sheen: rgb(255 255 255 / 0.55);
     --glass-edge:  rgb(255 255 255 / 0.90);
+    /* See the dark block for what this is. White rather than blue here, for the
+       same reason `--glass-edge` is: the panel is lighter than its page. */
+    --glass-shine: rgb(255 255 255 / 0.06);
 
     /* The same five weights, inverted ground — see the dark block for what each
        one is. The card tint is white rather than a lift, because here a panel is
@@ -703,6 +728,7 @@
       --glass-sat: 180%;
       --glass-sheen: rgb(255 255 255 / 0.55);
       --glass-edge: rgb(255 255 255 / 0.90);
+      --glass-shine: rgb(255 255 255 / 0.06);
       --glass-bar-tint: rgb(255 255 255 / 0.76);
       --glass-bar-blur: 24px;
       --glass-card-tint: rgb(255 255 255 / 0.94);
@@ -1175,6 +1201,16 @@
     that a different rendering rather than a broken one.
   */
   .glass {
+    /*
+      A positioning context of its own, so `.glass::before` below always
+      anchors to the panel it paints on rather than to whatever positioned
+      ancestor happens to be nearest — which for a `.glass` surface with no
+      position utility of its own (a toast, a menu row's parent) would be some
+      unrelated fixed wrapper, sized to fit it rather than this. Every call
+      site that IS itself `fixed` or `absolute` keeps that: the utility layer
+      is written after `base`, so it always wins the same property.
+    */
+    position: relative;
     background-color: var(--glass-tint);
     /* The diagonal sheen. One gradient, painted on the panel's own background,
        running from the corner nearest the light. A large surface with a single
@@ -1189,6 +1225,38 @@
       inset 0 -1px 0 0 var(--glass-lens),
       0 1px 2px var(--color-shadow),
       0 24px 60px -18px var(--color-shadow);
+  }
+
+  /*
+    The pointer-tracked half of the specular response: a small radial
+    highlight that follows a hovering mouse or stylus across a `Sheet` or a
+    `Menu`, which is what a real pane of glass does under a moving light and
+    the diagonal `sheen` above — fixed to the panel's own corner — cannot.
+    `useGlassSheen` in `lib/motion.ts` is the only thing that ever sets
+    `--glass-x`, `--glass-y` or `--glass-shine-o`; unset, the opacity default
+    of zero means this paints nothing; a `.glass` surface that never calls it
+    — most of them — is unaffected.
+
+    `border-radius: inherit` rather than a hard-coded radius, so the same rule
+    fits `Sheet`'s `rounded-sheet` and `Menu`'s `rounded-panel` without a
+    per-caller override. `pointer-events: none` keeps the layer out of hit
+    testing — it is paint, not a control.
+  */
+  .glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: var(--glass-shine-o, 0);
+    background: radial-gradient(220px circle at var(--glass-x, 50%) var(--glass-y, 50%), var(--glass-shine), transparent 70%);
+    transition: opacity 200ms linear;
+  }
+  /* A thumb has no hover to report, and `useGlassSheen` already refuses to
+     attach on a coarse pointer — this is the belt to that suspenders, so a
+     stale inline value left over from a pointer type change cannot paint. */
+  @media (any-pointer: coarse) {
+    .glass::before { content: none; }
   }
 
   /*
@@ -1391,6 +1459,11 @@
     .glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
     .glass-bar { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--color-ink-850); }
     .glass-scrim { -webkit-backdrop-filter: none; backdrop-filter: none; }
+    /* `useGlassSheen` already refuses to attach under `useStill()`, which folds
+       in reduced motion — this is the same belt-and-suspenders as the
+       coarse-pointer guard above, for a value some earlier pointer session
+       left behind. */
+    .glass::before { content: none; }
     /* `.glass-card`, `.glass-raise` and `.glass-well` are not listed, and that is
        not an omission: none of them ever blurred, so there is nothing here to
        give back. The ambient ground stays too — it is a static gradient, not
